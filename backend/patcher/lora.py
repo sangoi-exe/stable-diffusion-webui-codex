@@ -70,6 +70,61 @@ def weight_decompose(dora_scale, weight, lora_diff, alpha, strength, computation
     else:
         weight[:] = weight_calc
     return weight
+# @torch.inference_mode()
+# def weight_decompose(dora_scale, weight, lora_diff, alpha, strength, computation_dtype):
+#     # Modified from https://github.com/comfyanonymous/ComfyUI/blob/39f114c44bb99d4a221e8da451d4f2a20119c674/comfy/model_patcher.py#L33
+#     # --- MODIFICAÇÃO PARA COMPATIBILIDADE COM ONETRAINER DORA ---
+
+#     dora_scale = memory_management.cast_to_device(dora_scale, weight.device, computation_dtype)
+#     lora_diff *= alpha
+#     weight_calc = weight + lora_diff.type(weight.dtype) # W' = W + ΔW
+
+#     # <<< INÍCIO DA MODIFICAÇÃO >>>
+#     # Calcular a norma de weight_calc (W') da mesma forma que o DoRAModule do OneTrainer
+#     # Isso é crucial porque o dora_scale foi treinado com base nessa norma específica.
+#     eps = torch.finfo(weight_calc.dtype).eps # Epsilon para estabilidade numérica
+
+#     if weight_calc.dim() == 4: # Para camadas Conv2d (out, in, H, W)
+#         # Norma por filtro de saída (dim 0), calculada sobre as dims (1, 2, 3)
+#         weight_norm = torch.linalg.vector_norm(weight_calc, ord=2, dim=(1, 2, 3), keepdim=True) + eps
+#         # print(f"DEBUG DoRA Conv2d norm shape: {weight_norm.shape} for weight shape: {weight_calc.shape}") # Debug opcional
+#     elif weight_calc.dim() == 2: # Para camadas Linear (out, in)
+#         # Norma por neurônio de saída (dim 0), calculada sobre as features de entrada (dim 1)
+#         weight_norm = torch.linalg.vector_norm(weight_calc, ord=2, dim=1, keepdim=True) + eps
+#         # print(f"DEBUG DoRA Linear norm shape: {weight_norm.shape} for weight shape: {weight_calc.shape}") # Debug opcional
+#     else:
+#         # Fallback para dimensões inesperadas - usar a lógica original como segurança? Ou lançar erro?
+#         # Mantendo a lógica original como fallback com aviso.
+#         print(f"Warning: DoRA norm calculation using fallback (original ComfyUI transpose logic) for weight dim {weight_calc.dim()}")
+#         weight_norm = (
+#             weight_calc.transpose(0, 1)
+#             .reshape(weight_calc.shape[1], -1)
+#             .norm(dim=1, keepdim=True)
+#             .reshape(weight_calc.shape[1], *[1] * (weight_calc.dim() - 1))
+#             .transpose(0, 1)
+#         ) + eps # Adicionar eps aqui também
+#     # <<< FIM DA MODIFICAÇÃO >>>
+
+#     # Garantir que a norma esteja no dispositivo e tipo corretos (pode já estar, mas por segurança)
+#     weight_norm = memory_management.cast_to_device(weight_norm, weight_calc.device, weight_calc.dtype)
+
+#     # Aplicar a escala DoRA: m * (W' / ||W'||)
+#     # Nota: A divisão por weight_norm pode precisar de atenção extra se weight_norm for zero ou muito pequeno,
+#     # mas o `eps` adicionado geralmente previne divisão por zero.
+#     weight_calc = weight_calc * (dora_scale / weight_norm).type(weight.dtype) # Aplica m/||W'||
+
+#     # Lógica de aplicação da força (strength) - permanece igual
+#     if strength != 1.0:
+#         # Se strength não for 1, calcula a diferença final e aplica parcialmente
+#         weight_calc -= weight # weight_calc agora é a diferença (DoRA_final - W_original)
+#         weight += strength * weight_calc
+#     else:
+#         # Se strength for 1, substitui diretamente o peso original pelo peso final DoRA
+#         weight[:] = weight_calc
+
+#     # --- FIM DA MODIFICAÇÃO ---
+#     return weight
+
 
 
 @torch.inference_mode()

@@ -308,7 +308,7 @@ axis_options = [
 ]
 
 
-def draw_xyz_grid(p, xs, ys, zs, x_labels, y_labels, z_labels, cell, draw_legend, include_lone_images, include_sub_grids, first_axes_processed, second_axes_processed, margin_size):
+def draw_xyz_grid(p, xs, ys, zs, x_labels, y_labels, z_labels, cell, draw_legend, include_lone_images, include_sub_grids, first_axes_processed, second_axes_processed, margin_size, generate_grid):
     hor_texts = [[images.GridAnnotation(x)] for x in x_labels]
     ver_texts = [[images.GridAnnotation(y)] for y in y_labels]
     title_texts = [[images.GridAnnotation(z)] for z in z_labels]
@@ -393,31 +393,43 @@ def draw_xyz_grid(p, xs, ys, zs, x_labels, y_labels, z_labels, cell, draw_legend
         print("Unexpected error: draw_xyz_grid failed to return even a single processed image")
         return Processed(p, [])
 
-    z_count = len(zs)
+    if not generate_grid:
+        # Keep only the last image generated
+        last_image = processed_result.images[-1]
+        last_prompt = processed_result.all_prompts[-1]
+        last_seed = processed_result.all_seeds[-1]
+        last_infotext = processed_result.infotexts[-1]
+        processed_result.images = [last_image]
+        processed_result.all_prompts = [last_prompt]
+        processed_result.all_seeds = [last_seed]
+        processed_result.infotexts = [last_infotext]
+        return processed_result
+    else:
+        z_count = len(zs)
 
-    for i in range(z_count):
-        start_index = (i * len(xs) * len(ys)) + i
-        end_index = start_index + len(xs) * len(ys)
-        grid = images.image_grid(processed_result.images[start_index:end_index], rows=len(ys))
+        for i in range(z_count):
+            start_index = (i * len(xs) * len(ys)) + i
+            end_index = start_index + len(xs) * len(ys)
+            grid = images.image_grid(processed_result.images[start_index:end_index], rows=len(ys))
+            if draw_legend:
+                grid_max_w, grid_max_h = map(max, zip(*(img.size for img in processed_result.images[start_index:end_index])))
+                grid = images.draw_grid_annotations(grid, grid_max_w, grid_max_h, hor_texts, ver_texts, margin_size)
+            processed_result.images.insert(i, grid)
+            processed_result.all_prompts.insert(i, processed_result.all_prompts[start_index])
+            processed_result.all_seeds.insert(i, processed_result.all_seeds[start_index])
+            processed_result.infotexts.insert(i, processed_result.infotexts[start_index])
+
+        z_grid = images.image_grid(processed_result.images[:z_count], rows=1)
+        z_sub_grid_max_w, z_sub_grid_max_h = map(max, zip(*(img.size for img in processed_result.images[:z_count])))
         if draw_legend:
-            grid_max_w, grid_max_h = map(max, zip(*(img.size for img in processed_result.images[start_index:end_index])))
-            grid = images.draw_grid_annotations(grid, grid_max_w, grid_max_h, hor_texts, ver_texts, margin_size)
-        processed_result.images.insert(i, grid)
-        processed_result.all_prompts.insert(i, processed_result.all_prompts[start_index])
-        processed_result.all_seeds.insert(i, processed_result.all_seeds[start_index])
-        processed_result.infotexts.insert(i, processed_result.infotexts[start_index])
+            z_grid = images.draw_grid_annotations(z_grid, z_sub_grid_max_w, z_sub_grid_max_h, title_texts, [[images.GridAnnotation()]])
+        processed_result.images.insert(0, z_grid)
+        # TODO: Deeper aspects of the program rely on grid info being misaligned between metadata arrays, which is not ideal.
+        # processed_result.all_prompts.insert(0, processed_result.all_prompts[0])
+        # processed_result.all_seeds.insert(0, processed_result.all_seeds[0])
+        processed_result.infotexts.insert(0, processed_result.infotexts[0])
 
-    z_grid = images.image_grid(processed_result.images[:z_count], rows=1)
-    z_sub_grid_max_w, z_sub_grid_max_h = map(max, zip(*(img.size for img in processed_result.images[:z_count])))
-    if draw_legend:
-        z_grid = images.draw_grid_annotations(z_grid, z_sub_grid_max_w, z_sub_grid_max_h, title_texts, [[images.GridAnnotation()]])
-    processed_result.images.insert(0, z_grid)
-    # TODO: Deeper aspects of the program rely on grid info being misaligned between metadata arrays, which is not ideal.
-    # processed_result.all_prompts.insert(0, processed_result.all_prompts[0])
-    # processed_result.all_seeds.insert(0, processed_result.all_seeds[0])
-    processed_result.infotexts.insert(0, processed_result.infotexts[0])
-
-    return processed_result
+        return processed_result
 
 
 class SharedSettingsStackHelper(object):
@@ -474,6 +486,7 @@ class Script(scripts.Script):
             with gr.Column():
                 include_lone_images = gr.Checkbox(label='Include Sub Images', value=False, elem_id=self.elem_id("include_lone_images"))
                 include_sub_grids = gr.Checkbox(label='Include Sub Grids', value=False, elem_id=self.elem_id("include_sub_grids"))
+                generate_grid = gr.Checkbox(label='Generate grid', value=True, elem_id=self.elem_id("generate_grid"))
                 csv_mode = gr.Checkbox(label='Use text inputs instead of dropdowns', value=False, elem_id=self.elem_id("csv_mode"))
             with gr.Column():
                 margin_size = gr.Slider(label="Grid margins (px)", minimum=0, maximum=500, value=0, step=2, elem_id=self.elem_id("margin_size"))
@@ -557,9 +570,9 @@ class Script(scripts.Script):
             (z_values_dropdown, lambda params: get_dropdown_update_from_params("Z", params)),
         )
 
-        return [x_type, x_values, x_values_dropdown, y_type, y_values, y_values_dropdown, z_type, z_values, z_values_dropdown, draw_legend, include_lone_images, include_sub_grids, no_fixed_seeds, vary_seeds_x, vary_seeds_y, vary_seeds_z, margin_size, csv_mode]
+        return [x_type, x_values, x_values_dropdown, y_type, y_values, y_values_dropdown, z_type, z_values, z_values_dropdown, draw_legend, include_lone_images, include_sub_grids, generate_grid, no_fixed_seeds, vary_seeds_x, vary_seeds_y, vary_seeds_z, margin_size, csv_mode]
 
-    def run(self, p, x_type, x_values, x_values_dropdown, y_type, y_values, y_values_dropdown, z_type, z_values, z_values_dropdown, draw_legend, include_lone_images, include_sub_grids, no_fixed_seeds, vary_seeds_x, vary_seeds_y, vary_seeds_z, margin_size, csv_mode):
+    def run(self, p, x_type, x_values, x_values_dropdown, y_type, y_values, y_values_dropdown, z_type, z_values, z_values_dropdown, draw_legend, include_lone_images, include_sub_grids, generate_grid, no_fixed_seeds, vary_seeds_x, vary_seeds_y, vary_seeds_z, margin_size, csv_mode):
         x_type, y_type, z_type = x_type or 0, y_type or 0, z_type or 0  # if axle type is None set to 0
 
         if not no_fixed_seeds:
@@ -728,11 +741,22 @@ class Script(scripts.Script):
 
         grid_infotext = [None] * (1 + len(zs))
 
+        # [MODIFICADO POR VOCÊ] INÍCIO - Lógica aprimorada para múltiplos skips no XYZ Grid
         def cell(x, y, z, ix, iy, iz):
+            # Primeiro, verifica interrupções gerais
             if shared.state.interrupted or state.stopping_generation:
                 return Processed(p, [], p.seed, "")
 
+            # Verifica se esta célula específica deve ser pulada
+            if shared.state.skipped:
+                shared.state.skipped = False # Reseta a flag para permitir skips futuros
+                print(f"XYZ Grid: Skipping cell for X={x}, Y={y}, Z={z}") # Log para confirmação
+                # Retorna um Processed vazio para esta célula, indicando que foi pulada
+                return Processed(p, [], p.seed, "")
+
+            # Se não foi interrompido ou pulado, processa a célula normalmente
             pc = copy(p)
+        # [MODIFICADO POR VOCÊ] FIM - Lógica aprimorada para múltiplos skips no XYZ Grid
             pc.styles = pc.styles[:]
             x_opt.apply(pc, x, xs)
             y_opt.apply(pc, y, ys)
@@ -804,7 +828,8 @@ class Script(scripts.Script):
                 include_sub_grids=include_sub_grids,
                 first_axes_processed=first_axes_processed,
                 second_axes_processed=second_axes_processed,
-                margin_size=margin_size
+                margin_size=margin_size,
+                generate_grid=generate_grid
             )
         
         # reset loading params to previous state
@@ -814,31 +839,43 @@ class Script(scripts.Script):
             # It broke, no further handling needed.
             return processed
 
-        z_count = len(zs)
+        if generate_grid:
+            z_count = len(zs)
 
-        # Set the grid infotexts to the real ones with extra_generation_params (1 main grid + z_count sub-grids)
-        processed.infotexts[:1 + z_count] = grid_infotext[:1 + z_count]
+            # Set the grid infotexts to the real ones with extra_generation_params (1 main grid + z_count sub-grids)
+            processed.infotexts[:1 + z_count] = grid_infotext[:1 + z_count]
 
-        if not include_lone_images:
-            # Don't need sub-images anymore, drop from list:
-            processed.images = processed.images[:z_count + 1]
+            if not include_lone_images:
+                # Don't need sub-images anymore, drop from list:
+                processed.images = processed.images[:z_count + 1]
 
-        if opts.grid_save:
-            # Auto-save main and sub-grids:
-            grid_count = z_count + 1 if z_count > 1 else 1
-            for g in range(grid_count):
-                # TODO: See previous comment about intentional data misalignment.
-                adj_g = g - 1 if g > 0 else g
-                images.save_image(processed.images[g], p.outpath_grids, "xyz_grid", info=processed.infotexts[g], extension=opts.grid_format, prompt=processed.all_prompts[adj_g], seed=processed.all_seeds[adj_g], grid=True, p=processed)
-                if not include_sub_grids:  # if not include_sub_grids then skip saving after the first grid
-                    break
+            if opts.grid_save:
+                # Auto-save main and sub-grids:
+                grid_count = z_count + 1 if z_count > 1 else 1
+                for g in range(grid_count):
+                    # TODO: See previous comment about intentional data misalignment.
+                    adj_g = g - 1 if g > 0 else g
+                    images.save_image(processed.images[g], p.outpath_grids, "xyz_grid", info=processed.infotexts[g], extension=opts.grid_format, prompt=processed.all_prompts[adj_g], seed=processed.all_seeds[adj_g], grid=True, p=processed)
+                    if not include_sub_grids:  # if not include_sub_grids then skip saving after the first grid
+                        break
 
-        if not include_sub_grids:
-            # Done with sub-grids, drop all related information:
-            for _ in range(z_count):
-                del processed.images[1]
-                del processed.all_prompts[1]
-                del processed.all_seeds[1]
-                del processed.infotexts[1]
+            if not include_sub_grids:
+                # Done with sub-grids, drop all related information:
+                for _ in range(z_count):
+                    del processed.images[1]
+                    del processed.all_prompts[1]
+                    del processed.all_seeds[1]
+                    del processed.infotexts[1]
+        else:
+            # If grid generation is disabled, only keep the last image
+            if processed.images:
+                last_image = processed.images[-1]
+                last_prompt = processed.all_prompts[-1]
+                last_seed = processed.all_seeds[-1]
+                last_infotext = processed.infotexts[-1]
+                processed.images = [last_image]
+                processed.all_prompts = [last_prompt]
+                processed.all_seeds = [last_seed]
+                processed.infotexts = [last_infotext]
 
         return processed

@@ -3,6 +3,7 @@ import os
 from collections import namedtuple
 import enum
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -192,6 +193,63 @@ class NetworkModule:
         )
         final_updown = dora_merged - orig_weight
         return final_updown
+    # def apply_weight_decompose(self, updown, orig_weight):
+    #     # Match the device/dtype
+    #     orig_weight = orig_weight.to(updown.dtype) # Garante tipo igual ao delta LoRA
+    #     # updown aqui é o delta LoRA *antes* de ser escalado por alpha/rank ou multiplier
+    #     updown = updown.to(orig_weight.device) # Garante device igual ao peso original
+
+    #     # Obter dora_scale e garantir device/dtype corretos
+    #     # É importante que self.dora_scale exista e seja um tensor/parâmetro
+    #     if self.dora_scale is None:
+    #          # Talvez lançar um erro ou retornar updown original se não for DoRA?
+    #          # Depende de como a classe NetworkModule lida com isso.
+    #          # Assumindo que só é chamado se dora_scale existir:
+    #          raise ValueError(f"apply_weight_decompose called for {self.sd_key} but self.dora_scale is None")
+
+    #     dora_scale = self.dora_scale.to(device=orig_weight.device, dtype=updown.dtype) # Usa dtype do delta
+
+    #     # Calcula W + ΔW_bruto
+    #     merged_scale1 = updown + orig_weight
+
+    #     # <<< INÍCIO DA MODIFICAÇÃO >>>
+    #     # Calcular a norma de merged_scale1 (W + ΔW_bruto) da forma compatível com OneTrainer
+    #     eps = torch.finfo(merged_scale1.dtype).eps # Epsilon para estabilidade
+
+    #     if merged_scale1.dim() == 4: # Para camadas Conv2d (out, in, H, W)
+    #         # Norma por filtro de saída (dim 0), calculada sobre as dims (1, 2, 3)
+    #         merged_scale1_norm = torch.linalg.vector_norm(merged_scale1, ord=2, dim=(1, 2, 3), keepdim=True) + eps
+    #     elif merged_scale1.dim() == 2: # Para camadas Linear (out, in)
+    #         # Norma por neurônio de saída (dim 0), calculada sobre as features de entrada (dim 1)
+    #         merged_scale1_norm = torch.linalg.vector_norm(merged_scale1, ord=2, dim=1, keepdim=True) + eps
+    #     else:
+    #         # Fallback para dimensões inesperadas - usar a lógica original como segurança?
+    #         print(f"Warning: DoRA norm calculation (apply_weight_decompose) using fallback for weight dim {merged_scale1.dim()} in key {self.sd_key}")
+    #         # Mantendo a lógica original como fallback (requer self.dora_norm_dims definido corretamente)
+    #         if not hasattr(self, 'dora_norm_dims'):
+    #              # Define dora_norm_dims se não existir (baseado na lógica original que calcula isso)
+    #              self.dora_norm_dims = len(self.shape) - 1 if hasattr(self, 'shape') and self.shape else merged_scale1.dim() -1
+
+    #         merged_scale1_norm = (
+    #             merged_scale1.transpose(0, 1)
+    #             .reshape(merged_scale1.shape[1], -1)
+    #             .norm(dim=1, keepdim=True)
+    #             .reshape(merged_scale1.shape[1], *[1] * self.dora_norm_dims)
+    #             .transpose(0, 1)
+    #         ) + eps # Adicionar eps aqui também
+    #     # <<< FIM DA MODIFICAÇÃO >>>
+
+    #     # Garantir que a norma esteja no dispositivo e tipo corretos
+    #     merged_scale1_norm = merged_scale1_norm.to(device=merged_scale1.device, dtype=merged_scale1.dtype)
+
+    #     # Aplicar a escala DoRA: (W + ΔW_bruto) * (m / ||W + ΔW_bruto||)
+    #     dora_merged = merged_scale1 * (dora_scale / merged_scale1_norm)
+
+    #     # Calcula a diferença final a ser retornada: [(W + ΔW_bruto) * (m / ||W + ΔW_bruto||)] - W
+    #     # Este é o delta efetivo após a aplicação do DoRA, que será escalado depois em finalize_updown
+    #     final_updown = dora_merged - orig_weight
+    #     return final_updown
+    
 
     def finalize_updown(self, updown, orig_weight, output_shape, ex_bias=None):
         if self.bias is not None:
