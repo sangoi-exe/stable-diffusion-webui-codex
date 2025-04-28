@@ -1,8 +1,8 @@
 import torch
-
 import packages_3rdparty.webui_lora_collection.lora as lora_utils_webui
 import packages_3rdparty.comfyui_lora_collection.lora as lora_utils_comfyui
 
+from modules import shared
 from backend import memory_management, utils
 
 
@@ -49,19 +49,23 @@ def model_lora_keys_unet(model, key_map={}):
 
 
 @torch.inference_mode()
-def weight_decompose(dora_scale, weight, lora_diff, alpha, strength, computation_dtype):
+def weight_decompose(dora_scale, weight, lora_diff, alpha, strength,
+                     computation_dtype, legacy_mode: bool = False):    
     # Modified from https://github.com/comfyanonymous/ComfyUI/blob/39f114c44bb99d4a221e8da451d4f2a20119c674/comfy/model_patcher.py#L33
 
     dora_scale = memory_management.cast_to_device(dora_scale, weight.device, computation_dtype)
     lora_diff *= alpha
     weight_calc = weight + lora_diff.type(weight.dtype)
-    weight_norm = (
-        weight_calc.transpose(0, 1)
-        .reshape(weight_calc.shape[1], -1)
-        .norm(dim=1, keepdim=True)
-        .reshape(weight_calc.shape[1], *[1] * (weight_calc.dim() - 1))
-        .transpose(0, 1)
-    )
+    if legacy_mode:           # old LyCORIS behaviour (column-wise)
+        weight_norm = (weight_calc.transpose(0, 1)
+                                .reshape(weight_calc.shape[1], -1)
+                                .norm(dim=1, keepdim=True)
+                                .reshape(weight_calc.shape[1], *[1]*(weight_calc.dim()-1))
+                                .transpose(0, 1))
+    else:                      # correct row-wise DoRA
+        weight_norm = (weight_calc.reshape(weight_calc.shape[0], -1)
+                                .norm(dim=1, keepdim=True)
+                                .reshape(weight_calc.shape[0], *[1]*(weight_calc.dim()-1)))
 
     weight_calc *= (dora_scale / weight_norm).type(weight.dtype)
     if strength != 1.0:
@@ -70,68 +74,14 @@ def weight_decompose(dora_scale, weight, lora_diff, alpha, strength, computation
     else:
         weight[:] = weight_calc
     return weight
-# @torch.inference_mode()
-# def weight_decompose(dora_scale, weight, lora_diff, alpha, strength, computation_dtype):
-#     # Modified from https://github.com/comfyanonymous/ComfyUI/blob/39f114c44bb99d4a221e8da451d4f2a20119c674/comfy/model_patcher.py#L33
-#     # --- MODIFICAÇÃO PARA COMPATIBILIDADE COM ONETRAINER DORA ---
-
-#     dora_scale = memory_management.cast_to_device(dora_scale, weight.device, computation_dtype)
-#     lora_diff *= alpha
-#     weight_calc = weight + lora_diff.type(weight.dtype) # W' = W + ΔW
-
-#     # <<< INÍCIO DA MODIFICAÇÃO >>>
-#     # Calcular a norma de weight_calc (W') da mesma forma que o DoRAModule do OneTrainer
-#     # Isso é crucial porque o dora_scale foi treinado com base nessa norma específica.
-#     eps = torch.finfo(weight_calc.dtype).eps # Epsilon para estabilidade numérica
-
-#     if weight_calc.dim() == 4: # Para camadas Conv2d (out, in, H, W)
-#         # Norma por filtro de saída (dim 0), calculada sobre as dims (1, 2, 3)
-#         weight_norm = torch.linalg.vector_norm(weight_calc, ord=2, dim=(1, 2, 3), keepdim=True) + eps
-#         # print(f"DEBUG DoRA Conv2d norm shape: {weight_norm.shape} for weight shape: {weight_calc.shape}") # Debug opcional
-#     elif weight_calc.dim() == 2: # Para camadas Linear (out, in)
-#         # Norma por neurônio de saída (dim 0), calculada sobre as features de entrada (dim 1)
-#         weight_norm = torch.linalg.vector_norm(weight_calc, ord=2, dim=1, keepdim=True) + eps
-#         # print(f"DEBUG DoRA Linear norm shape: {weight_norm.shape} for weight shape: {weight_calc.shape}") # Debug opcional
-#     else:
-#         # Fallback para dimensões inesperadas - usar a lógica original como segurança? Ou lançar erro?
-#         # Mantendo a lógica original como fallback com aviso.
-#         print(f"Warning: DoRA norm calculation using fallback (original ComfyUI transpose logic) for weight dim {weight_calc.dim()}")
-#         weight_norm = (
-#             weight_calc.transpose(0, 1)
-#             .reshape(weight_calc.shape[1], -1)
-#             .norm(dim=1, keepdim=True)
-#             .reshape(weight_calc.shape[1], *[1] * (weight_calc.dim() - 1))
-#             .transpose(0, 1)
-#         ) + eps # Adicionar eps aqui também
-#     # <<< FIM DA MODIFICAÇÃO >>>
-
-#     # Garantir que a norma esteja no dispositivo e tipo corretos (pode já estar, mas por segurança)
-#     weight_norm = memory_management.cast_to_device(weight_norm, weight_calc.device, weight_calc.dtype)
-
-#     # Aplicar a escala DoRA: m * (W' / ||W'||)
-#     # Nota: A divisão por weight_norm pode precisar de atenção extra se weight_norm for zero ou muito pequeno,
-#     # mas o `eps` adicionado geralmente previne divisão por zero.
-#     weight_calc = weight_calc * (dora_scale / weight_norm).type(weight.dtype) # Aplica m/||W'||
-
-#     # Lógica de aplicação da força (strength) - permanece igual
-#     if strength != 1.0:
-#         # Se strength não for 1, calcula a diferença final e aplica parcialmente
-#         weight_calc -= weight # weight_calc agora é a diferença (DoRA_final - W_original)
-#         weight += strength * weight_calc
-#     else:
-#         # Se strength for 1, substitui diretamente o peso original pelo peso final DoRA
-#         weight[:] = weight_calc
-
-#     # --- FIM DA MODIFICAÇÃO ---
-#     return weight
-
-
 
 @torch.inference_mode()
 def merge_lora_to_weight(patches, weight, key="online_lora", computation_dtype=torch.float32):
     # Modified from https://github.com/comfyanonymous/ComfyUI/blob/39f114c44bb99d4a221e8da451d4f2a20119c674/comfy/model_patcher.py#L446
 
     weight_dtype_backup = None
+
+    use_legacy_dora_behavior = getattr(shared.opts, 'lora_legacy_dora_behavior', False)
 
     if computation_dtype == weight.dtype:
         weight = weight.clone()
@@ -200,7 +150,17 @@ def merge_lora_to_weight(patches, weight, key="online_lora", computation_dtype=t
             try:
                 lora_diff = torch.mm(mat1.flatten(start_dim=1), mat2.flatten(start_dim=1)).reshape(weight.shape)
                 if dora_scale is not None:
-                    weight = function(weight_decompose(dora_scale, weight, lora_diff, alpha, strength, computation_dtype))
+                    weight = function(
+                        weight_decompose(
+                            dora_scale,
+                            weight,
+                            lora_diff,
+                            alpha,
+                            strength,
+                            computation_dtype,
+                            legacy_mode=use_legacy_dora_behavior,
+                        )
+                    )
                 else:
                     weight += function(((strength * alpha) * lora_diff).type(weight.dtype))
             except Exception as e:
@@ -247,7 +207,17 @@ def merge_lora_to_weight(patches, weight, key="online_lora", computation_dtype=t
             try:
                 lora_diff = torch.kron(w1, w2).reshape(weight.shape)
                 if dora_scale is not None:
-                    weight = function(weight_decompose(dora_scale, weight, lora_diff, alpha, strength, computation_dtype))
+                    weight = function(
+                        weight_decompose(
+                            dora_scale,
+                            weight,
+                            lora_diff,
+                            alpha,
+                            strength,
+                            computation_dtype,
+                            legacy_mode=use_legacy_dora_behavior,
+                        )
+                    )
                 else:
                     weight += function(((strength * alpha) * lora_diff).type(weight.dtype))
             except Exception as e:
@@ -285,7 +255,17 @@ def merge_lora_to_weight(patches, weight, key="online_lora", computation_dtype=t
             try:
                 lora_diff = (m1 * m2).reshape(weight.shape)
                 if dora_scale is not None:
-                    weight = function(weight_decompose(dora_scale, weight, lora_diff, alpha, strength, computation_dtype))
+                    weight = function(
+                        weight_decompose(
+                            dora_scale,
+                            weight,
+                            lora_diff,
+                            alpha,
+                            strength,
+                            computation_dtype,
+                            legacy_mode=use_legacy_dora_behavior,
+                        )
+                    )
                 else:
                     weight += function(((strength * alpha) * lora_diff).type(weight.dtype))
             except Exception as e:
@@ -307,7 +287,17 @@ def merge_lora_to_weight(patches, weight, key="online_lora", computation_dtype=t
             try:
                 lora_diff = (torch.mm(b2, b1) + torch.mm(torch.mm(weight.flatten(start_dim=1), a2), a1)).reshape(weight.shape)
                 if dora_scale is not None:
-                    weight = function(weight_decompose(dora_scale, weight, lora_diff, alpha, strength, computation_dtype))
+                    weight = function(
+                        weight_decompose(
+                            dora_scale,
+                            weight,
+                            lora_diff,
+                            alpha,
+                            strength,
+                            computation_dtype,
+                            legacy_mode=use_legacy_dora_behavior,
+                        )
+                    )
                 else:
                     weight += function(((strength * alpha) * lora_diff).type(weight.dtype))
             except Exception as e:

@@ -36,6 +36,7 @@ shared.options_templates.update(shared.options_section(('extra_networks', "Extra
 
 shared.options_templates.update(shared.options_section(('compatibility', "Compatibility"), {
     "lora_functional": shared.OptionInfo(False, "Lora/Networks: use old method that takes longer when you have multiple Loras active and produces same results as kohya-ss/sd-webui-additional-networks extension"),
+    "lora_legacy_dora_behavior": shared.OptionInfo(False, "Apply DoRA scaling factor column-wise (legacy behavior)", gr.Checkbox),
 }))
 
 
@@ -61,7 +62,6 @@ def api_networks(_: gr.Blocks, app: FastAPI):
 script_callbacks.on_app_started(api_networks)
 
 re_lora = re.compile("<lora:([^:]+):")
-
 
 def infotext_pasted(infotext, d):
     hashes = d.get("Lora hashes")
