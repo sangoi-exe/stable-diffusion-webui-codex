@@ -12,7 +12,7 @@ except ImportError:
 
 # Modo de execução: "TREE" para snapshot, "SEARCH" para busca de termo
 mode = "SEARCH"  # Hardcoded: defina "TREE" ou "SEARCH"
-search_term = "subseed"  # Hardcoded: termo a buscar nos arquivos
+search_term = "shared.opts"  # Hardcoded: termo a buscar nos arquivos
 
 include_extensions = {".py"}
 

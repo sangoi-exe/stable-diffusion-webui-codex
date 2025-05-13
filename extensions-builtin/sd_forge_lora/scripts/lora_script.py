@@ -36,7 +36,8 @@ shared.options_templates.update(shared.options_section(('extra_networks', "Extra
 
 shared.options_templates.update(shared.options_section(('compatibility', "Compatibility"), {
     "lora_functional": shared.OptionInfo(False, "Lora/Networks: use old method that takes longer when you have multiple Loras active and produces same results as kohya-ss/sd-webui-additional-networks extension"),
-    "lora_legacy_dora_behavior": shared.OptionInfo(False, "Apply DoRA scaling factor column-wise (legacy behavior)", gr.Checkbox),
+    "lora_legacy_dora_behavior": shared.OptionInfo(False, "Apply DoRA scaling factor column-wise (legacy behavior)"),
+    "lora_without_tau": shared.OptionInfo(False, "Apply DoRA scaling factor column-wise (legacy behavior)"),
 }))
 
 

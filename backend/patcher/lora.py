@@ -2,7 +2,6 @@ import torch
 import packages_3rdparty.webui_lora_collection.lora as lora_utils_webui
 import packages_3rdparty.comfyui_lora_collection.lora as lora_utils_comfyui
 
-from modules import shared
 from backend import memory_management, utils
 
 
@@ -52,6 +51,7 @@ def model_lora_keys_unet(model, key_map={}):
 def weight_decompose(dora_scale, weight, lora_diff, alpha, strength,
                      computation_dtype, legacy_mode: bool = False):    
     # Modified from https://github.com/comfyanonymous/ComfyUI/blob/39f114c44bb99d4a221e8da451d4f2a20119c674/comfy/model_patcher.py#L33
+    
 
     dora_scale = memory_management.cast_to_device(dora_scale, weight.device, computation_dtype)
     lora_diff *= alpha
@@ -80,7 +80,8 @@ def merge_lora_to_weight(patches, weight, key="online_lora", computation_dtype=t
     # Modified from https://github.com/comfyanonymous/ComfyUI/blob/39f114c44bb99d4a221e8da451d4f2a20119c674/comfy/model_patcher.py#L446
 
     weight_dtype_backup = None
-
+    from modules import shared
+    
     use_legacy_dora_behavior = getattr(shared.opts, 'lora_legacy_dora_behavior', False)
 
     if computation_dtype == weight.dtype:
