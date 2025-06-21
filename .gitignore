@@ -9,6 +9,7 @@ __pycache__
 *_u.py
 *_m.py
 *_i.py
+*.txt
 .DS_Store
 /output/
 /outputs/

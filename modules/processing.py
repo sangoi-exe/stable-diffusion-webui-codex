@@ -1323,23 +1323,14 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             self.calculate_target_resolution()
 
             if not state.processing_has_refined_job_count:
-                print(f"[DEBUG] state.job_count (antes): {state.job_count} ({type(state.job_count)})")
-                print(f"[DEBUG] self.n_iter: {self.n_iter} ({type(self.n_iter)})")
-                print(f"[DEBUG] self.steps: {self.steps} ({type(self.steps)})")
-                print(f"[DEBUG] self.hr_second_pass_steps: {self.hr_second_pass_steps} ({type(self.hr_second_pass_steps)})")
-                print(f"[DEBUG] self.txt2img_upscale: {getattr(self, 'txt2img_upscale', False)}")
-
                 if state.job_count == -1:
                     state.job_count = self.n_iter
-                    print(f"[DEBUG] state.job_count set to self.n_iter: {state.job_count}")
 
                 if getattr(self, 'txt2img_upscale', False):
                     total_steps = (self.hr_second_pass_steps or self.steps) * state.job_count
                 else:
                     total_steps = (self.steps + (self.hr_second_pass_steps or self.steps)) * state.job_count
 
-                print(f"[DEBUG] total_steps: {total_steps} ({type(total_steps)})")
-                
                 shared.total_tqdm.updateTotal(total_steps)
                 state.job_count = state.job_count * 2
                 state.processing_has_refined_job_count = True
