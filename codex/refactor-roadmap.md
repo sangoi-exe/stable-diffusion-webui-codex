@@ -2,6 +2,9 @@
 
 This roadmap aligns modernization work across the repository. Update it as milestones progress or priorities shift. Beyond the baseline webui upgrade, every stream must aggressively remove overengineering and wheel-reinvention—**without** trampling the historical context or regressions called out in `codex/`. Favour the simplest fix that preserves behaviour and document any trade-offs.
 
+> **Status Note:** See `codex/refactor-roadmap-status.md` for the latest assessment,
+> blockers, and next-step recommendations for each milestone.
+
 ## 1. Backend Modernization
 - [ ] Port txt2img execution path to `backend/diffusion_engine/txt2img.py` with feature parity (CFG, hires fix, refiner handoff).
 - [ ] Implement shared scheduler registry bridging `modules/sd_samplers.py` and `backend/sampling/`.
