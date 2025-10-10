@@ -35,10 +35,15 @@ re-evaluating the fundamentals.
 ## 2. Flux & Advanced Model Support
 
 ### Document Flux configuration knobs in UI and backend docs
-- **Status:** Blocked
-- **Dependencies:** Flux options scattered across UI tabs without canonical naming.
-- **Next Steps:** Inventory every Flux-related UI component, align terminology, and
-  produce doc updates once labels are finalised.
+- **Status:** In Progress
+- **Progress:** Created a shared schema (`backend/diffusion_engine/flux_config.py`) that
+  enumerates every Flux preset field and drives both the UI defaults and sampler
+  dropdown registrations. Updated `codex/backend.md`, `codex/frontend.md`, and the new
+  `codex/flux-config.md` with the inventory so documentation and code reference the same
+  table of toggles.
+- **Next Steps:** Wire additional Flux-specific runtime flags (e.g., refiner settings,
+  LoRA interactions) into the schema as they are implemented and extend automated tests
+  to assert the OptionInfo mappings remain in sync with backend expectations.
 
 ### Expand GGUF/BnB operator coverage via backend implementations
 - **Status:** Blocked

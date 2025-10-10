@@ -25,3 +25,8 @@ The user interface builds on Gradio 4 with extensive customizations. Understandi
 - Maintain compatibility with Gradio updates. Test both dark/light themes and ensure Forge overrides degrade gracefully when upstream markup changes.
 - Coordinate Python callback signatures with JavaScript event payloads. Schema changes should be reflected in `codex/testing-and-tooling.md` to prompt regression tests.
 - Avoid large monolithic JavaScript files. Prefer feature-scoped modules to keep tree shaking effective and reduce merge conflicts.
+
+## Flux Preset Surface
+- Flux toggles live in two places: layout defaults in `modules_forge/main_entry.py` (width/height, CFG sliders, GPU memory budget) and sampler/scheduler defaults in `modules/processing_scripts/sampler.py`.
+- Both files now rely on `backend/diffusion_engine/flux_config.py` for the authoritative list of fields, ensuring UI labels, defaults, and slider ranges stay synchronised with backend expectations.
+- When introducing new Flux controls, extend the schema first, then wire them through `build_flux_option_info` so future audits only need to inspect a single table of metadata.
