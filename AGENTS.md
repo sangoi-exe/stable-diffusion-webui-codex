@@ -57,6 +57,7 @@ When in doubt, slow down—quality and maintainability take precedence over spee
 - Document behaviour changes by updating the relevant guides in `codex/` as well as user-facing files (e.g., `README.md`, `NEWS.md`) when public experience shifts.
 - Make assumptions explicit in responses, note risks, and describe the validation executed; do not defer essential checks.
 - Progress bars or verbose progress reporting are mandatory for new or modified long-running Python routines.
+- Match delivery effort to the requested scope: when the user asks for a refactor or systemic improvement, return substantial, multi-file work (or a justified plan if blocked). Superficial “touch-up” diffs in response to broad tasks are unacceptable—escalate uncertainty instead of shipping token edits.
 
 ## Environment & Tooling
 - Primary entrypoints: `launch.py` (full startup), `webui.py` (legacy launcher), `backend/` services, and web assets under `javascript/` and `html/`.
