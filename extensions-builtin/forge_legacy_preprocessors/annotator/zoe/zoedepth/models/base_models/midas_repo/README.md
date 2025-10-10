@@ -33,11 +33,12 @@ MiDaS 3.0: Legacy transformer models [dpt_large_384](https://github.com/isl-org/
 
 MiDaS 2.1: Legacy convolutional models [midas_v21_384](https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_384.pt) and [midas_v21_small_256](https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_small_256.pt) 
 
-1) Set up dependencies: 
+1) Set up dependencies:
 
     ```shell
-    conda env create -f environment.yaml
-    conda activate midas-py310
+    python -m venv midas-env
+    source midas-env/bin/activate  # Windows PowerShell: .\midas-env\Scripts\Activate.ps1
+    pip install -r requirements.txt  # create this from environment.yaml or install the listed packages individually
     ```
 
 #### optional

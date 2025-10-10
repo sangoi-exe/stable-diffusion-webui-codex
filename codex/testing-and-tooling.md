@@ -4,7 +4,8 @@ Although automated CI coverage is limited, the repository ships with scripts and
 
 ## Python Environment
 - Preferred dependency lock resides in `requirements_versions.txt`; use `launch.py --reinstall-xformers` or `--reinstall-torch` to refresh critical packages.
-- Conda environments (`environment-wsl2.yaml`) and one-click installers bundle vetted CUDA/PyTorch versions. Align development environments with these to reduce incompatibility reports.
+- Python 3.12 is the supported runtime; avoid mixing interpreter versions when running scripts or caching compiled assets.
+- Create virtual environments with `python -m venv .venv && source .venv/bin/activate` (PowerShell: `.\.venv\Scripts\Activate.ps1`) before installing dependencies.
 
 ## Sanity Checks
 - `webui.py --skip-torch-cuda-test` can be used for smoke testing startup without GPU checks.

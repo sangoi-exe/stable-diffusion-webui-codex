@@ -241,18 +241,22 @@ Google tf and tflite weights ported from official Tensorflow repositories
 
 ### Environment
 
-All development and testing has been done in Conda Python 3 environments on Linux x86-64 systems, specifically Python 3.6.x, 3.7.x, 3.8.x.
+All development and testing has been done with vanilla CPython 3 virtual environments on Linux x86-64 systems, specifically Python 3.6.x, 3.7.x, 3.8.x.
 
-Users have reported that a Python 3 Anaconda install in Windows works. I have not verified this myself.
+Create an isolated environment and install PyTorch following the official instructions for your platform. Example (Linux/macOS):
+```
+python -m venv torch-env
+source torch-env/bin/activate
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu102
+```
+On Windows (PowerShell):
+```
+python -m venv torch-env
+.\torch-env\Scripts\Activate.ps1
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu102
+```
 
 PyTorch versions 1.4, 1.5, 1.6 have been tested with this code.
-
-I've tried to keep the dependencies minimal, the setup is as per the PyTorch default install instructions for Conda:
-```
-conda create -n torch-env
-conda activate torch-env
-conda install -c pytorch pytorch torchvision cudatoolkit=10.2
-```
 
 ### PyTorch Hub
 
@@ -267,9 +271,7 @@ Models can be accessed via the PyTorch Hub API
 ```
 
 ### Pip
-This package can be installed via pip.
-
-Install (after conda env/install):
+This package can be installed via pip once the virtual environment is active:
 ```
 pip install geffnet
 ```
@@ -319,5 +321,4 @@ export now requires additional args mentioned in the export script (not needed i
 2. TF ported models with 'SAME' padding will have the padding fixed at export time to the resolution used for export. Even though dynamic padding is supported in opset >= 11, I can't get it working.
 3. ONNX optimize facility doesn't work reliably in PyTorch 1.6 / ONNX 1.7. Fortunately, the onnxruntime based inference is working very well now and includes on the fly optimization.
 3. ONNX / Caffe2 export/import frequently breaks with different PyTorch and ONNX version releases. Please check their respective issue trackers before filing issues here.
-
 
