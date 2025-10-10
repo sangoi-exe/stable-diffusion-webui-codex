@@ -1,8 +1,10 @@
-import gguf
-import torch
-import os
 import json
+import os
+
+import gguf
 import safetensors.torch
+import torch
+
 import backend.misc.checkpoint_pickle
 from backend.operations_gguf import ParameterGGUF
 
@@ -20,31 +22,53 @@ def read_arbitrary_config(directory):
 
 
 def load_torch_file(ckpt, safe_load=False, device=None):
+    if isinstance(device, str):
+        device = torch.device(device)
     if device is None:
         device = torch.device("cpu")
-    if ckpt.lower().endswith(".safetensors"):
-        sd = safetensors.torch.load_file(ckpt, device=device.type)
-    elif ckpt.lower().endswith(".gguf"):
-        reader = gguf.GGUFReader(ckpt)
-        sd = {}
-        for tensor in reader.tensors:
-            sd[str(tensor.name)] = ParameterGGUF(tensor)
-    else:
-        if safe_load:
-            if not 'weights_only' in torch.load.__code__.co_varnames:
-                print("Warning torch.load doesn't support weights_only on this pytorch version, loading unsafely.")
-                safe_load = False
-        if safe_load:
-            pl_sd = torch.load(ckpt, map_location=device, weights_only=True)
-        else:
-            pl_sd = torch.load(ckpt, map_location=device, pickle_module=backend.misc.checkpoint_pickle)
-        if "global_step" in pl_sd:
-            print(f"Global Step: {pl_sd['global_step']}")
-        if "state_dict" in pl_sd:
-            sd = pl_sd["state_dict"]
-        else:
-            sd = pl_sd
-    return sd
+
+    checkpoint_path = str(ckpt)
+    suffix = os.path.splitext(checkpoint_path)[1].lower()
+
+    if suffix == ".safetensors":
+        return safetensors.torch.load_file(checkpoint_path, device=device.type)
+    if suffix == ".gguf":
+        return _load_gguf_state_dict(checkpoint_path)
+
+    pl_sd = _load_pickled_checkpoint(checkpoint_path, device, safe_load)
+
+    if "global_step" in pl_sd:
+        print(f"Global Step: {pl_sd['global_step']}")
+
+    if "state_dict" in pl_sd:
+        return pl_sd["state_dict"]
+    return pl_sd
+
+
+def _load_gguf_state_dict(path):
+    reader = gguf.GGUFReader(path)
+    state_dict = {}
+    for tensor in reader.tensors:
+        state_dict[str(tensor.name)] = ParameterGGUF(tensor)
+    return state_dict
+
+
+def _load_pickled_checkpoint(path, device, safe_load):
+    if safe_load and not _torch_supports_weights_only():
+        print("Warning torch.load doesn't support weights_only on this pytorch version, loading unsafely.")
+        safe_load = False
+
+    if safe_load:
+        return torch.load(path, map_location=device, weights_only=True)
+
+    return torch.load(path, map_location=device, pickle_module=backend.misc.checkpoint_pickle)
+
+
+def _torch_supports_weights_only():
+    try:
+        return 'weights_only' in torch.load.__code__.co_varnames
+    except AttributeError:
+        return False
 
 
 def set_attr(obj, attr, value):
