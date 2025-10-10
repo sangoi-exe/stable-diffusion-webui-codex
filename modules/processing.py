@@ -36,6 +36,7 @@ from modules_forge.utils import apply_circular_forge
 from modules_forge import main_entry
 from backend import memory_management
 from backend.modules.k_prediction import rescale_zero_terminal_snr_sigmas
+from backend.diffusion_engine.txt2img import generate_txt2img
 
 
 # some of those options should not be changed at all because they would break the model, so I removed them from options.
@@ -1343,92 +1344,15 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                 self.extra_generation_params["Hires upscaler"] = self.hr_upscaler
 
     def sample(self, conditioning, unconditional_conditioning, seeds, subseeds, subseed_strength, prompts):
-        self.sampler = sd_samplers.create_sampler(self.sampler_name, self.sd_model)
-
-        if self.firstpass_image is not None and self.enable_hr:
-            # here we don't need to generate image, we just take self.firstpass_image and prepare it for hires fix
-
-            if self.latent_scale_mode is None:
-                image = np.array(self.firstpass_image).astype(np.float32) / 255.0 * 2.0 - 1.0
-                image = np.moveaxis(image, 2, 0)
-
-                samples = None
-                decoded_samples = torch.asarray(np.expand_dims(image, 0))
-
-            else:
-                image = np.array(self.firstpass_image).astype(np.float32) / 255.0
-                image = np.moveaxis(image, 2, 0)
-                image = torch.from_numpy(np.expand_dims(image, axis=0))
-                image = image.to(shared.device, dtype=torch.float32)
-
-                if opts.sd_vae_encode_method != 'Full':
-                    self.extra_generation_params['VAE Encoder'] = opts.sd_vae_encode_method
-
-                samples = images_tensor_to_samples(image, approximation_indexes.get(opts.sd_vae_encode_method), self.sd_model)
-                decoded_samples = None
-                devices.torch_gc()
-
-        else:
-            # here we generate an image normally
-
-            x = self.rng.next()
-
-            self.sd_model.forge_objects = self.sd_model.forge_objects_after_applying_lora.shallow_copy()
-            apply_token_merging(self.sd_model, self.get_token_merging_ratio())
-
-            if self.scripts is not None:
-                self.scripts.process_before_every_sampling(self,
-                                                           x=x,
-                                                           noise=x,
-                                                           c=conditioning,
-                                                           uc=unconditional_conditioning)
-
-            if self.modified_noise is not None:
-                x = self.modified_noise
-                self.modified_noise = None
-
-            samples = self.sampler.sample(self, x, conditioning, unconditional_conditioning, image_conditioning=self.txt2img_image_conditioning(x))
-            del x
-
-            if not self.enable_hr:
-                return samples
-
-            devices.torch_gc()
-
-            if self.latent_scale_mode is None:
-                decoded_samples = torch.stack(decode_latent_batch(self.sd_model, samples, target_device=devices.cpu, check_for_nans=True)).to(dtype=torch.float32)
-            else:
-                decoded_samples = None
-
-        with sd_models.SkipWritingToConfig():
-            fp_checkpoint = getattr(shared.opts, 'sd_model_checkpoint')
-            fp_additional_modules = getattr(shared.opts, 'forge_additional_modules')
-
-            reload = False
-            if hasattr(self, 'hr_additional_modules') and 'Use same choices' not in self.hr_additional_modules:
-                modules_changed = main_entry.modules_change(self.hr_additional_modules, save=False, refresh=False)
-                if modules_changed:
-                    reload = True
-
-            if self.hr_checkpoint_name and self.hr_checkpoint_name != 'Use same checkpoint':
-                checkpoint_changed = main_entry.checkpoint_change(self.hr_checkpoint_name, save=False, refresh=False)
-                if checkpoint_changed:
-                    self.firstpass_use_distilled_cfg_scale = self.sd_model.use_distilled_cfg_scale
-                    reload = True
-
-            if reload:
-                try:
-                    main_entry.refresh_model_loading_parameters()
-                    sd_models.forge_model_reload()
-                finally:
-                    main_entry.modules_change(fp_additional_modules, save=False, refresh=False)
-                    main_entry.checkpoint_change(fp_checkpoint, save=False, refresh=False)
-                    main_entry.refresh_model_loading_parameters()
-
-            if self.sd_model.use_distilled_cfg_scale:
-                self.extra_generation_params['Hires Distilled CFG Scale'] = self.hr_distilled_cfg
-
-        return self.sample_hr_pass(samples, decoded_samples, seeds, subseeds, subseed_strength, prompts)
+        return generate_txt2img(
+            processing=self,
+            conditioning=conditioning,
+            unconditional_conditioning=unconditional_conditioning,
+            seeds=seeds,
+            subseeds=subseeds,
+            subseed_strength=subseed_strength,
+            prompts=prompts,
+        )
 
     def sample_hr_pass(self, samples, decoded_samples, seeds, subseeds, subseed_strength, prompts):
         if shared.state.interrupted:
