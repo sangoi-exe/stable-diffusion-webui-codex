@@ -97,6 +97,103 @@ def _reload_for_hires(processing) -> None:
             )
 
 
+class Txt2ImgRuntime:
+    """Encapsulates txt2img sampling so that the orchestration can be tested in isolation."""
+
+    def __init__(
+        self,
+        processing,
+        conditioning,
+        unconditional_conditioning,
+        seeds: Sequence[int],
+        subseeds: Sequence[int],
+        subseed_strength: float,
+        prompts: Sequence[str],
+    ) -> None:
+        self.processing = processing
+        self.conditioning = conditioning
+        self.unconditional_conditioning = unconditional_conditioning
+        self.seeds = seeds
+        self.subseeds = subseeds
+        self.subseed_strength = subseed_strength
+        self.prompts = prompts
+
+    def generate(self):
+        self._ensure_sampler()
+
+        samples, decoded_samples = _prepare_first_pass_from_image(self.processing)
+
+        if samples is None and decoded_samples is None:
+            samples = self._run_base_sampling()
+            decoded_samples = self._maybe_decode_for_hr(samples)
+
+        if not self.processing.enable_hr:
+            return samples
+
+        _reload_for_hires(self.processing)
+
+        return self.processing.sample_hr_pass(
+            samples,
+            decoded_samples,
+            self.seeds,
+            self.subseeds,
+            self.subseed_strength,
+            self.prompts,
+        )
+
+    def _ensure_sampler(self) -> None:
+        self.processing.sampler = sd_samplers.create_sampler(
+            self.processing.sampler_name, self.processing.sd_model
+        )
+
+    def _run_base_sampling(self):
+        noise = self.processing.rng.next()
+
+        self.processing.sd_model.forge_objects = (
+            self.processing.sd_model.forge_objects_after_applying_lora.shallow_copy()
+        )
+        apply_token_merging(
+            self.processing.sd_model, self.processing.get_token_merging_ratio()
+        )
+
+        if self.processing.scripts is not None:
+            self.processing.scripts.process_before_every_sampling(
+                self.processing,
+                x=noise,
+                noise=noise,
+                c=self.conditioning,
+                uc=self.unconditional_conditioning,
+            )
+
+        if self.processing.modified_noise is not None:
+            noise = self.processing.modified_noise
+            self.processing.modified_noise = None
+
+        samples = self.processing.sampler.sample(
+            self.processing,
+            noise,
+            self.conditioning,
+            self.unconditional_conditioning,
+            image_conditioning=self.processing.txt2img_image_conditioning(noise),
+        )
+
+        del noise
+        return samples
+
+    def _maybe_decode_for_hr(self, samples):
+        if not self.processing.enable_hr:
+            return None
+
+        devices.torch_gc()
+
+        if self.processing.latent_scale_mode is None:
+            return _decode_latent_batch(
+                self.processing.sd_model, samples, target_device=devices.cpu
+            ).to(dtype=torch.float32)
+
+        return None
+
+
 def generate_txt2img(
     processing,
     conditioning,
@@ -106,65 +203,14 @@ def generate_txt2img(
     subseed_strength: float,
     prompts: Sequence[str],
 ):
-    processing.sampler = sd_samplers.create_sampler(
-        processing.sampler_name, processing.sd_model
-    )
-
-    samples, decoded_samples = _prepare_first_pass_from_image(processing)
-
-    if samples is None and decoded_samples is None:
-        noise = processing.rng.next()
-        processing.sd_model.forge_objects = (
-            processing.sd_model.forge_objects_after_applying_lora.shallow_copy()
-        )
-        apply_token_merging(processing.sd_model, processing.get_token_merging_ratio())
-
-        if processing.scripts is not None:
-            processing.scripts.process_before_every_sampling(
-                processing,
-                x=noise,
-                noise=noise,
-                c=conditioning,
-                uc=unconditional_conditioning,
-            )
-
-        if processing.modified_noise is not None:
-            noise = processing.modified_noise
-            processing.modified_noise = None
-
-        samples = processing.sampler.sample(
-            processing,
-            noise,
-            conditioning,
-            unconditional_conditioning,
-            image_conditioning=processing.txt2img_image_conditioning(noise),
-        )
-        del noise
-
-        if not processing.enable_hr:
-            return samples
-
-        devices.torch_gc()
-
-        if processing.latent_scale_mode is None:
-            decoded_samples = _decode_latent_batch(
-                processing.sd_model,
-                samples,
-                target_device=devices.cpu,
-            ).to(dtype=torch.float32)
-        else:
-            decoded_samples = None
-
-    if not processing.enable_hr:
-        return samples
-
-    _reload_for_hires(processing)
-
-    return processing.sample_hr_pass(
-        samples,
-        decoded_samples,
+    runtime = Txt2ImgRuntime(
+        processing,
+        conditioning,
+        unconditional_conditioning,
         seeds,
         subseeds,
         subseed_strength,
         prompts,
     )
+
+    return runtime.generate()
