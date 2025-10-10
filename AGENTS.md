@@ -58,6 +58,7 @@ When in doubt, slow down—quality and maintainability take precedence over spee
 - Make assumptions explicit in responses, note risks, and describe the validation executed; do not defer essential checks.
 - Progress bars or verbose progress reporting are mandatory for new or modified long-running Python routines.
 - Match delivery effort to the requested scope: when the user asks for a refactor or systemic improvement, return substantial, multi-file work (or a justified plan if blocked). Superficial “touch-up” diffs in response to broad tasks are unacceptable—escalate uncertainty instead of shipping token edits.
+- Generic prompts such as “prossiga com o refactor” or “continue o refactor” must trigger a clarifying question and a restatement of scope before making changes. Do not accept the request at face value; confirm objectives, affected subsystems, and success criteria, then execute the agreed plan.
 
 ## Environment & Tooling
 - Primary entrypoints: `launch.py` (full startup), `webui.py` (legacy launcher), `backend/` services, and web assets under `javascript/` and `html/`.
