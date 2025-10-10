@@ -1,5 +1,6 @@
 import gradio as gr
 
+from backend.diffusion_engine.flux_config import FLUX_DROPDOWN_KEYS, build_flux_option_info
 from modules import scripts, sd_samplers, sd_schedulers, shared
 from modules.infotext_utils import PasteField
 from modules.ui_components import FormRow, FormGroup
@@ -49,12 +50,22 @@ class ScriptSampler(scripts.ScriptBuiltinUI):
             "xl_i2i_sampler":     shared.OptionInfo('DPM++ 2M SDE', "img2img sampler",      gr.Dropdown, {"choices": sampler_names}),
             "xl_i2i_scheduler":   shared.OptionInfo('Karras',       "img2img scheduler",    gr.Dropdown, {"choices": scheduler_names}),
         }))
-        shared.options_templates.update(shared.options_section(('ui_flux', "UI defaults 'flux'", "ui"), {
-            "flux_t2i_sampler":   shared.OptionInfo('Euler',        "txt2img sampler",      gr.Dropdown, {"choices": sampler_names}),
-            "flux_t2i_scheduler": shared.OptionInfo('Simple',       "txt2img scheduler",    gr.Dropdown, {"choices": scheduler_names}),
-            "flux_i2i_sampler":   shared.OptionInfo('Euler',        "img2img sampler",      gr.Dropdown, {"choices": sampler_names}),
-            "flux_i2i_scheduler": shared.OptionInfo('Simple',       "img2img scheduler",    gr.Dropdown, {"choices": scheduler_names}),
-        }))
+        shared.options_templates.update(
+            shared.options_section(
+                ('ui_flux', "UI defaults 'flux'", "ui"),
+                build_flux_option_info(
+                    shared.OptionInfo,
+                    gr,
+                    keys=FLUX_DROPDOWN_KEYS,
+                    dynamic_choices={
+                        "flux_t2i_sampler": sampler_names,
+                        "flux_i2i_sampler": sampler_names,
+                        "flux_t2i_scheduler": scheduler_names,
+                        "flux_i2i_scheduler": scheduler_names,
+                    },
+                ),
+            )
+        )
 
         return self.steps, self.sampler_name, self.scheduler
 

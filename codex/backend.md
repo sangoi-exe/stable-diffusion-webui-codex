@@ -24,3 +24,8 @@ Forge maintains two cooperating back ends: the legacy AUTOMATIC1111 pipeline (`m
 - When porting a feature, first mirror the legacy behaviour inside `backend/modules/` before replacing the call site in `modules/`.
 - Avoid rewriting everything at once. Incrementally register backend features and guard them behind configuration flags until they are stable.
 - Document deviations from the legacy pipeline in `codex/refactor-roadmap.md` so QA can focus on impacted features.
+
+## Flux Configuration Schema
+- `backend/diffusion_engine/flux_config.py` enumerates every Flux-specific UI toggle (width/height defaults, CFG sliders, GPU weight budgets, and sampler dropdowns) with a single data contract shared by the frontend and backend.
+- `build_flux_option_info` converts the schema into `shared.OptionInfo` objects so presets defined in `modules_forge/main_entry.py` and `modules/processing_scripts/sampler.py` derive from the same metadata.
+- Dynamic values such as GPU VRAM headroom and sampler lists are supplied at call time through the helper's `context` and `dynamic_choices` parameters, keeping runtime-sensitive logic near the consumers while avoiding duplicated defaults.
