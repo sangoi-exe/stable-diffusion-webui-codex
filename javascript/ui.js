@@ -242,6 +242,12 @@ function restoreProgressImg2img() {
     return id;
 }
 
+// Expose functions for Gradio's _js hooks explicitly on window
+window.submit = submit;
+window.submit_txt2img_upscale = submit_txt2img_upscale;
+window.restoreProgressTxt2img = restoreProgressTxt2img;
+window.restoreProgressImg2img = restoreProgressImg2img;
+
 
 /**
  * Configure the width and height elements on `tabname` to accept

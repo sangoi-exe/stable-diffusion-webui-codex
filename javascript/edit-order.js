@@ -1,7 +1,7 @@
 /* alt+left/right moves text in prompt */
 
 function keyupEditOrder(event) {
-    if (!opts.keyedit_move) return;
+    if (typeof opts !== 'object' || !opts || !opts.keyedit_move) return;
 
     let target = event.originalTarget || event.composedPath()[0];
     if (!target.matches("*:is([id*='_toprow'] [id*='_prompt'], .prompt) textarea")) return;
