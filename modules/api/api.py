@@ -1,14 +1,12 @@
-import base64
-import io
+## removed: base64/io used by legacy encode/decode
 import os
 import time
 import datetime
 import uvicorn
-import ipaddress
-import requests
+## removed: ipaddress/requests used by legacy decode; handled in MediaService
 import gradio as gr
 from threading import Lock
-from io import BytesIO
+## removed: BytesIO used by legacy decode
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.exceptions import HTTPException
@@ -24,15 +22,15 @@ from modules.processing import StableDiffusionProcessingTxt2Img, StableDiffusion
 import modules.textual_inversion.textual_inversion
 from modules.shared import cmd_opts
 
-from PIL import PngImagePlugin
+## removed: PngImagePlugin used by legacy encode
 from modules.realesrgan_model import get_realesrgan_models
 from modules import devices
 from typing import Any, Union, get_origin, get_args
-import piexif
-import piexif.helper
+## removed: piexif used by legacy encode
 from contextlib import closing
 from modules.progress import create_task_id, current_task
 from backend.services.image_service import ImageService
+from backend.services.media_service import MediaService
 
 def script_name_to_index(name, scripts):
     try:
@@ -56,81 +54,7 @@ def setUpscalers(req: dict):
     return reqDict
 
 
-def verify_url(url):
-    """Returns True if the url refers to a global resource."""
-
-    import socket
-    from urllib.parse import urlparse
-    try:
-        parsed_url = urlparse(url)
-        domain_name = parsed_url.netloc
-        host = socket.gethostbyname_ex(domain_name)
-        for ip in host[2]:
-            ip_addr = ipaddress.ip_address(ip)
-            if not ip_addr.is_global:
-                return False
-    except Exception:
-        return False
-
-    return True
-
-
-def decode_base64_to_image(encoding):
-    if encoding.startswith("http://") or encoding.startswith("https://"):
-        if not opts.api_enable_requests:
-            raise HTTPException(status_code=500, detail="Requests not allowed")
-
-        if opts.api_forbid_local_requests and not verify_url(encoding):
-            raise HTTPException(status_code=500, detail="Request to local resource not allowed")
-
-        headers = {'user-agent': opts.api_useragent} if opts.api_useragent else {}
-        response = requests.get(encoding, timeout=30, headers=headers)
-        try:
-            image = images.read(BytesIO(response.content))
-            return image
-        except Exception as e:
-            raise HTTPException(status_code=500, detail="Invalid image url") from e
-
-    if encoding.startswith("data:image/"):
-        encoding = encoding.split(";")[1].split(",")[1]
-    try:
-        image = images.read(BytesIO(base64.b64decode(encoding)))
-        return image
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Invalid encoded image") from e
-
-
-def encode_pil_to_base64(image):
-    with io.BytesIO() as output_bytes:
-        if isinstance(image, str):
-            return image
-        if opts.samples_format.lower() == 'png':
-            use_metadata = False
-            metadata = PngImagePlugin.PngInfo()
-            for key, value in image.info.items():
-                if isinstance(key, str) and isinstance(value, str):
-                    metadata.add_text(key, value)
-                    use_metadata = True
-            image.save(output_bytes, format="PNG", pnginfo=(metadata if use_metadata else None), quality=opts.jpeg_quality)
-
-        elif opts.samples_format.lower() in ("jpg", "jpeg", "webp"):
-            if image.mode in ("RGBA", "P"):
-                image = image.convert("RGB")
-            parameters = image.info.get('parameters', None)
-            exif_bytes = piexif.dump({
-                "Exif": { piexif.ExifIFD.UserComment: piexif.helper.UserComment.dump(parameters or "", encoding="unicode") }
-            })
-            if opts.samples_format.lower() in ("jpg", "jpeg"):
-                image.save(output_bytes, format="JPEG", exif = exif_bytes, quality=opts.jpeg_quality)
-            else:
-                image.save(output_bytes, format="WEBP", exif = exif_bytes, quality=opts.jpeg_quality, lossless=opts.webp_lossless)
-
-        else:
-            raise HTTPException(status_code=500, detail="Invalid image format")
-
-        bytes_data = output_bytes.getvalue()
-
-    return base64.b64encode(bytes_data)
+## image encode/decode moved to backend.services.media_service.MediaService
 
 
 def api_middleware(app: FastAPI):
@@ -209,6 +133,7 @@ class Api:
         self.app = app
         self.queue_lock = queue_lock
         self.image_service = ImageService()
+        self.media = MediaService()
         #api_middleware(self.app)  # FIXME: (legacy) this will have to be fixed
         self.add_api_route("/sdapi/v1/txt2img", self.text2imgapi, methods=["POST"], response_model=models.TextToImageResponse)
         self.add_api_route("/sdapi/v1/img2img", self.img2imgapi, methods=["POST"], response_model=models.ImageToImageResponse)
@@ -490,7 +415,7 @@ class Api:
             outpath_grids=opts.outdir_txt2img_grids,
             queue_lock=self.queue_lock,
         )
-        b64images = list(map(encode_pil_to_base64, processed.images + processed.extra_images)) if send_images else []
+        b64images = [self.media.encode_image(img) for img in (processed.images + processed.extra_images)] if send_images else []
 
         return models.TextToImageResponse(images=b64images, parameters=vars(txt2imgreq), info=processed.js())
 
@@ -503,7 +428,7 @@ class Api:
 
         mask = img2imgreq.mask
         if mask:
-            mask = decode_base64_to_image(mask)
+            mask = self.media.decode_image(mask)
 
         script_runner = scripts.scripts_img2img
 
@@ -538,7 +463,11 @@ class Api:
         args.pop('save_images', None)
 
         def _prepare(p):
-            p.init_images = [decode_base64_to_image(x) for x in init_images]
+            p.init_images = [self.media.decode_image(x) for x in init_images]
+        
+        # replace decodes via media service
+        def _prepare(p):
+            p.init_images = [self.media.decode_image(x) for x in init_images]
 
         p_factory = lambda: StableDiffusionProcessingImg2Img(sd_model=shared.sd_model, **args)
         processed = self.image_service.execute_generation(
@@ -553,7 +482,7 @@ class Api:
             prepare_p=_prepare,
             queue_lock=self.queue_lock,
         )
-        b64images = list(map(encode_pil_to_base64, processed.images + processed.extra_images)) if send_images else []
+        b64images = [self.media.encode_image(img) for img in (processed.images + processed.extra_images)] if send_images else []
 
         if not img2imgreq.include_init_images:
             img2imgreq.init_images = None
@@ -564,18 +493,18 @@ class Api:
     def extras_single_image_api(self, req: models.ExtrasSingleImageRequest):
         reqDict = setUpscalers(req)
 
-        reqDict['image'] = decode_base64_to_image(reqDict['image'])
+        reqDict['image'] = self.media.decode_image(reqDict['image'])
 
         with self.queue_lock:
             result = postprocessing.run_extras(extras_mode=0, image_folder="", input_dir="", output_dir="", save_output=False, **reqDict)
 
-        return models.ExtrasSingleImageResponse(image=encode_pil_to_base64(result[0][0]), html_info=result[1])
+        return models.ExtrasSingleImageResponse(image=self.media.encode_image(result[0][0]), html_info=result[1])
 
     def extras_batch_images_api(self, req: models.ExtrasBatchImagesRequest):
         reqDict = setUpscalers(req)
 
         image_list = reqDict.pop('imageList', [])
-        image_folder = [decode_base64_to_image(x.data) for x in image_list]
+        image_folder = [self.media.decode_image(x.data) for x in image_list]
 
         with self.queue_lock:
             result = postprocessing.run_extras(extras_mode=1, image_folder=image_folder, image="", input_dir="", output_dir="", save_output=False, **reqDict)
@@ -583,7 +512,7 @@ class Api:
         return models.ExtrasBatchImagesResponse(images=list(map(encode_pil_to_base64, result[0])), html_info=result[1])
 
     def pnginfoapi(self, req: models.PNGInfoRequest):
-        image = decode_base64_to_image(req.image.strip())
+        image = self.media.decode_image(req.image.strip())
         if image is None:
             return models.PNGInfoResponse(info="")
 
@@ -620,7 +549,7 @@ class Api:
 
         current_image = None
         if shared.state.current_image and not req.skip_current_image:
-            current_image = encode_pil_to_base64(shared.state.current_image)
+            current_image = self.media.encode_image(shared.state.current_image)
 
         return models.ProgressResponse(progress=progress, eta_relative=eta_relative, state=shared.state.dict(), current_image=current_image, textinfo=shared.state.textinfo, current_task=current_task)
 
@@ -629,7 +558,7 @@ class Api:
         if image_b64 is None:
             raise HTTPException(status_code=404, detail="Image not found")
 
-        img = decode_base64_to_image(image_b64)
+        img = self.media.decode_image(image_b64)
         img = img.convert('RGB')
 
         # Override object param
