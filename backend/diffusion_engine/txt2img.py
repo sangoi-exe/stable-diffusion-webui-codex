@@ -126,6 +126,7 @@ class Txt2ImgRuntime:
         self.processing.negative_prompts = getattr(
             self.processing, "negative_prompts", [getattr(self.processing, "negative_prompt", "")]
         )
+        self._run_process_scripts()
 
         samples, decoded_samples = _prepare_first_pass_from_image(self.processing)
 
@@ -244,6 +245,12 @@ class Txt2ImgRuntime:
         args = post_sample_args_cls(samples)
         script_runner.post_sample(self.processing, args)
         return getattr(args, "samples", samples)
+
+    def _run_process_scripts(self):
+        script_runner = getattr(self.processing, "scripts", None)
+        if script_runner is None or not hasattr(script_runner, "process"):
+            return
+        script_runner.process(self.processing)
 
     def _run_before_and_process_batch_hooks(self):
         script_runner = getattr(self.processing, "scripts", None)
