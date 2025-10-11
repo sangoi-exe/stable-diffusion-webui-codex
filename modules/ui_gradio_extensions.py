@@ -1,6 +1,4 @@
 import os
-import gradio as gr
-
 from modules import localization, shared, scripts, util
 from modules.paths import script_path, data_path
 
@@ -49,19 +47,17 @@ def css_html():
     return head
 
 
+def head_includes():
+    """Return HTML to include in <head>: localization preload, core and extension JS, CSS, and meta.
+
+    Used by Blocks(head=...) to avoid TemplateResponse monkeypatching (Gradio 5-friendly).
+    """
+    return css_html() + javascript_html() + '<meta name="referrer" content="no-referrer"/>'
+
+
 def reload_javascript():
-    js = javascript_html()
-    css = css_html()
+    """Legacy no-op kept for compatibility.
 
-    def template_response(*args, **kwargs):
-        res = shared.GradioTemplateResponseOriginal(*args, **kwargs)
-        res.body = res.body.replace(b'</head>', f'{js}<meta name="referrer" content="no-referrer"/></head>'.encode("utf8"))
-        res.body = res.body.replace(b'</body>', f'{css}</body>'.encode("utf8"))
-        res.init_headers()
-        return res
-
-    gr.routes.templates.TemplateResponse = template_response
-
-
-if not hasattr(shared, 'GradioTemplateResponseOriginal'):
-    shared.GradioTemplateResponseOriginal = gr.routes.templates.TemplateResponse
+    Previously monkeypatched TemplateResponse. With Gradio 5 we inject via Blocks(head=...).
+    """
+    return None

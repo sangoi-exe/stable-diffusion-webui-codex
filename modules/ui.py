@@ -17,7 +17,7 @@ from modules import sd_hijack, sd_models, script_callbacks, ui_extensions, deepb
 from modules.ui_components import FormRow, FormGroup, ToolButton, FormHTML, InputAccordion, ResizeHandleRow
 from modules.paths import script_path
 from modules.ui_common import create_refresh_button
-from modules.ui_gradio_extensions import reload_javascript
+from modules import ui_gradio_extensions as ui_head
 
 from modules.shared import opts, cmd_opts
 
@@ -272,7 +272,8 @@ def create_ui():
     import modules.img2img
     import modules.txt2img
 
-    reload_javascript()
+    # Compose global head includes (Forge canvas + CSS/JS from extensions)
+    global_head = f"{canvas_head}{ui_head.head_includes()}"
 
     parameters_copypaste.reset()
 
@@ -975,7 +976,8 @@ def create_ui():
     for _interface, label, _ifid in interfaces:
         shared.tab_names.append(label)
 
-    with gr.Blocks(theme=shared.gradio_theme, analytics_enabled=False, title="Stable Diffusion", head=canvas_head) as demo:
+    # Inject all CSS/JS in the root Blocks head
+    with gr.Blocks(theme=shared.gradio_theme, analytics_enabled=False, title="Stable Diffusion", head=global_head) as demo:
         quicksettings_row = settings.add_quicksettings()
 
         # Defer JS-based tab switching; we'll attach Python-only tab updates after Tabs are defined
