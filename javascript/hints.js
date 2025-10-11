@@ -157,37 +157,54 @@ function processTooltipCheckNodes() {
 }
 
 onUiUpdate(function(mutationRecords) {
-    for (const record of mutationRecords) {
-        if (record.type === "childList" && record.target.classList.contains("options")) {
-            // This smells like a Gradio dropdown menu having changed,
-            // so let's enqueue an update for the input element that shows the current value.
-            let wrap = record.target.parentNode;
-            let input = wrap?.querySelector("input");
-            if (input) {
-                input.title = ""; // So we'll even have a chance to update it.
-                tooltipCheckNodes.add(input);
-            }
-        }
-        for (const node of record.addedNodes) {
-            if (node.nodeType === Node.ELEMENT_NODE && !node.classList.contains("hide")) {
-                if (!node.title) {
-                    if (
-                        node.tagName === "SPAN" ||
-                        node.tagName === "BUTTON" ||
-                        node.tagName === "P" ||
-                        node.tagName === "INPUT" ||
-                        (node.tagName === "LI" && node.classList.contains("item")) // Gradio dropdown item
-                    ) {
-                        tooltipCheckNodes.add(node);
-                    }
+    try {
+        const records = Array.isArray(mutationRecords)
+            ? mutationRecords
+            : (mutationRecords ? [mutationRecords] : []);
+
+        for (const record of records) {
+            if (!record || !record.target || !(record.target instanceof Element)) continue;
+
+            if (record.type === "childList" && record.target.classList.contains("options")) {
+                // Likely a Gradio dropdown menu update, enqueue an update for the input element
+                const wrap = record.target.parentNode instanceof Element ? record.target.parentNode : null;
+                const input = wrap ? wrap.querySelector("input") : null;
+                if (input) {
+                    input.title = ""; // Force update
+                    tooltipCheckNodes.add(input);
                 }
-                node.querySelectorAll('span, button, p').forEach(n => tooltipCheckNodes.add(n));
+            }
+
+            if (record.addedNodes && record.addedNodes.length) {
+                for (const node of record.addedNodes) {
+                    if (!(node instanceof Element) || node.classList.contains("hide")) continue;
+                    if (!node.title) {
+                        const tag = node.tagName;
+                        if (
+                            tag === "SPAN" ||
+                            tag === "BUTTON" ||
+                            tag === "P" ||
+                            tag === "INPUT" ||
+                            (tag === "LI" && node.classList.contains("item"))
+                        ) {
+                            tooltipCheckNodes.add(node);
+                        }
+                    }
+                    node.querySelectorAll('span, button, p').forEach(n => tooltipCheckNodes.add(n));
+                }
             }
         }
-    }
-    if (tooltipCheckNodes.size) {
-        clearTimeout(tooltipCheckTimer);
-        tooltipCheckTimer = setTimeout(processTooltipCheckNodes, 1000);
+
+        if (tooltipCheckNodes.size) {
+            clearTimeout(tooltipCheckTimer);
+            tooltipCheckTimer = setTimeout(processTooltipCheckNodes, 1000);
+        }
+    } catch (e) {
+        // Log once per session to console without breaking the UI
+        if (!window.__forgeHintsWarned) {
+            console.warn('hints onUiUpdate error', e);
+            window.__forgeHintsWarned = true;
+        }
     }
 });
 

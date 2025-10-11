@@ -53,14 +53,6 @@ canvas_html = open(os.path.join(canvas_js_root_path, 'canvas.html'), encoding='u
 canvas_head = ''
 canvas_head += web_css('canvas.css')
 canvas_head += web_js('canvas.min.js')
-# Inject compatibility layer for Gradio 5 callback safety
-try:
-    from modules.paths import script_path as _sp
-    compat_js = os.path.join(_sp, 'javascript', 'compat_gradio5.js')
-    if os.path.isfile(compat_js):
-        canvas_head += f'<script src="file={compat_js}?{os.path.getmtime(compat_js)}"></script>\n'
-except Exception:
-    pass
 
 
 def image_to_base64(image_array, numpy=True):
