@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -19,10 +18,14 @@ if str(REPO_ROOT) not in sys.path:
 
 ORIGINAL_MODULE_NAME = __name__
 MODULE_STEM = Path(__file__).stem
-if ORIGINAL_MODULE_NAME == "__main__":
+if ORIGINAL_MODULE_NAME.endswith(".py"):
     module_obj = sys.modules.get(ORIGINAL_MODULE_NAME)
     if module_obj is not None:
+        sys.modules[MODULE_STEM] = module_obj
         globals()["__name__"] = MODULE_STEM
+elif ORIGINAL_MODULE_NAME == "__main__":
+    module_obj = sys.modules.get(ORIGINAL_MODULE_NAME)
+    if module_obj is not None:
         sys.modules.setdefault(MODULE_STEM, module_obj)
 
 # Ensure Stable Diffusion command-line parser tolerates script-specific flags.
