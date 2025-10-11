@@ -19,9 +19,11 @@ if str(REPO_ROOT) not in sys.path:
 
 ORIGINAL_MODULE_NAME = __name__
 MODULE_STEM = Path(__file__).stem
-if ORIGINAL_MODULE_NAME.endswith(".py"):
-    globals()["__name__"] = MODULE_STEM
-    sys.modules.setdefault(MODULE_STEM, sys)
+if ORIGINAL_MODULE_NAME == "__main__":
+    module_obj = sys.modules.get(ORIGINAL_MODULE_NAME)
+    if module_obj is not None:
+        globals()["__name__"] = MODULE_STEM
+        sys.modules.setdefault(MODULE_STEM, module_obj)
 
 # Ensure Stable Diffusion command-line parser tolerates script-specific flags.
 os.environ.setdefault("IGNORE_CMD_ARGS_ERRORS", "1")
@@ -327,6 +329,8 @@ def filter_scenarios(scenarios: List[Scenario], filters: Optional[Iterable[str]]
 
 def ensure_runtime_initialized() -> None:
     from modules import initialize, shared
+    from modules.sd_models import model_data
+    from modules_forge import main_entry
 
     if getattr(shared, "opts", None) is not None and getattr(shared, "sd_model", None):
         LOGGER.debug("Shared runtime already initialised; reusing existing state.")
@@ -337,10 +341,14 @@ def ensure_runtime_initialized() -> None:
     initialize.check_versions()
     initialize.initialize()
 
-    if shared.sd_model is None:
+    if not model_data.forge_loading_parameters.get("checkpoint_info"):
+        main_entry.refresh_model_loading_parameters()
+
+    if shared.sd_model is None or not model_data.forge_loading_parameters.get("checkpoint_info"):
         raise SystemExit(
             "Stable Diffusion model failed to load. "
-            "Verify that a checkpoint is selected or provide --ckpt when invoking the script."
+            "Verify that a checkpoint is selected (UI > Settings > Stable Diffusion > Model) "
+            "or include \"sd_model_checkpoint\" inside scenario override_settings."
         )
 
 
@@ -364,71 +372,97 @@ def execute_scenario(scenario: Scenario, output_dir: Path) -> Dict[str, Any]:
     from PIL import PngImagePlugin
     from modules import scripts, shared
     from modules.processing import StableDiffusionProcessingTxt2Img, process_images
+    from modules_forge import main_entry
 
-    kwargs = scenario.to_processing_kwargs()
-    kwargs.setdefault("outpath_samples", str(output_dir))
-    kwargs.setdefault("outpath_grids", str(output_dir / "grids"))
+    requested_checkpoint = scenario.override_settings.get("sd_model_checkpoint")
+    requested_modules = scenario.override_settings.get("forge_additional_modules")
+    previous_checkpoint = shared.opts.data.get("sd_model_checkpoint")
+    previous_modules = getattr(shared.opts, "forge_additional_modules", None)
+    checkpoint_changed = False
+    modules_changed = False
 
-    with closing(StableDiffusionProcessingTxt2Img(**kwargs)) as processing:
-        processing.scripts = scripts.scripts_txt2img
-        combined_script_args = [scenario.script_index]
-        combined_script_args.extend(scenario.script_args)
-        processing.script_args = combined_script_args
-        processing.user = "baseline-capture"
-        _assign_firstpass_image(processing, scenario)
+    if requested_modules is not None:
+        modules_changed = main_entry.modules_change(requested_modules, save=False, refresh=True)
 
-        shared.state.interrupted = False
-        shared.state.skipped = False
-        shared.state.job = f"txt2img baseline – {scenario.name}"
+    if requested_checkpoint:
+        checkpoint_changed = main_entry.checkpoint_change(requested_checkpoint, save=False, refresh=True)
 
-        LOGGER.debug("Starting generation for scenario %s", scenario.name)
+    try:
+        kwargs = scenario.to_processing_kwargs()
+        kwargs.setdefault("outpath_samples", str(output_dir))
+        kwargs.setdefault("outpath_grids", str(output_dir / "grids"))
 
-        processed = scripts.scripts_txt2img.run(processing, *processing.script_args)
-        if processed is None:
-            processed = process_images(processing)
+        with closing(StableDiffusionProcessingTxt2Img(**kwargs)) as processing:
+            processing.scripts = scripts.scripts_txt2img
+            combined_script_args = [scenario.script_index]
+            combined_script_args.extend(scenario.script_args)
+            processing.script_args = combined_script_args
+            processing.user = "baseline-capture"
+            _assign_firstpass_image(processing, scenario)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    images_dir = output_dir / "images"
-    extras_dir = output_dir / "extra_images"
-    images_dir.mkdir(exist_ok=True, parents=True)
-    extras_dir.mkdir(exist_ok=True, parents=True)
+            shared.state.interrupted = False
+            shared.state.skipped = False
+            shared.state.job = f"txt2img baseline – {scenario.name}"
 
-    run_metadata: Dict[str, Any] = {
-        "scenario": scenario.raw,
-        "scenario_slug": scenario.slug,
-        "infotexts": processed.infotexts,
-        "info": processed.info,
-        "comments": processed.comments,
-        "js": json.loads(processed.js()),
-        "output": [],
-        "extra_images": [],
-    }
+            LOGGER.debug("Starting generation for scenario %s", scenario.name)
 
-    for index, image in enumerate(processed.images):
-        filename = images_dir / f"{scenario.slug}_{index:02d}.png"
-        png_info = PngImagePlugin.PngInfo()
-        infotext = processed.infotexts[index] if index < len(processed.infotexts) else processed.info
-        if infotext:
-            png_info.add_text("parameters", infotext)
-        image.save(filename, format="PNG", pnginfo=png_info)
-        run_metadata["output"].append({"path": str(filename), "infotext": infotext})
+            processed = scripts.scripts_txt2img.run(processing, *processing.script_args)
+            if processed is None:
+                processed = process_images(processing)
 
-    for index, image in enumerate(processed.extra_images):
-        filename = extras_dir / f"{scenario.slug}_extra_{index:02d}.png"
-        image.save(filename, format="PNG")
-        run_metadata["extra_images"].append(str(filename))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        images_dir = output_dir / "images"
+        extras_dir = output_dir / "extra_images"
+        images_dir.mkdir(exist_ok=True, parents=True)
+        extras_dir.mkdir(exist_ok=True, parents=True)
 
-    metadata_path = output_dir / "metadata.json"
-    metadata_path.write_text(json.dumps(run_metadata, indent=2), encoding="utf-8")
+        run_metadata: Dict[str, Any] = {
+            "scenario": scenario.raw,
+            "scenario_slug": scenario.slug,
+            "infotexts": processed.infotexts,
+            "info": processed.info,
+            "comments": processed.comments,
+            "js": json.loads(processed.js()),
+            "output": [],
+            "extra_images": [],
+        }
 
-    LOGGER.info(
-        "Captured scenario %s (%d primary image(s), %d extra image(s)).",
-        scenario.name,
-        len(processed.images),
-        len(processed.extra_images),
-    )
+        for index, image in enumerate(processed.images):
+            filename = images_dir / f"{scenario.slug}_{index:02d}.png"
+            png_info = PngImagePlugin.PngInfo()
+            infotext = processed.infotexts[index] if index < len(processed.infotexts) else processed.info
+            if infotext:
+                png_info.add_text("parameters", infotext)
+            image.save(filename, format="PNG", pnginfo=png_info)
+            run_metadata["output"].append({"path": str(filename), "infotext": infotext})
 
-    return run_metadata
+        for index, image in enumerate(processed.extra_images):
+            filename = extras_dir / f"{scenario.slug}_extra_{index:02d}.png"
+            image.save(filename, format="PNG")
+            run_metadata["extra_images"].append(str(filename))
+
+        metadata_path = output_dir / "metadata.json"
+        metadata_path.write_text(json.dumps(run_metadata, indent=2), encoding="utf-8")
+
+        LOGGER.info(
+            "Captured scenario %s (%d primary image(s), %d extra image(s)).",
+            scenario.name,
+            len(processed.images),
+            len(processed.extra_images),
+        )
+
+        return run_metadata
+
+    finally:
+        if checkpoint_changed:
+            restore_target = previous_checkpoint or shared.opts.data.get("sd_model_checkpoint")
+            if restore_target:
+                main_entry.checkpoint_change(restore_target, save=False, refresh=True)
+            else:
+                main_entry.refresh_model_loading_parameters()
+        if modules_changed:
+            restore_modules = previous_modules if isinstance(previous_modules, (list, tuple)) else []
+            main_entry.modules_change(restore_modules, save=False, refresh=True)
 
 
 def maybe_overwrite_directory(path: Path, *, overwrite: bool) -> None:

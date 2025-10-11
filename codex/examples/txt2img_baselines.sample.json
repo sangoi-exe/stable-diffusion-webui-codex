@@ -12,7 +12,10 @@
       "height": 512,
       "batch_size": 1,
       "n_iter": 1,
-      "override_settings": {}
+      "script_index": 0,
+      "override_settings": {
+        "sd_model_checkpoint": "REPLACE_WITH_CHECKPOINT_TITLE"
+      }
     },
     {
       "name": "hires_refiner_smoke",
@@ -35,7 +38,10 @@
         "hr_cfg": 7.0,
         "hr_distilled_cfg": 3.0
       },
-      "override_settings": {}
+      "script_index": 0,
+      "override_settings": {
+        "sd_model_checkpoint": "REPLACE_WITH_CHECKPOINT_TITLE"
+      }
     }
   ]
 }
