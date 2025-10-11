@@ -46,25 +46,50 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
             path = os.path.join(repo_path, component_name)
             cls = getattr(importlib.import_module(lib_name), cls_name)
 
-            tokenizer_json = os.path.join(path, 'tokenizer.json')
-            merges_txt = os.path.join(path, 'merges.txt')
-            vocab_json = os.path.join(path, 'vocab.json')
+            # Candidate locations (folder-specific and repo root)
+            candidates = [
+                os.path.join(path, 'tokenizer.json'),
+                os.path.join(repo_path, 'tokenizer.json'),
+            ]
+            tokenizer_json = next((p for p in candidates if os.path.isfile(p)), None)
+
+            merges_candidates = [
+                os.path.join(path, 'merges.txt'),
+                os.path.join(repo_path, 'merges.txt'),
+                os.path.join(path, 'bpe_merges.txt'),
+                os.path.join(repo_path, 'bpe_merges.txt'),
+            ]
+            merges_txt = next((p for p in merges_candidates if os.path.isfile(p)), None)
+
+            vocab_candidates = [
+                os.path.join(path, 'vocab.json'),
+                os.path.join(repo_path, 'vocab.json'),
+                os.path.join(path, 'bpe_vocab.json'),
+                os.path.join(repo_path, 'bpe_vocab.json'),
+            ]
+            vocab_json = next((p for p in vocab_candidates if os.path.isfile(p)), None)
 
             # Prefer fast/JSON-based tokenizer when available to avoid merges.txt requirement
-            if os.path.isfile(tokenizer_json):
+            if tokenizer_json is not None:
                 try:
                     from transformers import CLIPTokenizerFast
-                    comp = CLIPTokenizerFast.from_pretrained(path, tokenizer_file=tokenizer_json)
+                    comp = CLIPTokenizerFast.from_pretrained(repo_path, tokenizer_file=tokenizer_json)
                 except Exception:
                     from transformers import AutoTokenizer
-                    comp = AutoTokenizer.from_pretrained(path, use_fast=True, tokenizer_file=tokenizer_json)
-            # Classic CLIP BPE path with vocab+merges
-            elif os.path.isfile(merges_txt) and os.path.isfile(vocab_json):
-                comp = cls.from_pretrained(path)
+                    comp = AutoTokenizer.from_pretrained(repo_path, use_fast=True, tokenizer_file=tokenizer_json)
+            # Classic CLIP BPE path with vocab+merges (from either path or repo root)
+            elif merges_txt is not None and vocab_json is not None:
+                comp = cls.from_pretrained(os.path.dirname(merges_txt))
             else:
-                # Best-effort fallback: let AutoTokenizer decide, prefer fast
+                # Best-effort fallback: try fast; if it falls back to slow without merges.txt, raise a clearer error
                 from transformers import AutoTokenizer
-                comp = AutoTokenizer.from_pretrained(path, use_fast=True)
+                try:
+                    comp = AutoTokenizer.from_pretrained(repo_path, use_fast=True)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Tokenizer assets not found under {path} or {repo_path}. "
+                        f"Expected tokenizer.json or (vocab.json + merges.txt). Original error: {e}"
+                    )
 
             # Silence too-long sequence warnings, if present
             if hasattr(comp, "_eventual_warn_about_too_long_sequence"):
