@@ -32,6 +32,7 @@ from modules.progress import create_task_id, current_task
 from backend.services.image_service import ImageService
 from backend.services.media_service import MediaService
 from backend.services.options_service import OptionsService
+from backend.services.sampler_service import SamplerService
 
 def script_name_to_index(name, scripts):
     try:
@@ -40,12 +41,7 @@ def script_name_to_index(name, scripts):
         raise HTTPException(status_code=422, detail=f"Script '{name}' not found") from e
 
 
-def validate_sampler_name(name):
-    config = sd_samplers.all_samplers_map.get(name, None)
-    if config is None:
-        raise HTTPException(status_code=400, detail="Sampler not found")
-
-    return name
+## moved sampler validation to SamplerService.ensure_valid_sampler
 
 
 def setUpscalers(req: dict):
@@ -136,6 +132,7 @@ class Api:
         self.image_service = ImageService()
         self.media = MediaService()
         self.options = OptionsService()
+        self.sampler = SamplerService()
         #api_middleware(self.app)  # FIXME: (legacy) this will have to be fixed
         self.add_api_route("/sdapi/v1/txt2img", self.text2imgapi, methods=["POST"], response_model=models.TextToImageResponse)
         self.add_api_route("/sdapi/v1/img2img", self.img2imgapi, methods=["POST"], response_model=models.ImageToImageResponse)
@@ -381,10 +378,10 @@ class Api:
         self.apply_infotext(txt2imgreq, "txt2img", script_runner=script_runner, mentioned_script_args=infotext_script_args)
 
         selectable_scripts, selectable_script_idx = self.get_selectable_script(txt2imgreq.script_name, script_runner)
-        sampler, scheduler = sd_samplers.get_sampler_and_scheduler(txt2imgreq.sampler_name or txt2imgreq.sampler_index, txt2imgreq.scheduler)
+        sampler, scheduler = self.sampler.resolve(txt2imgreq.sampler_name or txt2imgreq.sampler_index, txt2imgreq.scheduler)
 
         populate = txt2imgreq.copy(update={  # Override __init__ params
-            "sampler_name": validate_sampler_name(sampler),
+            "sampler_name": self.sampler.ensure_valid_sampler(sampler),
             "do_not_save_samples": not txt2imgreq.save_images,
             "do_not_save_grid": not txt2imgreq.save_images,
         })
@@ -438,10 +435,10 @@ class Api:
         self.apply_infotext(img2imgreq, "img2img", script_runner=script_runner, mentioned_script_args=infotext_script_args)
 
         selectable_scripts, selectable_script_idx = self.get_selectable_script(img2imgreq.script_name, script_runner)
-        sampler, scheduler = sd_samplers.get_sampler_and_scheduler(img2imgreq.sampler_name or img2imgreq.sampler_index, img2imgreq.scheduler)
+        sampler, scheduler = self.sampler.resolve(img2imgreq.sampler_name or img2imgreq.sampler_index, img2imgreq.scheduler)
 
         populate = img2imgreq.copy(update={  # Override __init__ params
-            "sampler_name": validate_sampler_name(sampler),
+            "sampler_name": self.sampler.ensure_valid_sampler(sampler),
             "do_not_save_samples": not img2imgreq.save_images,
             "do_not_save_grid": not img2imgreq.save_images,
             "mask": mask,
