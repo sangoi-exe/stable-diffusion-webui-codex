@@ -301,6 +301,14 @@ class Txt2ImgRuntime:
             self.processing.parse_extra_network_prompts()
         data = getattr(self.processing, "extra_network_data", None)
         if data:
+            logger = logging.getLogger(__name__)
+            logger.debug("Activating extra networks: %s", list(data.keys()))
+            if lora_networks is not None:
+                logger.debug(
+                    "LoRA registry: %d entries (aliases=%d)",
+                    len(getattr(lora_networks, "available_networks", {})),
+                    len(getattr(lora_networks, "available_network_aliases", {})),
+                )
             extra_networks.activate(self.processing, data)
 
     def _set_shared_job(self):
