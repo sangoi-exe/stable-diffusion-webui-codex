@@ -309,8 +309,8 @@ onAfterUiUpdate(function() {
     var jsdata = textarea.value;
     opts = JSON.parse(jsdata);
 
-    executeCallbacks(optionsAvailableCallbacks); /*global optionsAvailableCallbacks*/
-    executeCallbacks(optionsChangedCallbacks); /*global optionsChangedCallbacks*/
+    executeCallbacks(optionsAvailableCallbacks, undefined, 'onOptionsAvailable'); /*global optionsAvailableCallbacks*/
+    executeCallbacks(optionsChangedCallbacks, undefined, 'onOptionsChanged'); /*global optionsChangedCallbacks*/
 
     Object.defineProperty(textarea, 'value', {
         set: function(newValue) {
@@ -322,7 +322,7 @@ onAfterUiUpdate(function() {
                 opts = JSON.parse(textarea.value);
             }
 
-            executeCallbacks(optionsChangedCallbacks);
+            executeCallbacks(optionsChangedCallbacks, undefined, 'onOptionsChanged');
         },
         get: function() {
             var valueProp = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');

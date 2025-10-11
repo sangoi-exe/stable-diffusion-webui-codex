@@ -742,7 +742,7 @@ var executedAfterScripts = false;
 function scheduleAfterScriptsCallbacks() {
     clearTimeout(uiAfterScriptsTimeout);
     uiAfterScriptsTimeout = setTimeout(function() {
-        executeCallbacks(uiAfterScriptsCallbacks);
+        executeCallbacks(uiAfterScriptsCallbacks, undefined, 'uiAfterScripts');
     }, 200);
 }
 

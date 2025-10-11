@@ -38,6 +38,10 @@ var uiCurrentTab = null;
  * The callback receives an array of MutationRecords as an argument.
  */
 function onUiUpdate(callback) {
+    if (typeof callback !== 'function') {
+        console.warn('onUiUpdate: ignored non-function callback', callback);
+        return;
+    }
     uiUpdateCallbacks.push(callback);
 }
 
@@ -50,6 +54,10 @@ function onUiUpdate(callback) {
  * not be called quite as often.
  */
 function onAfterUiUpdate(callback) {
+    if (typeof callback !== 'function') {
+        console.warn('onAfterUiUpdate: ignored non-function callback', callback);
+        return;
+    }
     uiAfterUpdateCallbacks.push(callback);
 }
 
@@ -58,6 +66,10 @@ function onAfterUiUpdate(callback) {
  * The callback receives no arguments.
  */
 function onUiLoaded(callback) {
+    if (typeof callback !== 'function') {
+        console.warn('onUiLoaded: ignored non-function callback', callback);
+        return;
+    }
     uiLoadedCallbacks.push(callback);
 }
 
@@ -66,6 +78,10 @@ function onUiLoaded(callback) {
  * The callback receives no arguments.
  */
 function onUiTabChange(callback) {
+    if (typeof callback !== 'function') {
+        console.warn('onUiTabChange: ignored non-function callback', callback);
+        return;
+    }
     uiTabChangeCallbacks.push(callback);
 }
 
@@ -75,6 +91,10 @@ function onUiTabChange(callback) {
  * @param callback
  */
 function onOptionsChanged(callback) {
+    if (typeof callback !== 'function') {
+        console.warn('onOptionsChanged: ignored non-function callback', callback);
+        return;
+    }
     optionsChangedCallbacks.push(callback);
 }
 
@@ -84,20 +104,29 @@ function onOptionsChanged(callback) {
  * If you register the callback after the options are available, it's just immediately called.
  */
 function onOptionsAvailable(callback) {
+    if (typeof callback !== 'function') {
+        console.warn('onOptionsAvailable: ignored non-function callback', callback);
+        return;
+    }
     if (Object.keys(opts).length != 0) {
-        callback();
+        try { callback(); } catch (e) { console.error('error running callback in onOptionsAvailable:', e); }
         return;
     }
 
     optionsAvailableCallbacks.push(callback);
 }
 
-function executeCallbacks(queue, arg) {
-    for (const callback of queue) {
+function executeCallbacks(queue, arg, context) {
+    if (!Array.isArray(queue) || queue.length === 0) return;
+    for (const cb of queue) {
+        if (typeof cb !== 'function') {
+            console.warn('ignored non-function callback in', context || 'callbacks', cb);
+            continue;
+        }
         try {
-            callback(arg);
+            cb(arg);
         } catch (e) {
-            console.error("error running callback", callback, ":", e);
+            console.error('error running callback in', context || 'callbacks', ':', e);
         }
     }
 }
@@ -111,7 +140,7 @@ function executeCallbacks(queue, arg) {
 function scheduleAfterUiUpdateCallbacks() {
     clearTimeout(uiAfterUpdateTimeout);
     uiAfterUpdateTimeout = setTimeout(function() {
-        executeCallbacks(uiAfterUpdateCallbacks);
+        executeCallbacks(uiAfterUpdateCallbacks, undefined, 'onAfterUiUpdate');
     }, 200);
 }
 
@@ -121,15 +150,15 @@ document.addEventListener("DOMContentLoaded", function() {
     var mutationObserver = new MutationObserver(function(m) {
         if (!executedOnLoaded && gradioApp().querySelector('#txt2img_prompt')) {
             executedOnLoaded = true;
-            executeCallbacks(uiLoadedCallbacks);
+            executeCallbacks(uiLoadedCallbacks, undefined, 'onUiLoaded');
         }
 
-        executeCallbacks(uiUpdateCallbacks, m);
+        executeCallbacks(uiUpdateCallbacks, m, 'onUiUpdate');
         scheduleAfterUiUpdateCallbacks();
         const newTab = get_uiCurrentTab();
         if (newTab && (newTab !== uiCurrentTab)) {
             uiCurrentTab = newTab;
-            executeCallbacks(uiTabChangeCallbacks);
+            executeCallbacks(uiTabChangeCallbacks, undefined, 'onUiTabChange');
         }
     });
     mutationObserver.observe(gradioApp(), {childList: true, subtree: true});
