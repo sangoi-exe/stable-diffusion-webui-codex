@@ -156,6 +156,7 @@ class OutputPanel:
     infotext = None
     html_log = None
     button_upscale = None
+    gallery_index = None
 
 
 def create_output_panel(tabname, outdir, toprow=None):
@@ -182,6 +183,16 @@ def create_output_panel(tabname, outdir, toprow=None):
         with gr.Column(variant='panel', elem_id=f"{tabname}_results_panel"):
             with gr.Group(elem_id=f"{tabname}_gallery_container"):
                 res.gallery = gr.Gallery(label='Output', show_label=False, elem_id=f"{tabname}_gallery", columns=4, preview=True, height=shared.opts.gallery_height or None, interactive=False, type="pil", object_fit="contain")
+                res.gallery_index = gr.State(value=0)
+
+                def _on_gallery_select(evt: gr.SelectData):
+                    try:
+                        return int(getattr(evt, 'index', 0))
+                    except Exception:
+                        return 0
+
+                # Track selected thumbnail index without JS
+                res.gallery.select(fn=_on_gallery_select, inputs=[], outputs=[res.gallery_index])
 
             with gr.Row(elem_id=f"image_buttons_{tabname}", elem_classes="image-buttons"):
                 open_folder_button = ToolButton(folder_symbol, elem_id=f'{tabname}_open_folder', visible=not shared.cmd_opts.hide_ui_dir_config, tooltip="Open images output directory.")
@@ -201,11 +212,7 @@ def create_output_panel(tabname, outdir, toprow=None):
 
             open_folder_button.click(
                 fn=lambda images, index: open_folder(shared.opts.outdir_samples or outdir, images, index),
-                _js="(y, w) => [y, selected_gallery_index()]",
-                inputs=[
-                    res.gallery,
-                    open_folder_button,  # placeholder for index
-                ],
+                inputs=[res.gallery, res.gallery_index],
                 outputs=[],
             )
 
@@ -221,20 +228,18 @@ def create_output_panel(tabname, outdir, toprow=None):
                         generation_info_button = gr.Button(visible=False, elem_id=f"{tabname}_generation_info_button")
                         generation_info_button.click(
                             fn=update_generation_info,
-                            _js="function(x, y, z){ return [x, y, selected_gallery_index()] }",
-                            inputs=[res.generation_info, res.infotext, res.infotext],
+                            inputs=[res.generation_info, res.infotext, res.gallery_index],
                             outputs=[res.infotext, res.infotext],
                             show_progress=False,
                         )
 
                     save.click(
                         fn=call_queue.wrap_gradio_call_no_job(save_files),
-                        _js="(x, y, z, w) => [x, y, false, selected_gallery_index()]",
                         inputs=[
                             res.generation_info,
                             res.gallery,
-                            res.infotext,
-                            res.infotext,
+                            gr.State(value=False),
+                            res.gallery_index,
                         ],
                         outputs=[
                             download_files,
@@ -245,12 +250,11 @@ def create_output_panel(tabname, outdir, toprow=None):
 
                     save_zip.click(
                         fn=call_queue.wrap_gradio_call_no_job(save_files),
-                        _js="(x, y, z, w) => [x, y, true, selected_gallery_index()]",
                         inputs=[
                             res.generation_info,
                             res.gallery,
-                            res.infotext,
-                            res.infotext,
+                            gr.State(value=True),
+                            res.gallery_index,
                         ],
                         outputs=[
                             download_files,
@@ -318,5 +322,5 @@ def setup_dialog(button_show, dialog, *, button_close=None):
     ).then(fn=None, _js="function(){ popupId('" + dialog.elem_id + "'); }")
 
     if button_close:
-        button_close.click(fn=None, _js="closePopup")
-
+        # Close via Python update; avoids client-only closePopup
+        button_close.click(fn=lambda: gr.update(visible=False), inputs=[], outputs=[dialog])
