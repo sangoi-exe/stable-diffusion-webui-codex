@@ -12,10 +12,9 @@ Requirements Updater
   - To drop excluded packages entirely (so pip won’t touch local builds): add `--drop-excluded`.
   - Force a specific pin: `--force pkg==X.Y.Z` (may repeat).
 
-Baseline Capture
-- Command: `python tools/capture_txt2img_baselines.py --config codex/examples/txt2img_baselines.sample.json --output-dir tests/backend/fixtures/txt2img --overwrite`
-- Scenario JSON: controls prompt, sampler, steps, hires settings, and optional checkpoint/module overrides.
-- Outputs: PNGs plus `metadata.json` per scenario (infotext, comments, JS dump).
+Baseline Capture (manual)
+- Use a WebUI preset e seeds fixos para gerar PNGs e salvar infotext/metadata.
+- Guarde os artefatos de referência em `tests/backend/fixtures/txt2img/` quando necessário.
 
 Manual UI Validation (preferred)
 - Cover these flows when validating refactors:

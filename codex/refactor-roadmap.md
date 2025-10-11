@@ -41,8 +41,8 @@ References
 - See `codex/dependencies-policy.md` for pin/update policy.
 
 4) Testing Strategy
-   - Baselines: `scripts/capture_txt2img_baselines.py` for deterministic PNG+metadata capture (manual GPU host).
-   - Day‑to‑day: manual validation through the UI (LoRA, hires, refiner, multi‑iter), with targeted unit tests only where behaviour is subtle.
+   - Baselines: manual capture via WebUI using pinned seeds/configs; store outputs and metadata under `tests/backend/fixtures/txt2img/` when needed.
+   - Day‑to‑day: manual validation through the UI (LoRA, hires, refiner, multi‑iter), com testes unitários apenas onde o comportamento é sutil.
 
 Risk Register (active)
 - LoRA registry bridging between UI and headless entrypoints (ensure listing before activation).
