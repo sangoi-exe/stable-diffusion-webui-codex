@@ -19,7 +19,7 @@ Scope and Milestones
    - Next: unify per‑module loggers, replace ad‑hoc prints, document SD_WEBUI_LOG_LEVEL.
 
 3) Dependencies and Tooling
-   - Done: `scripts/update_requirements.py` to bump pins via PyPI while excluding PyTorch family; `--drop-excluded` for locally compiled torch.
+   - Done: `tools/update_requirements.py` to bump pins via PyPI while excluding PyTorch family; `--drop-excluded` for locally compiled torch.
    - Next: routine pin refresh CI step (documented command), narrow any remaining backtracking hot‑spots.
    - TODO: add a manual installer helper that installs each pinned package with `pip install --no-deps` in a stable order (reads `requirements_versions.txt`, supports `--subset` filters, prints per‑package results, and never touches torch/vision/audio). Document that resolver is bypassed by design; users must keep pins coherent.
 

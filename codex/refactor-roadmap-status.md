@@ -20,7 +20,7 @@ Refactor Status – 2025-10-11
 
 3) Dependencies
 - Status: Adopted
-- Completed: requirements updater script; drop‑excluded torch family; resolved open‑clip/protobuf conflict via pin bump
+- Completed: requirements updater script (`tools/update_requirements.py`); drop‑excluded torch family; resolved open‑clip/protobuf conflict via pin bump
  - Planned: manual no‑deps installer (per‑package `pip install --no-deps` runner) to bypass resolver entirely on Windows/RTX host; ships with progress + summary.
 
 Next Steps

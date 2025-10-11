@@ -600,14 +600,42 @@ def connect_paste(button, paste_fields, input_comp, override_settings_component,
                 res.append(v)
             else:
                 try:
+                    # Determine intended type from current component value
                     valtype = type(output.value)
 
+                    # Convert incoming text to appropriate type
                     if valtype == bool and v == "False":
                         val = False
                     elif valtype == int:
+                        val = int(float(v))
+                    elif valtype == float:
                         val = float(v)
+                    elif valtype in (list, tuple) and hasattr(output, "multiselect") and output.multiselect:
+                        # For multiselect dropdowns, ensure list
+                        val = v if isinstance(v, (list, tuple)) else [v]
                     else:
                         val = valtype(v)
+
+                    # Clamp sliders to their bounds (Gradio 5 enforces min/max strictly)
+                    if hasattr(output, "minimum") and hasattr(output, "maximum") and isinstance(val, (int, float)):
+                        minv = getattr(output, "minimum")
+                        maxv = getattr(output, "maximum")
+                        if minv is not None and val < minv:
+                            val = minv
+                        if maxv is not None and val > maxv:
+                            val = maxv
+
+                    # Validate dropdown choices to avoid 'not in choices' errors
+                    if hasattr(output, "choices") and output.choices is not None:
+                        if isinstance(val, list):
+                            val = [x for x in val if x in output.choices]
+                            if not val:
+                                res.append(gr.update())
+                                continue
+                        else:
+                            if val not in output.choices:
+                                res.append(gr.update())
+                                continue
 
                     res.append(gr.update(value=val))
                 except Exception:
@@ -640,4 +668,3 @@ def connect_paste(button, paste_fields, input_comp, override_settings_component,
         outputs=[],
         show_progress=False,
     )
-
