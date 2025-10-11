@@ -2,6 +2,7 @@ About Gradio 5: will try to upgrade to Gradio 5 at about 2025 March. If failed, 
 
 2025 Oct 11: Removed client-side `compat_gradio5.js` wrapper that suppressed UI callback errors. Errors will now surface in console for proper fixes; no behavior changes intended beyond eliminating silent failures.
 2025 Oct 11: Improved callback robustness in `script.js` — invalid (non-function) registrations are ignored with a warning and callback errors are logged with context, reducing confusing messages like "error running callback :" and aiding root-cause fixes.
+2025 Oct 11: Begin Gradio 5 migration per "Guia de Migração do Gradio 4.40 para 5" — set expected Gradio to 5.49.1 and use `concurrency_limit` in `.queue()`.
 
 2024 Oct 28: A new branch `sd35` is contributed by [#2183](https://github.com/lllyasviel/stable-diffusion-webui-forge/pull/2183) . I will take a look at quants and sampling and transformer's clip-g vs that clip-g rewrite before merging to main ... (Oct 29: okay maybe medium also need to take a look later)
 

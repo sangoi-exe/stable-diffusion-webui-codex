@@ -1,6 +1,11 @@
 Session Log
 ===========
 
+2025-10-11 – Gradio migration start
+- Align expected Gradio to 5.49.1 in `modules/errors.py`.
+- Switch global queue to `concurrency_limit=64` in `webui.py` per Gradio 5 (replaces positional arg).
+- Cross-checked guide “Guia de Migração do Gradio 4.40 para 5.md”; no `every=` usage found; no listener-level limits added yet (defaults inherit from Blocks.queue).
+
 2025-10-11 – Frontend cleanup
 - Removed `javascript/compat_gradio5.js` which wrapped `onUiUpdate/onUiLoaded` and `executeCallbacks` to suppress errors.
 - Rationale: avoid silent failures; surface exceptions for proper fixes per repo guidance (no workarounds/hacks).

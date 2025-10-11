@@ -109,7 +109,8 @@ def check_versions():
 
     expected_torch_version = "2.3.1"
     expected_xformers_version = "0.0.27"
-    expected_gradio_version = "4.40.0"
+    # Migrated per "Guia de Migração do Gradio 4.40 para 5"; align expected version
+    expected_gradio_version = "5.49.1"
 
     if version.parse(torch.__version__) < version.parse(expected_torch_version):
         print_error_explanation(f"""
@@ -147,4 +148,3 @@ Reasons why you have the mismatched gradio version can be:
 
 Use --skip-version-check commandline argument to disable this check.
         """.strip())
-
