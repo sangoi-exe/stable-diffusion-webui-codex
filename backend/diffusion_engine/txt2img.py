@@ -282,8 +282,9 @@ class Txt2ImgRuntime:
     def _activate_extra_networks(self):
         if getattr(self.processing, "disable_extra_networks", False):
             return
-        if not getattr(extra_networks, "available_networks", None):
-            extra_networks.list_available_networks()
+        bridge = getattr(extra_networks, "forge_registry_bridge", None)
+        if bridge is not None:
+            bridge.ensure_lora_registry()
         if hasattr(self.processing, "parse_extra_network_prompts"):
             self.processing.parse_extra_network_prompts()
         if hasattr(self.processing, "extra_network_data"):
