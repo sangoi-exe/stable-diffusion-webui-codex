@@ -81,15 +81,11 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
             elif merges_txt is not None and vocab_json is not None:
                 comp = cls.from_pretrained(os.path.dirname(merges_txt))
             else:
-                # Best-effort fallback: try fast; if it falls back to slow without merges.txt, raise a clearer error
-                from transformers import AutoTokenizer
-                try:
-                    comp = AutoTokenizer.from_pretrained(repo_path, use_fast=True)
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Tokenizer assets not found under {path} or {repo_path}. "
-                        f"Expected tokenizer.json or (vocab.json + merges.txt). Original error: {e}"
-                    )
+                # Do NOT auto-infer from repo root; enforce explicit assets for this component.
+                raise RuntimeError(
+                    f"Tokenizer assets not found under {path} or {repo_path}. "
+                    f"Expected tokenizer.json or (vocab.json + merges.txt)."
+                )
 
             # Silence too-long sequence warnings, if present
             if hasattr(comp, "_eventual_warn_about_too_long_sequence"):
