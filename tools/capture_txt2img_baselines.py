@@ -7,7 +7,7 @@ import os
 import re
 import sys
 from contextlib import closing
-from dataclasses import dataclass as _real_dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -18,22 +18,6 @@ if str(REPO_ROOT) not in sys.path:
 
 MODULE_FILE_KEY = Path(__file__).name
 MODULE_STEM_KEY = Path(__file__).stem
-
-try:
-    _MODULE_OBJECT = sys.modules[__name__]
-except KeyError:
-    import types
-
-    _MODULE_OBJECT = types.ModuleType(__name__)
-    sys.modules[__name__] = _MODULE_OBJECT
-
-for alias in {
-    MODULE_FILE_KEY,
-    MODULE_STEM_KEY,
-    f"scripts.{MODULE_FILE_KEY}",
-    f"scripts.{MODULE_STEM_KEY}",
-}:
-    sys.modules.setdefault(alias, _MODULE_OBJECT)
 
 # Ensure Stable Diffusion command-line parser tolerates script-specific flags.
 os.environ.setdefault("IGNORE_CMD_ARGS_ERRORS", "1")
@@ -82,12 +66,6 @@ def _sanitize_name(name: str) -> str:
     slug = re.sub(r"_+", "_", slug).strip("_")
     return slug or "scenario"
 
-
-# When imported by WebUI's script loader, module names like
-# "capture_txt2img_baselines.py" can confuse dataclasses' module lookup.
-# To avoid failures during import, use a no-op decorator under that context.
-_IS_WEBUI_LOADER = (__name__.endswith('.py') and __name__ != '__main__') or __name__.startswith('scripts.')
-dataclass = _real_dataclass if not _IS_WEBUI_LOADER else (lambda *a, **k: (lambda c: c))
 
 @dataclass(frozen=True)
 class HiresSettings:
