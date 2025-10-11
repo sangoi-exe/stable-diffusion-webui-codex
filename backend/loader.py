@@ -45,17 +45,27 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
         if component_name.startswith('tokenizer'):
             path = os.path.join(repo_path, component_name)
             cls = getattr(importlib.import_module(lib_name), cls_name)
-            try:
-                comp = cls.from_pretrained(path)
-            except TypeError:
-                # Some tokenizer configs (e.g., CLIP under Transformers>=4.50) may rely on tokenizer.json
-                # rather than merges.txt expected by CLIPTokenizer. Fall back to fast/auto variants.
+
+            tokenizer_json = os.path.join(path, 'tokenizer.json')
+            merges_txt = os.path.join(path, 'merges.txt')
+            vocab_json = os.path.join(path, 'vocab.json')
+
+            # Prefer fast/JSON-based tokenizer when available to avoid merges.txt requirement
+            if os.path.isfile(tokenizer_json):
                 try:
                     from transformers import CLIPTokenizerFast
-                    comp = CLIPTokenizerFast.from_pretrained(path)
+                    comp = CLIPTokenizerFast.from_pretrained(path, tokenizer_file=tokenizer_json)
                 except Exception:
                     from transformers import AutoTokenizer
-                    comp = AutoTokenizer.from_pretrained(path, use_fast=True)
+                    comp = AutoTokenizer.from_pretrained(path, use_fast=True, tokenizer_file=tokenizer_json)
+            # Classic CLIP BPE path with vocab+merges
+            elif os.path.isfile(merges_txt) and os.path.isfile(vocab_json):
+                comp = cls.from_pretrained(path)
+            else:
+                # Best-effort fallback: let AutoTokenizer decide, prefer fast
+                from transformers import AutoTokenizer
+                comp = AutoTokenizer.from_pretrained(path, use_fast=True)
+
             # Silence too-long sequence warnings, if present
             if hasattr(comp, "_eventual_warn_about_too_long_sequence"):
                 comp._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None

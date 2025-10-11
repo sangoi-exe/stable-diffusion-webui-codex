@@ -18,6 +18,14 @@ Scope and Milestones
    - Done: centralized `modules/logging_config.py` with Rich/Colorama, tqdm‑aware handler, opt‑out fallback.
    - Next: unify per‑module loggers, replace ad‑hoc prints, document SD_WEBUI_LOG_LEVEL.
 
+3) Gradio 5 Migration
+   - Goal: audit all JS/Gradio interactions and update to Gradio 5.49.x APIs/semantics (events, _js callbacks, components’ value models, stricter validation, tab switching, gallery extraction).
+   - Tasks:
+     - Replace deprecated _js handlers and wiring that changed between 4.x → 5.x (e.g., auto switch tab on “Send to …”).
+     - Normalize component updates to respect min/max and choice sets (done for paste; extend across UI flows).
+     - Verify queue/event lifecycles and update Blocks/Routes usage where needed.
+   - Validation: manual UI tests (PNG Info → txt2img/img2img, send to upscaler, hires widgets), plus a quick smoke of API routes.
+
 3) Dependencies and Tooling
    - Done: `tools/update_requirements.py` to bump pins via PyPI while excluding PyTorch family; `--drop-excluded` for locally compiled torch.
    - Next: routine pin refresh CI step (documented command), narrow any remaining backtracking hot‑spots.
