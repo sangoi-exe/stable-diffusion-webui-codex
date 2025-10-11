@@ -34,6 +34,29 @@ from backend.services.media_service import MediaService
 from backend.services.options_service import OptionsService
 from backend.services.sampler_service import SamplerService
 
+# Back-compat shims for extensions importing helpers from modules.api.api
+_media_compat = MediaService()
+
+def verify_url(url: str) -> bool:
+    try:
+        return MediaService._verify_url(url)
+    except Exception:
+        return False
+
+def decode_base64_to_image(encoding):
+    try:
+        return _media_compat.decode_image(encoding)
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def encode_pil_to_base64(image):
+    try:
+        # Historically returned bytes; keep compatibility for extensions
+        s = _media_compat.encode_image(image)
+        return s.encode('utf-8')
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 def script_name_to_index(name, scripts):
     try:
         return [script.title().lower() for script in scripts].index(name.lower())
