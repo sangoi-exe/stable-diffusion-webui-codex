@@ -31,7 +31,8 @@ from typing import Any, Union, get_origin, get_args
 import piexif
 import piexif.helper
 from contextlib import closing
-from modules.progress import create_task_id, add_task_to_queue, start_task, finish_task, current_task
+from modules.progress import create_task_id, current_task
+from backend.services.image_service import ImageService
 
 def script_name_to_index(name, scripts):
     try:
@@ -207,6 +208,7 @@ class Api:
         self.router = APIRouter()
         self.app = app
         self.queue_lock = queue_lock
+        self.image_service = ImageService()
         #api_middleware(self.app)  # FIXME: (legacy) this will have to be fixed
         self.add_api_route("/sdapi/v1/txt2img", self.text2imgapi, methods=["POST"], response_model=models.TextToImageResponse)
         self.add_api_route("/sdapi/v1/img2img", self.img2imgapi, methods=["POST"], response_model=models.ImageToImageResponse)
@@ -362,61 +364,6 @@ class Api:
                         script_args[alwayson_script.args_from + idx] = request.alwayson_scripts[alwayson_script_name]["args"][idx]
         return script_args
 
-    # Internal helper to unify duplicated txt2img/img2img execution flow
-    def _execute_generation(self,
-                            p_factory,
-                            *,
-                            script_runner,
-                            selectable_scripts,
-                            script_args,
-                            task_id: str,
-                            job_label: str,
-                            send_images: bool,
-                            outpath_samples: str,
-                            outpath_grids: str,
-                            prepare_p=None):
-        """Create, configure and execute a StableDiffusionProcessing pipeline.
-
-        Parameters
-        - p_factory: callable that returns a new processing object (inside a closing()).
-        - script_runner: scripts.scripts_txt2img or scripts.scripts_img2img
-        - selectable_scripts: selectable script or None
-        - script_args: prepared args for the script runner
-        - task_id, job_label: progress/task labels
-        - send_images: whether to return images in response
-        - outpath_samples/outpath_grids: output directories
-        - prepare_p: optional callable(p) to mutate p before run (e.g., set init_images/mask)
-        """
-
-        add_task_to_queue(task_id)
-
-        with self.queue_lock:
-            with closing(p_factory()) as p:
-                p.is_api = True
-                p.scripts = script_runner
-                p.outpath_grids = outpath_grids
-                p.outpath_samples = outpath_samples
-
-                if callable(prepare_p):
-                    prepare_p(p)
-
-                try:
-                    shared.state.begin(job=job_label)
-                    start_task(task_id)
-                    if selectable_scripts is not None:
-                        p.script_args = script_args
-                        processed = script_runner.run(p, *p.script_args)  # list
-                    else:
-                        p.script_args = tuple(script_args)  # tuple
-                        processed = process_images(p)
-                    process_extra_images(processed)
-                    finish_task(task_id)
-                finally:
-                    shared.state.end()
-                    shared.total_tqdm.clear()
-
-        b64images = list(map(encode_pil_to_base64, processed.images + processed.extra_images)) if send_images else []
-        return processed, b64images
 
     def apply_infotext(self, request, tabname, *, script_runner=None, mentioned_script_args=None):
         """Processes `infotext` field from the `request`, and sets other fields of the `request` according to what's in infotext.
@@ -532,17 +479,18 @@ class Api:
         args.pop('save_images', None)
 
         p_factory = lambda: StableDiffusionProcessingTxt2Img(sd_model=shared.sd_model, **args)
-        processed, b64images = self._execute_generation(
+        processed = self.image_service.execute_generation(
             p_factory,
-            script_runner=script_runner,
+            script_runner=scripts.scripts_txt2img,
             selectable_scripts=selectable_scripts,
             script_args=script_args,
             task_id=task_id,
             job_label="scripts_txt2img",
-            send_images=send_images,
             outpath_samples=opts.outdir_txt2img_samples,
             outpath_grids=opts.outdir_txt2img_grids,
+            queue_lock=self.queue_lock,
         )
+        b64images = list(map(encode_pil_to_base64, processed.images + processed.extra_images)) if send_images else []
 
         return models.TextToImageResponse(images=b64images, parameters=vars(txt2imgreq), info=processed.js())
 
@@ -593,18 +541,19 @@ class Api:
             p.init_images = [decode_base64_to_image(x) for x in init_images]
 
         p_factory = lambda: StableDiffusionProcessingImg2Img(sd_model=shared.sd_model, **args)
-        processed, b64images = self._execute_generation(
+        processed = self.image_service.execute_generation(
             p_factory,
-            script_runner=script_runner,
+            script_runner=scripts.scripts_img2img,
             selectable_scripts=selectable_scripts,
             script_args=script_args,
             task_id=task_id,
             job_label="scripts_img2img",
-            send_images=send_images,
             outpath_samples=opts.outdir_img2img_samples,
             outpath_grids=opts.outdir_img2img_grids,
             prepare_p=_prepare,
+            queue_lock=self.queue_lock,
         )
+        b64images = list(map(encode_pil_to_base64, processed.images + processed.extra_images)) if send_images else []
 
         if not img2imgreq.include_init_images:
             img2imgreq.init_images = None
