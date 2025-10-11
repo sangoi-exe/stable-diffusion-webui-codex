@@ -52,6 +52,11 @@ function setupTokenCounting(id, id_counter, id_button) {
         return; // UI not ready yet in Gradio 5; skip safely
     }
 
+    if (prompt.dataset.tokenCounterBound === 'true') {
+        return;
+    }
+    prompt.dataset.tokenCounterBound = 'true';
+
     if (counter.parentElement && prompt.parentElement && counter.parentElement == prompt.parentElement) {
         return;
     }
