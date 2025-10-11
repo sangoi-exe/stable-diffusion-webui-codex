@@ -1,3 +1,4 @@
+import platform
 import torch
 from backend.args import args
 
@@ -13,6 +14,9 @@ def stream_context():
 
 
 def get_current_stream():
+    # Avoid CUDA stream setup on unsupported platforms (Windows) or when disabled.
+    if platform.system() == "Windows" or not args.cuda_stream:
+        return None
     try:
         if torch.cuda.is_available():
             device = torch.device(torch.cuda.current_device())
@@ -33,6 +37,9 @@ def get_current_stream():
 
 
 def get_new_stream():
+    # Avoid CUDA stream setup on unsupported platforms (Windows) or when disabled.
+    if platform.system() == "Windows" or not args.cuda_stream:
+        return None
     try:
         if torch.cuda.is_available():
             device = torch.device(torch.cuda.current_device())
@@ -56,6 +63,6 @@ def should_use_stream():
     return stream_activated and current_stream is not None and mover_stream is not None
 
 
+stream_activated = args.cuda_stream and platform.system() != "Windows"
 current_stream = get_current_stream()
 mover_stream = get_new_stream()
-stream_activated = args.cuda_stream
