@@ -10,6 +10,9 @@ Session Log
 - Moved JS/CSS injection from TemplateResponse monkeypatch to `Blocks(head=...)` via `ui_gradio_extensions.head_includes()`; kept `reload_javascript()` as no-op for compatibility.
 - Reduced JS dependence further: Python updates for seed randomization; set `concurrency_limit=1` on heavy listeners (txt2img/img2img/extras).
 
+2025-10-11 – Backend refactor (API)
+- Unified duplicated txt2img/img2img execution in `modules/api/api.py` into `_execute_generation()` helper. Behaviour and responses unchanged; centralizes queue/run/encode flow.
+
 2025-10-11 – Frontend cleanup
 - Removed `javascript/compat_gradio5.js` which wrapped `onUiUpdate/onUiLoaded` and `executeCallbacks` to suppress errors.
 - Rationale: avoid silent failures; surface exceptions for proper fixes per repo guidance (no workarounds/hacks).
