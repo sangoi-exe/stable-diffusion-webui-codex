@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "ESNext",
+    "lib": ["ES2021", "DOM"],
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "useUnknownInCatchVariables": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "rootDir": "javascript-src",
+    "outDir": "javascript",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["javascript-src/**/*.ts", "javascript-src/**/*.d.ts"],
+  "exclude": ["node_modules", "javascript/**"]
+}
+

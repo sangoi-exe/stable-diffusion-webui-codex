@@ -2,10 +2,13 @@
   "name": "stable-diffusion-webui",
   "version": "0.0.0",
   "devDependencies": {
-    "eslint": "^8.40.0"
+    "eslint": "^8.40.0",
+    "typescript": "^5.6.3"
   },
   "scripts": {
     "lint": "eslint .",
-    "fix": "eslint --fix ."
+    "fix": "eslint --fix .",
+    "build:ts": "tsc -p tsconfig.json",
+    "watch:ts": "tsc -w -p tsconfig.json"
   }
 }
