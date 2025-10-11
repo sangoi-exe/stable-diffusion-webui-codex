@@ -43,9 +43,22 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
             cls = getattr(importlib.import_module(lib_name), cls_name)
             return cls.from_pretrained(os.path.join(repo_path, component_name))
         if component_name.startswith('tokenizer'):
+            path = os.path.join(repo_path, component_name)
             cls = getattr(importlib.import_module(lib_name), cls_name)
-            comp = cls.from_pretrained(os.path.join(repo_path, component_name))
-            comp._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None
+            try:
+                comp = cls.from_pretrained(path)
+            except TypeError:
+                # Some tokenizer configs (e.g., CLIP under Transformers>=4.50) may rely on tokenizer.json
+                # rather than merges.txt expected by CLIPTokenizer. Fall back to fast/auto variants.
+                try:
+                    from transformers import CLIPTokenizerFast
+                    comp = CLIPTokenizerFast.from_pretrained(path)
+                except Exception:
+                    from transformers import AutoTokenizer
+                    comp = AutoTokenizer.from_pretrained(path, use_fast=True)
+            # Silence too-long sequence warnings, if present
+            if hasattr(comp, "_eventual_warn_about_too_long_sequence"):
+                comp._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None
             return comp
         if cls_name in ['AutoencoderKL']:
             assert isinstance(state_dict, dict) and len(state_dict) > 16, 'You do not have VAE state dict!'

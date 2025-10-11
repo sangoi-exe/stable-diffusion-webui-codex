@@ -595,7 +595,18 @@ def connect_paste(button, paste_fields, input_comp, override_settings_component,
                 v = params.get(key, None)
 
             if v is None:
-                res.append(gr.update())
+                # For numeric sliders, keep a safe current value instead of empty update
+                if hasattr(output, "minimum") and hasattr(output, "maximum") and isinstance(getattr(output, "value", None), (int, float)):
+                    cur = output.value
+                    minv = getattr(output, "minimum")
+                    maxv = getattr(output, "maximum")
+                    if cur is None or (isinstance(cur, (int, float)) and minv is not None and cur < minv):
+                        cur = minv
+                    if isinstance(cur, (int, float)) and maxv is not None and cur > maxv:
+                        cur = maxv
+                    res.append(gr.update(value=cur))
+                else:
+                    res.append(gr.update())
             elif isinstance(v, type_of_gr_update):
                 res.append(v)
             else:
