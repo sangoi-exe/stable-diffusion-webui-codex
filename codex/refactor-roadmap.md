@@ -24,12 +24,21 @@ Scope and Milestones
      - Replace deprecated _js handlers and wiring that changed between 4.x → 5.x (e.g., auto switch tab on “Send to …”).
      - Normalize component updates to respect min/max and choice sets (done for paste; extend across UI flows).
      - Verify queue/event lifecycles and update Blocks/Routes usage where needed.
+     - Introduce TypeScript for legacy JS modules with strict null checks to prevent DOM-time errors; ship JS builds in-place for Gradio to load.
+        - Scaffolding: `tsconfig.json`, `javascript-src/`, `npm run build:ts` to output into `javascript/`.
+        - Convert first-wave modules: `inputAccordion`, `token-counters`, `ui` helpers.
+        - Provide ambient shims for global helpers (e.g., `gradioApp`, `onUiLoaded`) in `javascript-src/shims.d.ts`.
    - Validation: manual UI tests (PNG Info → txt2img/img2img, send to upscaler, hires widgets), plus a quick smoke of API routes.
 
 3) Dependencies and Tooling
-   - Done: `tools/update_requirements.py` to bump pins via PyPI while excluding PyTorch family; `--drop-excluded` for locally compiled torch.
-   - Next: routine pin refresh CI step (documented command), narrow any remaining backtracking hot‑spots.
-   - TODO: add a manual installer helper that installs each pinned package with `pip install --no-deps` in a stable order (reads `requirements_versions.txt`, supports `--subset` filters, prints per‑package results, and never touches torch/vision/audio). Document that resolver is bypassed by design; users must keep pins coherent.
+- Done: `tools/update_requirements.py` to bump pins via PyPI while excluding PyTorch family; `--drop-excluded` for locally compiled torch.
+- Next: routine pin refresh CI step (documented command), narrow any remaining backtracking hot‑spots.
+- TODO: add a manual installer helper that installs each pinned package with `pip install --no-deps` in a stable order (reads `requirements_versions.txt`, supports `--subset` filters, prints per‑package results, and never touches torch/vision/audio). Document that resolver is bypassed by design; users must keep pins coherent.
+
+References
+- See `codex/gradio-migration.md` for the live Gradio 5 plan.
+- See `codex/frontend-guidelines.md` for TS/JS usage discipline.
+- See `codex/dependencies-policy.md` for pin/update policy.
 
 4) Testing Strategy
    - Baselines: `scripts/capture_txt2img_baselines.py` for deterministic PNG+metadata capture (manual GPU host).
