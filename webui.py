@@ -99,6 +99,7 @@ def webui_worker():
 
         from modules_forge.forge_canvas.canvas import canvas_js_root_path
 
+        ssr_mode_env = os.getenv('GRADIO_SSR_MODE', '').strip().lower() in ('1', 'true', 'yes', 'on')
         app, local_url, share_url = shared.demo.launch(
             share=False,                             # antes: share=cmd_opts.share
             server_name="0.0.0.0",                   # antes: initialize_util.gradio_server_name()
@@ -111,6 +112,7 @@ def webui_worker():
             inbrowser=auto_launch_browser,
             prevent_thread_lock=True,
             allowed_paths=cmd_opts.gradio_allowed_path + [canvas_js_root_path],
+            ssr_mode=ssr_mode_env,
             app_kwargs={
                 "docs_url": "/docs",
                 "redoc_url": "/redoc",
