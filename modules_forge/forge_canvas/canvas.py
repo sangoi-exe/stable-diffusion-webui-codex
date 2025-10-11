@@ -148,6 +148,18 @@ class ForgeCanvas:
         self.block = gr.HTML(canvas_html_uuid, visible=visible, elem_id=elem_id, elem_classes=elem_classes)
         self.foreground = LogicalImage(visible=DEBUG_MODE, label='foreground', numpy=numpy, elem_id=self.uuid, elem_classes=['logical_image_foreground'])
         self.background = LogicalImage(visible=DEBUG_MODE, label='background', numpy=numpy, value=initial_image, elem_id=self.uuid, elem_classes=['logical_image_background'])
-        Context.root_block.load(None, js=f'async ()=>{{new ForgeCanvas("{self.uuid}", {no_upload}, {no_scribbles}, {contrast_scribbles}, {height}, '
-                                         f"'{scribble_color}', {scribble_color_fixed}, {scribble_width}, {scribble_width_fixed}, "
-                                         f'{scribble_alpha}, {scribble_alpha_fixed}, {scribble_softness}, {scribble_softness_fixed});}}')
+        # Delay initialization until core DOM nodes exist to avoid null.value errors
+        Context.root_block.load(None, js=(
+            'async ()=>{'
+            f'  const ids=["imageContainer_{self.uuid}","drawingCanvas_{self.uuid}","toolbar_{self.uuid}"];'
+            '  const ready=()=>ids.every(id=>document.getElementById(id));'
+            '  if(!ready()){
+                 await new Promise((resolve)=>{let n=0; const t=setInterval(()=>{if(ready()||++n>200){clearInterval(t); resolve();}},50);});
+               }'
+            '  try{'
+            f'    new ForgeCanvas("{self.uuid}", {no_upload}, {no_scribbles}, {contrast_scribbles}, {height}, '
+            f'      "{scribble_color}", {scribble_color_fixed}, {scribble_width}, {scribble_width_fixed}, '
+            f'      {scribble_alpha}, {scribble_alpha_fixed}, {scribble_softness}, {scribble_softness_fixed});'
+            '  }catch(e){ console.error("ForgeCanvas init error", e); }
+            '}'
+        ))
