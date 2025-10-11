@@ -16,17 +16,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-ORIGINAL_MODULE_NAME = __name__
-MODULE_STEM = Path(__file__).stem
-if ORIGINAL_MODULE_NAME.endswith(".py"):
-    module_obj = sys.modules.get(ORIGINAL_MODULE_NAME)
-    if module_obj is not None:
-        sys.modules[MODULE_STEM] = module_obj
-        globals()["__name__"] = MODULE_STEM
-elif ORIGINAL_MODULE_NAME == "__main__":
-    module_obj = sys.modules.get(ORIGINAL_MODULE_NAME)
-    if module_obj is not None:
-        sys.modules.setdefault(MODULE_STEM, module_obj)
+MODULE_FILE_KEY = Path(__file__).name
+MODULE_STEM_KEY = Path(__file__).stem
+module_obj = sys.modules.get(__name__)
+if module_obj is not None:
+    sys.modules.setdefault(MODULE_FILE_KEY, module_obj)
+    sys.modules.setdefault(MODULE_STEM_KEY, module_obj)
 
 # Ensure Stable Diffusion command-line parser tolerates script-specific flags.
 os.environ.setdefault("IGNORE_CMD_ARGS_ERRORS", "1")
