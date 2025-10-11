@@ -8,7 +8,10 @@ function setupAccordion(accordion) {
     var labelWrap = accordion.querySelector('.label-wrap');
     var gradioCheckbox = gradioApp().querySelector('#' + accordion.id + "-checkbox input");
     var extra = gradioApp().querySelector('#' + accordion.id + "-extra");
-    var span = labelWrap.querySelector('span');
+    var span = labelWrap ? labelWrap.querySelector('span') : null;
+    if (!labelWrap || !span || !accordion) {
+        return; // Gradio 5 structure not present yet; skip safely
+    }
     var linked = true;
 
     var isOpen = function() {
@@ -41,7 +44,7 @@ function setupAccordion(accordion) {
     visibleCheckbox.type = 'checkbox';
     visibleCheckbox.checked = isOpen();
     visibleCheckbox.id = accordion.id + "-visible-checkbox";
-    visibleCheckbox.className = gradioCheckbox.className + " input-accordion-checkbox";
+    visibleCheckbox.className = (gradioCheckbox ? gradioCheckbox.className : '') + " input-accordion-checkbox";
     span.insertBefore(visibleCheckbox, span.firstChild);
 
     accordion.visibleCheckbox = visibleCheckbox;
@@ -50,8 +53,10 @@ function setupAccordion(accordion) {
             labelWrap.click();
         }
 
-        gradioCheckbox.checked = visibleCheckbox.checked;
-        updateInput(gradioCheckbox);
+        if (gradioCheckbox) {
+            gradioCheckbox.checked = visibleCheckbox.checked;
+            updateInput(gradioCheckbox);
+        }
     };
 
     visibleCheckbox.addEventListener('click', function(event) {

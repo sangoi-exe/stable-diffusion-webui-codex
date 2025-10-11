@@ -48,12 +48,18 @@ function setupTokenCounting(id, id_counter, id_button) {
     var counter = gradioApp().getElementById(id_counter);
     var textarea = gradioApp().querySelector(`#${id} > label > textarea`);
 
-    if (counter.parentElement == prompt.parentElement) {
+    if (!prompt || !counter || !textarea) {
+        return; // UI not ready yet in Gradio 5; skip safely
+    }
+
+    if (counter.parentElement && prompt.parentElement && counter.parentElement == prompt.parentElement) {
         return;
     }
 
-    prompt.parentElement.insertBefore(counter, prompt);
-    prompt.parentElement.style.position = "relative";
+    if (prompt.parentElement) {
+        prompt.parentElement.insertBefore(counter, prompt);
+        prompt.parentElement.style.position = "relative";
+    }
 
     var func = onEdit(id, textarea, 800, function() {
         if (counter.classList.contains("token-counter-visible")) {

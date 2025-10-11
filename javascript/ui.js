@@ -429,6 +429,9 @@ var onEditTimers = {};
 
 // calls func after afterMs milliseconds has passed since the input elem has been edited by user
 function onEdit(editId, elem, afterMs, func) {
+    if (!elem) {
+        return function(){};
+    }
     var edited = function() {
         var existingTimer = onEditTimers[editId];
         if (existingTimer) clearTimeout(existingTimer);
