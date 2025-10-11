@@ -157,7 +157,13 @@ def connect_paste_params_buttons():
         destination_height_component = next(iter([field for field, name in fields if name == "Size-2"] if fields else []), None)
 
         if binding.source_image_component and destination_image_component:
-            need_send_dementions = destination_width_component and binding.tabname != 'inpaint'
+            # In Gradio 5, sending an empty update to sliders can yield invalid sentinel values.
+            # Only wire width/height outputs when the user explicitly enabled sending size.
+            need_send_dementions = (
+                destination_width_component
+                and binding.tabname != 'inpaint'
+                and getattr(shared.opts, 'send_size', False)
+            )
             if isinstance(binding.source_image_component, gr.Gallery):
                 func = send_image_and_dimensions if need_send_dementions else image_from_url_text
                 jsfunc = "extract_image_from_gallery"
@@ -210,8 +216,9 @@ def send_image_and_dimensions(x):
         w = img.width
         h = img.height
     else:
-        w = gr.update()
-        h = gr.update()
+        # Explicitly instruct Gradio to keep existing values
+        w = gr.update(value=None)
+        h = gr.update(value=None)
 
     return img, w, h
 
