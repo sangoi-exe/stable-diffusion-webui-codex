@@ -8,13 +8,18 @@ re-evaluating the fundamentals.
 ## 1. Backend Modernization
 
 ### Port txt2img execution path to `backend/diffusion_engine/txt2img.py`
-- **Status:** Blocked
+- **Status:** In Progress
+- **Progress:** Expanded unit harness in `tests/backend/test_txt2img.py` to validate base
+  sampling, modified-noise overrides, LoRA object lifetimes, and hires reload sequencing,
+  and introduced `scripts/capture_txt2img_baselines.py` (with sample config under
+  `codex/examples/`) to emit deterministic PNG + metadata bundles for regression checks.
 - **Dependencies:** Tight coupling between `modules/processing.py` and UI script hooks;
-  missing unit coverage to ensure parity for CFG, hires fix, refiner hand-off, and
-  LoRA interactions.
-- **Next Steps:** Extract deterministic fixtures for the txt2img sampler path, then
-  migrate noise preparation, script callbacks, and refiner scheduling into
-  `backend/diffusion_engine/txt2img.py` with regression tests around CFG + hires.
+  golden image fixtures still pending to guarantee parity for hires/refiner hand-offs
+  under production checkpoints.
+- **Next Steps:** Run the new baseline capture script on curated prompts (CFG + hires +
+  refiner) to populate `tests/backend/fixtures/txt2img/`, then begin migrating noise
+  preparation, script callbacks, and refiner scheduling into
+  `backend/diffusion_engine/txt2img.py` guarded by the expanded unit coverage.
 
 ### Implement shared scheduler registry bridging `modules/sd_samplers.py` and `backend/sampling/`
 - **Status:** Blocked

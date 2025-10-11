@@ -9,8 +9,8 @@ This roadmap aligns modernization work across the repository. Update it as miles
 
 ### Milestone 1.1 – Txt2Img runtime parity
 - [ ] **Discovery:** Capture baseline behaviour by instrumenting `modules/processing.py` with golden txt2img runs (CFG, hires fix, refiner, LoRA stack). Archive reference configs + seeds.
-- [ ] **Baseline capture script:** Add `scripts/capture_txt2img_baselines.py` to execute curated prompts, persist pngs/metadata under `tests/backend/fixtures/txt2img/`, and dump sampler traces for parity checks.
-- [ ] **Test harness:** Build deterministic fixtures and samplers in `tests/backend/test_txt2img.py`, covering base diffusion pass, cached first pass reuse, hires upscaling, and refiner scheduling.
+- [x] **Baseline capture script:** Landed `scripts/capture_txt2img_baselines.py` plus sample config under `codex/examples/`; generates PNG + metadata bundles in `tests/backend/fixtures/txt2img/` for regression comparisons.
+- [x] **Test harness:** Extend deterministic fixtures in `tests/backend/test_txt2img.py` to cover base sampling, modified-noise overrides, hires reload sequencing, and LoRA object hand-off; expand further as refiner scheduling migrates.
 - [ ] **Callback parity:** Mirror script/extension callbacks by adding adapter shims in `backend/diffusion_engine/txt2img.py` and asserting invocation order in unit tests.
 - [ ] **Implementation:** Port orchestration into `backend/diffusion_engine/txt2img.py`, wiring sampler selection, callbacks, and hires hand-off while satisfying collected fixtures.
 - [ ] **Integration:** Flip `modules/processing.py` to call the backend runtime behind a feature flag, run regression suite + manual parity verification, then remove the legacy path once stable.

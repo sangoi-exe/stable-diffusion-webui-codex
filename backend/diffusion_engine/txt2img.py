@@ -177,7 +177,12 @@ class Txt2ImgRuntime:
             image_conditioning=self.processing.txt2img_image_conditioning(noise),
         )
 
+        shared_state = getattr(shared, "state", None)
+        if shared_state is not None:
+            shared_state.current_latent = samples
+
         del noise
+        devices.torch_gc()
         return samples
 
     def _maybe_decode_for_hr(self, samples):

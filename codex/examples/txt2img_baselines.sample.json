@@ -1,0 +1,41 @@
+{
+  "scenarios": [
+    {
+      "name": "cfg_baseline",
+      "prompt": "A detailed bronze statue of a fox in a misty forest with volumetric morning light",
+      "negative_prompt": "",
+      "seed": 123456,
+      "sampler_name": "Euler",
+      "steps": 20,
+      "cfg_scale": 7.0,
+      "width": 512,
+      "height": 512,
+      "batch_size": 1,
+      "n_iter": 1,
+      "override_settings": {}
+    },
+    {
+      "name": "hires_refiner_smoke",
+      "prompt": "Futuristic skyline at dawn, cinematic aerial photograph, warm haze, ultra sharp",
+      "negative_prompt": "low quality, blurry, washed out",
+      "seed": 987654,
+      "sampler_name": "DPM++ 2M Karras",
+      "steps": 28,
+      "cfg_scale": 6.5,
+      "distilled_cfg_scale": 1.5,
+      "width": 704,
+      "height": 448,
+      "enable_hr": true,
+      "denoising_strength": 0.35,
+      "hires": {
+        "hr_scale": 1.4,
+        "hr_upscaler": "Latent (antialiased)",
+        "hr_second_pass_steps": 18,
+        "hr_sampler_name": "Euler",
+        "hr_cfg": 7.0,
+        "hr_distilled_cfg": 3.0
+      },
+      "override_settings": {}
+    }
+  ]
+}

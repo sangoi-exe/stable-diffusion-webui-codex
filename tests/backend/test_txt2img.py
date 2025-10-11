@@ -43,7 +43,7 @@ sys.modules.setdefault("modules.sd_samplers_common", sd_samplers_common_module)
 
 shared_module = types.ModuleType("modules.shared")
 shared_module.opts = types.SimpleNamespace(sd_vae_encode_method="Full")
-shared_module.shared = types.SimpleNamespace(device=torch.device("cpu"))
+shared_module.shared = types.SimpleNamespace(device=torch.device("cpu"), state=None)
 sys.modules.setdefault("modules.shared", shared_module)
 
 modules_forge_module = types.ModuleType("modules_forge")
@@ -236,6 +236,7 @@ class DummyProcessing:
         self.sd_model = types.SimpleNamespace(
             forge_objects_after_applying_lora=DummyForgeObjects(),
             forge_objects=None,
+            use_distilled_cfg_scale=False,
         )
         self.rng = DummyRNG(torch.zeros((1, 1, 1, 1)))
         self.modified_noise = None
@@ -245,6 +246,9 @@ class DummyProcessing:
         self.latent_scale_mode = None
         self.txt2img_image_conditioning_calls = []
         self.firstpass_image = None
+        self.hr_additional_modules = None
+        self.hr_checkpoint_name = "Use same checkpoint"
+        self.hr_distilled_cfg = 0.0
 
     def get_token_merging_ratio(self):
         return 0.0
@@ -281,6 +285,12 @@ def test_generate_without_hr_runs_sampler(monkeypatch):
     sampler = DummySampler(torch.ones((1, 1, 1, 1)))
 
     monkeypatch.setattr(txt2img.sd_samplers, "create_sampler", lambda *_, **__: sampler)
+    merge_calls = []
+    monkeypatch.setattr(
+        txt2img,
+        "apply_token_merging",
+        lambda model, ratio: merge_calls.append((model, ratio)),
+    )
 
     runtime = _runtime(processing=processing)
     result = runtime.generate()
@@ -292,6 +302,8 @@ def test_generate_without_hr_runs_sampler(monkeypatch):
     assert processing.scripts.calls, "scripts.process_before_every_sampling should be called"
     called_noise = processing.scripts.calls[0][1]["noise"]
     assert torch.equal(called_noise, processing.txt2img_image_conditioning_calls[0])
+    assert processing.sd_model.forge_objects_after_applying_lora.copies == 1
+    assert merge_calls == [(processing.sd_model, 0.0)]
 
 
 def test_generate_uses_first_pass_artifacts(monkeypatch):
@@ -366,3 +378,129 @@ def test_generate_decodes_for_hr_when_needed(monkeypatch):
     assert result == "decoded-hr"
     assert reload_calls == [processing]
     assert sampler.calls, "sampler.sample should run to produce the base latents"
+
+
+def test_generate_prefers_modified_noise(monkeypatch):
+    processing = DummyProcessing()
+
+    class RecordingSampler(DummySampler):
+        def __init__(self, result):
+            super().__init__(result)
+            self.used_noise = None
+
+        def sample(self, processing_arg, noise, *args, **kwargs):
+            self.used_noise = noise
+            return super().sample(processing_arg, noise, *args, **kwargs)
+
+    sampler = RecordingSampler(torch.ones((1, 1, 1, 1)))
+    monkeypatch.setattr(txt2img.sd_samplers, "create_sampler", lambda *_, **__: sampler)
+
+    expected_noise = torch.full((1, 1, 1, 1), 7.0)
+    processing.modified_noise = expected_noise
+
+    runtime = _runtime(processing=processing)
+    result = runtime.generate()
+
+    assert torch.equal(result, sampler.result)
+    assert sampler.used_noise is expected_noise
+    assert processing.modified_noise is None
+    assert processing.txt2img_image_conditioning_calls[-1] is expected_noise
+
+
+def test_generate_handles_missing_scripts(monkeypatch):
+    processing = DummyProcessing()
+    processing.scripts = None
+
+    sampler_result = torch.ones((1, 1, 1, 1))
+    monkeypatch.setattr(
+        txt2img.sd_samplers,
+        "create_sampler",
+        lambda *_, **__: DummySampler(sampler_result),
+    )
+
+    runtime = _runtime(processing=processing)
+    result = runtime.generate()
+
+    assert torch.equal(result, sampler_result)
+
+
+def test_reload_for_hires_switches_and_restores(monkeypatch):
+    processing = DummyProcessing()
+    processing.hr_additional_modules = ["module-new"]
+    processing.hr_checkpoint_name = "checkpoint-new"
+    processing.enable_hr = True
+    processing.sd_model.use_distilled_cfg_scale = True
+    processing.hr_distilled_cfg = 3.5
+
+    modules_before = ["module-base"]
+    checkpoint_before = "checkpoint-base"
+
+    monkeypatch.setattr(
+        txt2img.opts, "forge_additional_modules", list(modules_before), raising=False
+    )
+    monkeypatch.setattr(
+        txt2img.opts, "sd_model_checkpoint", checkpoint_before, raising=False
+    )
+
+    modules_calls = []
+    checkpoint_calls = []
+    refresh_calls = []
+    reload_calls = []
+
+    def modules_change(values, save=True, refresh=True):
+        modules_calls.append((tuple(values), save, refresh))
+        txt2img.opts.forge_additional_modules = list(values)
+        return values != modules_before
+
+    def checkpoint_change(name, save=True, refresh=True):
+        checkpoint_calls.append((name, save, refresh))
+        changed = name != txt2img.opts.sd_model_checkpoint
+        txt2img.opts.sd_model_checkpoint = name
+        return changed
+
+    monkeypatch.setattr(txt2img.main_entry, "modules_change", modules_change)
+    monkeypatch.setattr(txt2img.main_entry, "checkpoint_change", checkpoint_change)
+    monkeypatch.setattr(
+        txt2img.main_entry,
+        "refresh_model_loading_parameters",
+        lambda: refresh_calls.append(True),
+    )
+    monkeypatch.setattr(
+        txt2img.sd_models,
+        "forge_model_reload",
+        lambda: reload_calls.append(True),
+    )
+
+    txt2img._reload_for_hires(processing)
+
+    assert modules_calls[0][0] == tuple(processing.hr_additional_modules)
+    assert modules_calls[-1][0] == tuple(modules_before)
+    assert checkpoint_calls[0][0] == processing.hr_checkpoint_name
+    assert checkpoint_calls[-1][0] == checkpoint_before
+    assert reload_calls == [True]
+    assert len(refresh_calls) == 2
+    assert txt2img.opts.forge_additional_modules == modules_before
+    assert txt2img.opts.sd_model_checkpoint == checkpoint_before
+    assert processing.firstpass_use_distilled_cfg_scale is processing.sd_model.use_distilled_cfg_scale
+    assert (
+        processing.extra_generation_params["Hires Distilled CFG Scale"]
+        == processing.hr_distilled_cfg
+    )
+
+
+def test_generate_updates_shared_state_and_triggers_gc(monkeypatch):
+    processing = DummyProcessing()
+    sampler = DummySampler(torch.ones((1, 1, 1, 1)))
+    monkeypatch.setattr(txt2img.sd_samplers, "create_sampler", lambda *_, **__: sampler)
+
+    gc_calls = []
+    monkeypatch.setattr(txt2img.devices, "torch_gc", lambda: gc_calls.append(None))
+
+    shared_state = types.SimpleNamespace(current_latent=None)
+    monkeypatch.setattr(txt2img.shared, "state", shared_state, raising=False)
+
+    runtime = _runtime(processing=processing)
+    result = runtime.generate()
+
+    assert shared_state.current_latent is result
+    assert gc_calls, "devices.torch_gc should be invoked after sampling"
