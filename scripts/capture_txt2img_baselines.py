@@ -18,10 +18,22 @@ if str(REPO_ROOT) not in sys.path:
 
 MODULE_FILE_KEY = Path(__file__).name
 MODULE_STEM_KEY = Path(__file__).stem
-module_obj = sys.modules.get(__name__)
-if module_obj is not None:
-    sys.modules.setdefault(MODULE_FILE_KEY, module_obj)
-    sys.modules.setdefault(MODULE_STEM_KEY, module_obj)
+
+try:
+    _MODULE_OBJECT = sys.modules[__name__]
+except KeyError:
+    import types
+
+    _MODULE_OBJECT = types.ModuleType(__name__)
+    sys.modules[__name__] = _MODULE_OBJECT
+
+for alias in {
+    MODULE_FILE_KEY,
+    MODULE_STEM_KEY,
+    f"scripts.{MODULE_FILE_KEY}",
+    f"scripts.{MODULE_STEM_KEY}",
+}:
+    sys.modules.setdefault(alias, _MODULE_OBJECT)
 
 # Ensure Stable Diffusion command-line parser tolerates script-specific flags.
 os.environ.setdefault("IGNORE_CMD_ARGS_ERRORS", "1")
