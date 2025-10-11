@@ -13,7 +13,8 @@ from modules.sd_samplers_common import (
     decode_first_stage,
     images_tensor_to_samples,
 )
-from modules.shared import opts, shared
+from modules.shared import opts
+from modules import shared
 from modules_forge import main_entry
 
 
