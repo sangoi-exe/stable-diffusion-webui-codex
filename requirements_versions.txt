@@ -9,18 +9,18 @@ clean-fid==0.1.35
 diskcache==5.6.3
 einops==0.8.1
 facexlib==0.3.0
-fastapi==0.118.3
-gradio==5.49.1
-httpcore==1.0.9
+fastapi==0.118.3  # pinned: bumping often causes resolver conflicts
+gradio==5.49.1    # pinned: bumping often causes resolver conflicts
+httpcore==1.0.9   # pinned: bumping often causes resolver conflicts
 inflection==0.5.1
 jsonmerge==1.9.2
 kornia==0.8.1
 lark==1.3.0
 numpy==2.3.3
 omegaconf==2.3.0
-open-clip-torch==3.2.0
+open-clip-torch==3.2.0  # pinned: bumping often causes resolver conflicts
 piexif==1.1.3
-protobuf==4.25.3
+protobuf==4.25.3  # pinned: bumping often causes resolver conflicts
 psutil==7.1.0
 pytorch_lightning==2.5.5
 resize-right==0.0.2
@@ -32,7 +32,7 @@ tomesd==0.1.3
 torchdiffeq==0.2.5
 torchsde==0.2.6
 transformers==4.57.0
-httpx==0.28.1
+httpx==0.28.1     # pinned: bumping often causes resolver conflicts
 pillow-avif-plugin==1.5.2
 diffusers==0.35.1
 gradio_rangeslider==0.0.8
@@ -40,7 +40,7 @@ gradio_imageslider==0.0.20
 loadimg==0.5.0
 tqdm==4.67.1
 peft==0.17.1
-pydantic==2.11.10
+pydantic==2.11.10 # pinned: bumping often causes resolver conflicts
 huggingface-hub==0.35.3
 joblib==1.5.2
-onnxruntime-gpu==1.23.0
+onnxruntime-gpu==1.23.0 # pinned: bumping often causes resolver conflicts

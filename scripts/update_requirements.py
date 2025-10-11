@@ -59,6 +59,8 @@ def update_pins(
     force: Dict[str, str],
     *,
     drop_excluded: bool = False,
+    annotate_excluded: bool = True,
+    excluded_comment: str = "pinned: bumping often causes resolver conflicts",
     max_workers: int = 16,
 ) -> str:
     other_lines, pins = parse_pins(base_text)
@@ -96,7 +98,10 @@ def update_pins(
             out_lines.append(f"{p.name}=={new_ver}")
         elif key in {x.lower() for x in exclude}:
             if not drop_excluded:
-                out_lines.append(p.raw)
+                if annotate_excluded:
+                    out_lines.append(f"{p.name}=={p.version}  # {excluded_comment}")
+                else:
+                    out_lines.append(p.raw)
             # else: skip writing this pin entirely
         else:
             latest = results.get(key)
@@ -122,13 +127,33 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--exclude",
         action="append",
-        default=["torch", "torchvision", "torchaudio"],
+        default=[
+            # Locally compiled or CUDA-coupled
+            "torch",
+            "torchvision",
+            "torchaudio",
+            # Frequent conflict cluster
+            "fastapi",
+            "gradio",
+            "pydantic",
+            "protobuf",
+            "httpx",
+            "httpcore",
+            "open-clip-torch",
+            "onnxruntime-gpu",
+        ],
         help="Package(s) to keep as-is (may repeat)",
     )
     ap.add_argument(
         "--drop-excluded",
         action="store_true",
         help="Remove excluded packages from the output instead of preserving their current pins.",
+    )
+    ap.add_argument(
+        "--no-annotate-excluded",
+        dest="annotate_excluded",
+        action="store_false",
+        help="Do not append a conflict warning comment to excluded pins.",
     )
     ap.add_argument(
         "--force",
@@ -145,6 +170,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         exclude=args.exclude,
         force=forced,
         drop_excluded=args.drop_excluded,
+        annotate_excluded=args.annotate_excluded,
     )
 
     if args.write:
