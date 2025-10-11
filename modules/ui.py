@@ -1117,9 +1117,10 @@ def setup_ui_api(app):
     # Back-compat static file shims for assets referenced as /file=path/to/asset or /file/path/to/asset
     @app.get("/file={req_path:path}")
     def _serve_legacy_file(req_path: str):
-        # Normalize and restrict to repo root
-        safe_path = os.path.normpath(req_path).lstrip("/\\")
-        abs_path = os.path.abspath(os.path.join(script_path, safe_path))
+        # Normalize and restrict to repo root. Handle absolute Windows paths too.
+        safe_path = os.path.normpath(req_path)
+        is_abs = os.path.isabs(safe_path) or (len(safe_path) > 1 and safe_path[1] == ':')
+        abs_path = os.path.abspath(safe_path) if is_abs else os.path.abspath(os.path.join(script_path, safe_path.lstrip("/\\")))
         if not abs_path.startswith(os.path.abspath(script_path)):
             raise HTTPException(status_code=404)
         if os.path.isfile(abs_path):
@@ -1128,8 +1129,9 @@ def setup_ui_api(app):
 
     @app.get("/file/{req_path:path}")
     def _serve_legacy_file2(req_path: str):
-        safe_path = os.path.normpath(req_path).lstrip("/\\")
-        abs_path = os.path.abspath(os.path.join(script_path, safe_path))
+        safe_path = os.path.normpath(req_path)
+        is_abs = os.path.isabs(safe_path) or (len(safe_path) > 1 and safe_path[1] == ':')
+        abs_path = os.path.abspath(safe_path) if is_abs else os.path.abspath(os.path.join(script_path, safe_path.lstrip("/\\")))
         if not abs_path.startswith(os.path.abspath(script_path)):
             raise HTTPException(status_code=404)
         if os.path.isfile(abs_path):
