@@ -30,10 +30,11 @@
   if (typeof window.executeCallbacks === 'function') {
     const __origExec = window.executeCallbacks;
     window.executeCallbacks = function(callbacks){
+      const args = Array.prototype.slice.call(arguments, 1);
       try {
         if (!Array.isArray(callbacks)) return __origExec.apply(this, arguments);
         for (const cb of callbacks) {
-          try { typeof cb === 'function' && cb(); }
+          try { typeof cb === 'function' && cb.apply(this, args); }
           catch(e){
             const key = '__forgeCompat_exec';
             window[key] = (window[key]||0)+1;
