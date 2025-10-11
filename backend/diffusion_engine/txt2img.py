@@ -2,10 +2,17 @@ from __future__ import annotations
 
 from typing import Sequence
 
+import logging
+
 import numpy as np
 import torch
 
 from modules import devices, rng, sd_samplers, scripts, shared, sd_models, extra_networks
+
+try:  # optional – only present when LoRA extension is available
+    from extensions_builtin.sd_forge_lora import networks as lora_networks
+except Exception:  # pragma: no cover - optional dependency
+    lora_networks = None
 from modules.sd_models import apply_token_merging, SkipWritingToConfig
 from modules.sd_samplers_common import (
     approximation_indexes,
@@ -285,6 +292,11 @@ class Txt2ImgRuntime:
         bridge = getattr(extra_networks, "forge_registry_bridge", None)
         if bridge is not None:
             bridge.ensure_lora_registry()
+        elif lora_networks is not None:
+            try:
+                lora_networks.list_available_networks()
+            except Exception:
+                logging.getLogger(__name__).debug("LoRA network listing failed", exc_info=True)
         if hasattr(self.processing, "parse_extra_network_prompts"):
             self.processing.parse_extra_network_prompts()
         data = getattr(self.processing, "extra_network_data", None)
