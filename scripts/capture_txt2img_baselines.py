@@ -17,6 +17,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+ORIGINAL_MODULE_NAME = __name__
+MODULE_STEM = Path(__file__).stem
+if ORIGINAL_MODULE_NAME.endswith(".py"):
+    globals()["__name__"] = MODULE_STEM
+    sys.modules.setdefault(MODULE_STEM, sys.modules[ORIGINAL_MODULE_NAME])
+
 # Ensure Stable Diffusion command-line parser tolerates script-specific flags.
 os.environ.setdefault("IGNORE_CMD_ARGS_ERRORS", "1")
 
@@ -129,6 +135,7 @@ class Scenario:
     override_settings: Dict[str, Any]
     styles: List[str]
     script_args: List[Any]
+    script_index: int
     tags: List[str]
     firstpass_image: Optional[str]
     raw: Dict[str, Any] = field(repr=False)
@@ -148,6 +155,8 @@ class Scenario:
         if not isinstance(script_args, list):
             raise ValueError("script_args must be a list when provided.")
 
+        script_index = _as_int(payload.get("script_index", 0), field_name="script_index")
+        
         styles = payload.get("styles") or []
         if not isinstance(styles, list):
             raise ValueError("styles must be a list when provided.")
@@ -185,6 +194,7 @@ class Scenario:
             override_settings=dict(override_settings),
             styles=list(styles),
             script_args=list(script_args),
+            script_index=script_index,
             tags=list(tags),
             firstpass_image=firstpass_image,
             raw=dict(payload),
@@ -361,7 +371,9 @@ def execute_scenario(scenario: Scenario, output_dir: Path) -> Dict[str, Any]:
 
     with closing(StableDiffusionProcessingTxt2Img(**kwargs)) as processing:
         processing.scripts = scripts.scripts_txt2img
-        processing.script_args = scenario.script_args
+        combined_script_args = [scenario.script_index]
+        combined_script_args.extend(scenario.script_args)
+        processing.script_args = combined_script_args
         processing.user = "baseline-capture"
         _assign_firstpass_image(processing, scenario)
 
