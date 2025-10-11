@@ -2,7 +2,7 @@ import json
 
 import gradio as gr
 
-from modules import scripts, ui, errors
+from modules import scripts, ui, errors, ui_common
 from modules.infotext_utils import PasteField
 from modules.shared import cmd_opts
 from modules.ui_components import ToolButton
@@ -63,8 +63,8 @@ class ScriptSeed(scripts.ScriptBuiltinUI):
             PasteField(seed_resize_from_h, "Seed resize from-2", api="seed_resize_from_w"),
         ]
 
-        self.on_after_component(lambda x: connect_reuse_seed(self.seed, reuse_seed, x.component, False), elem_id=f'generation_info_{self.tabname}')
-        self.on_after_component(lambda x: connect_reuse_seed(subseed, reuse_subseed, x.component, True), elem_id=f'generation_info_{self.tabname}')
+        self.on_after_component(lambda x: connect_reuse_seed(self.seed, reuse_seed, x.component, False, self.tabname), elem_id=f'generation_info_{self.tabname}')
+        self.on_after_component(lambda x: connect_reuse_seed(subseed, reuse_subseed, x.component, True, self.tabname), elem_id=f'generation_info_{self.tabname}')
 
         return self.seed, seed_checkbox, subseed, subseed_strength, seed_resize_from_w, seed_resize_from_h
 
@@ -80,7 +80,7 @@ class ScriptSeed(scripts.ScriptBuiltinUI):
             p.seed_resize_from_h = seed_resize_from_h
 
 
-def connect_reuse_seed(seed: gr.Number, reuse_seed: gr.Button, generation_info: gr.Textbox, is_subseed):
+def connect_reuse_seed(seed: gr.Number, reuse_seed: gr.Button, generation_info: gr.Textbox, is_subseed, tabname: str):
     """ Connects a 'reuse (sub)seed' button's click event so that it copies last used
         (sub)seed value from generation info the to the seed field. If copying subseed and subseed strength
         was 0, i.e. no variation seed was used, it copies the normal seed value instead."""
@@ -98,10 +98,19 @@ def connect_reuse_seed(seed: gr.Number, reuse_seed: gr.Button, generation_info: 
 
         return [res, gr.update()]
 
-    reuse_seed.click(
-        fn=copy_seed,
-        _js="(x, y) => [x, selected_gallery_index()]",
-        show_progress=False,
-        inputs=[generation_info, seed],
-        outputs=[seed, seed]
-    )
+    gallery_index_state = ui_common.get_gallery_index_state(tabname)
+    if gallery_index_state is None:
+        zero_index = gr.State(value=0)
+        reuse_seed.click(
+            fn=copy_seed,
+            show_progress=False,
+            inputs=[generation_info, zero_index],
+            outputs=[seed, seed]
+        )
+    else:
+        reuse_seed.click(
+            fn=copy_seed,
+            show_progress=False,
+            inputs=[generation_info, gallery_index_state],
+            outputs=[seed, seed],
+        )

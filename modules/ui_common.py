@@ -15,6 +15,15 @@ import modules.infotext_utils as parameters_copypaste
 folder_symbol = '\U0001f4c2'  # 📂
 refresh_symbol = '\U0001f504'  # 🔄
 
+# Registry to map tabname -> gallery index state component
+_GALLERY_INDEX_STATES = {}
+
+def register_gallery_index(tabname: str, state_comp: gr.State):
+    _GALLERY_INDEX_STATES[tabname] = state_comp
+
+def get_gallery_index_state(tabname: str):
+    return _GALLERY_INDEX_STATES.get(tabname)
+
 
 def update_generation_info(generation_info, html_info, img_index):
     try:
@@ -193,6 +202,9 @@ def create_output_panel(tabname, outdir, toprow=None):
 
                 # Track selected thumbnail index without JS
                 res.gallery.select(fn=_on_gallery_select, inputs=[], outputs=[res.gallery_index])
+
+                # Expose this state for other modules (e.g., seed reuse) to consume
+                register_gallery_index(tabname, res.gallery_index)
 
             with gr.Row(elem_id=f"image_buttons_{tabname}", elem_classes="image-buttons"):
                 open_folder_button = ToolButton(folder_symbol, elem_id=f'{tabname}_open_folder', visible=not shared.cmd_opts.hide_ui_dir_config, tooltip="Open images output directory.")
