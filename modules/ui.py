@@ -974,6 +974,14 @@ def create_ui():
         shared.tab_names.append(label)
 
     with gr.Blocks(theme=shared.gradio_theme, analytics_enabled=False, title="Stable Diffusion", head=canvas_head) as demo:
+        # Ensure compat layer is loaded early for Gradio 5
+        try:
+            from modules.paths import script_path
+            compat_path = os.path.join(script_path, 'javascript', 'compat_gradio5.js')
+            if os.path.isfile(compat_path):
+                gr.HTML(f'<script src="file={compat_path}?{os.path.getmtime(compat_path)}"></script>', visible=False)
+        except Exception:
+            pass
         quicksettings_row = settings.add_quicksettings()
 
         # Defer JS-based tab switching; we'll attach Python-only tab updates after Tabs are defined
@@ -1062,7 +1070,7 @@ def setup_ui_api(app):
     from pydantic import BaseModel, Field
     import os
     from fastapi import HTTPException
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, JSONResponse
     from modules.paths import script_path
 
     class QuicksettingsHint(BaseModel):
@@ -1113,3 +1121,17 @@ def setup_ui_api(app):
         if os.path.isfile(abs_path):
             return FileResponse(abs_path)
         raise HTTPException(status_code=404)
+
+    @app.get("/manifest.json")
+    def _serve_manifest():
+        return JSONResponse(
+            {
+                "name": "Forge WebUI",
+                "short_name": "Forge",
+                "start_url": "/",
+                "display": "standalone",
+                "background_color": "#111111",
+                "theme_color": "#111111",
+                "icons": [],
+            }
+        )
