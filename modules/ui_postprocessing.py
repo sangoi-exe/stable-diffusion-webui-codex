@@ -57,6 +57,7 @@ def create_ui():
             output_panel.html_log,
         ],
         show_progress=False,
+        concurrency_limit=1,
     )
 
     parameters_copypaste.add_paste_fields("extras", extras_image, None)

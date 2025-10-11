@@ -465,6 +465,7 @@ def create_ui():
                 inputs=txt2img_inputs,
                 outputs=txt2img_outputs,
                 show_progress=False,
+                concurrency_limit=1,
             )
 
             toprow.prompt.submit(**txt2img_args)
@@ -483,6 +484,7 @@ def create_ui():
                 inputs=txt2img_upscale_inputs,
                 outputs=txt2img_outputs,
                 show_progress=False,
+                concurrency_limit=1,
             ).then(fn=select_gallery_image, js="selected_gallery_index", inputs=[dummy_component], outputs=[output_panel.gallery])
 
             res_switch_btn.click(lambda w, h: (h, w), inputs=[width, height], outputs=[width, height], show_progress=False)
@@ -826,6 +828,7 @@ def create_ui():
                     output_panel.html_log,
                 ],
                 show_progress=False,
+                concurrency_limit=1,
             )
 
             interrogate_args = dict(
