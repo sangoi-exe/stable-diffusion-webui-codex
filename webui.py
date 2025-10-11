@@ -85,8 +85,15 @@ def webui_worker():
         startup_timer.record("create ui")
 
         if not cmd_opts.no_gradio_queue:
-            # Gradio 5: use concurrency_limit (concurrency_count removed)
-            shared.demo.queue(concurrency_limit=64)
+            # Compatible queue enabling across Gradio 4.40 and 5.x
+            try:
+                shared.demo.queue(concurrency_limit=64)
+            except TypeError:
+                # Older Gradio: fallback to positional or no-arg
+                try:
+                    shared.demo.queue(64)
+                except TypeError:
+                    shared.demo.queue()
 
         gradio_auth_creds = list(initialize_util.get_gradio_auth_creds()) or None
 
