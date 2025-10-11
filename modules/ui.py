@@ -563,6 +563,9 @@ def create_ui():
                 copy_image_buttons = []
                 copy_image_destinations = {}
 
+                # Collect chained events to attach Python-only tab switches later
+                copy_image_events = []
+
                 def add_copy_image_controls(tab_name, elem):
                     with gr.Row(variant="compact", elem_id=f"img2img_copy_to_{tab_name}"):
                         for title, name in zip(['to img2img', 'to sketch', 'to inpaint', 'to inpaint sketch'], ['img2img', 'sketch', 'inpaint', 'inpaint_sketch']):
@@ -581,7 +584,7 @@ def create_ui():
                         toprow.create_inline_toprow_prompts()
 
                     if category == "image":
-                        with gr.Tabs(elem_id="mode_img2img"):
+                        with gr.Tabs(elem_id="mode_img2img") as mode_img2img_tabs:
                             img2img_selected_tab = gr.Number(value=0, visible=False)
 
                             with gr.TabItem('img2img', id='img2img', elem_id="img2img_img2img_tab") as tab_img2img:
@@ -639,17 +642,13 @@ def create_ui():
                             return background, None
 
                         for button, name, elem in copy_image_buttons:
-                            button.click(
+                            evt = button.click(
                                 fn=copyCanvas_img2img,
                                 inputs=[elem.background, elem.foreground, img2img_selected_tab],
                                 outputs=[copy_image_destinations[name].background, copy_image_destinations[name].foreground],
                             )
-                            button.click(
-                                fn=None,
-                                _js=f"switch_to_{name.replace(' ', '_')}",
-                                inputs=[],
-                                outputs=[],
-                            )
+                            # Defer tab switching until top-level Tabs exist; chain later for deterministic order
+                            copy_image_events.append((evt, name))
 
                         with FormRow():
                             resize_mode = gr.Radio(label="Resize mode", elem_id="resize_mode", choices=["Just resize", "Crop and resize", "Resize and fill", "Just resize (latent upscale)"], type="index", value="Just resize")
@@ -998,6 +997,24 @@ def create_ui():
 
         # Attach Python-only tab switching for all "Send to …" buttons
         parameters_copypaste.connect_tab_switches(tabs)
+
+        # Attach Python-only tab switching for img2img copy-image buttons
+        def _img2img_switch_updates(target_name: str):
+            # Always switch top-level to img2img
+            top = gr.Tabs.update(selected="img2img")
+            # Map button target to inner img2img tab ids
+            inner_map = {
+                'img2img': 'img2img',
+                'sketch': 'img2img_sketch',
+                'inpaint': 'inpaint',
+                'inpaint_sketch': 'inpaint_sketch',
+            }
+            inner_id = inner_map.get(target_name, 'img2img')
+            inner = gr.Tabs.update(selected=inner_id)
+            return top, inner
+
+        for evt, target in copy_image_events:
+            evt.then(fn=lambda name=target: _img2img_switch_updates(name), inputs=[], outputs=[tabs, mode_img2img_tabs], show_progress=False, queue=False)
 
         def tab_changed(evt: gr.SelectData):
             no_quick_setting = getattr(shared.opts, "tabs_without_quick_settings_bar", [])
