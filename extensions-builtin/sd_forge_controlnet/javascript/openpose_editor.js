@@ -148,5 +148,7 @@
         });
     }
 
-    onUiUpdate(loadOpenposeEditor);
+    onUiUpdate(() => {
+        try { loadOpenposeEditor(); } catch (e) { /* wait for DOM */ }
+    });
 })();

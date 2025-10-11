@@ -67,7 +67,8 @@
                 this.tab = tab;
                 this.tabOpen = false; // Whether the tab is open.
                 this.accordion = accordion;
-                this.isImg2Img = tab.querySelector('.cnet-mask-upload').id.includes('img2img');
+                const maskUpload = tab.querySelector('.cnet-mask-upload');
+                this.isImg2Img = !!(maskUpload && maskUpload.id && maskUpload.id.includes('img2img'));
 
                 this.enabledAccordionCheckbox = tab.querySelector('.input-accordion-checkbox');
                 this.enabledCheckbox = tab.querySelector('.cnet-unit-enabled input');
@@ -83,11 +84,11 @@
                 this.tabs = tab.parentNode;
                 this.tabIndex = childIndex(tab);
 
-                // By default the InputAccordion checkbox is linked with the state
-                // of accordion's open/close state. To disable this link, we can
-                // simulate click to check the checkbox and uncheck it.
-                this.enabledAccordionCheckbox.click();
-                this.enabledAccordionCheckbox.click();
+                // Optional checkbox linking; only when present
+                if (this.enabledAccordionCheckbox) {
+                    this.enabledAccordionCheckbox.click();
+                    this.enabledAccordionCheckbox.click();
+                }
 
                 this.sync_enabled_checkbox();
                 this.attachEnabledButtonListener();
@@ -102,6 +103,7 @@
              * Sync the states of enabledCheckbox and enabledAccordionCheckbox.
              */
             sync_enabled_checkbox() {
+                if (!this.enabledCheckbox || !this.enabledAccordionCheckbox) return;
                 this.enabledCheckbox.addEventListener("change", () => {
                     if (this.enabledAccordionCheckbox.checked != this.enabledCheckbox.checked) {
                         this.enabledAccordionCheckbox.click();
@@ -276,6 +278,7 @@
             }
 
             attachControlTypeRadioListener() {
+                if (!this.controlTypeRadios) return;
                 for (const radio of this.controlTypeRadios) {
                     radio.addEventListener('change', () => {
                         this.updateActiveControlType();
@@ -285,14 +288,15 @@
 
             attachImageUploadListener() {
                 // Automatically check `enable` checkbox when image is uploaded.
-                this.inputImage.addEventListener('change', (event) => {
+                if (this.inputImage) this.inputImage.addEventListener('change', (event) => {
                     if (!event.target.files) return;
                     if (!this.enabledCheckbox.checked)
                         this.enabledCheckbox.click();
                 });
 
                 // Automatically check `enable` checkbox when JSON pose file is uploaded.
-                this.tab.querySelector('.cnet-upload-pose input').addEventListener('change', (event) => {
+                const poseInput = this.tab.querySelector('.cnet-upload-pose input');
+                if (poseInput) poseInput.addEventListener('change', (event) => {
                     if (!event.target.files) return;
                     if (!this.enabledCheckbox.checked)
                         this.enabledCheckbox.click();
@@ -314,6 +318,7 @@
                         this.runPreprocessorButton.setAttribute("disabled", true);
                         this.runPreprocessorButton.title = "No ControlNet input image available";
                     }
+                if (!this.inputImageContainer) return;
                 }).observe(this.inputImageContainer, {
                     childList: true,
                     subtree: true,
@@ -325,12 +330,12 @@
              * set states of ControlNetUnit.
              */
             attachA1111SendInfoObserver() {
-                const pasteButtons = gradioApp().querySelectorAll('#paste');
+                const pasteButtons = gradioApp().querySelectorAll('#paste') || [];
                 const pngButtons = gradioApp().querySelectorAll(
                     this.isImg2Img ?
                         '#img2img_tab, #inpaint_tab' :
                         '#txt2img_tab'
-                );
+                ) || [];
 
                 for (const button of [...pasteButtons, ...pngButtons]) {
                     button.addEventListener('click', () => {
@@ -365,7 +370,9 @@
                             }
                         }
                     }
-                }).observe(this.tab.querySelector('.label-wrap'), { attributes: true, attributeFilter: ['class'] });
+                const label = this.tab.querySelector('.label-wrap');
+                if (!label) return;
+                }).observe(label, { attributes: true, attributeFilter: ['class'] });
             }
 
             onAccordionOpen() {
@@ -379,8 +386,9 @@
 
         gradioApp().querySelectorAll('#controlnet').forEach(accordion => {
             if (cnetAllAccordions.has(accordion)) return;
-            const tabs = [...accordion.querySelectorAll('.input-accordion')]
-                .map(tab => new ControlNetUnitTab(tab, accordion));
+            const tabElems = accordion.querySelectorAll('.input-accordion');
+            if (!tabElems || tabElems.length === 0) return;
+            const tabs = [...tabElems].map(tab => new ControlNetUnitTab(tab, accordion));
 
             // On open of main extension accordion, if no unit is enabled,
             // open unit 0 for edit.
@@ -395,7 +403,7 @@
                     }
                 }
             });
-            observerAccordionOpen.observe(labelWrap, { attributes: true, attributeFilter: ['class'] });
+            if (labelWrap) observerAccordionOpen.observe(labelWrap, { attributes: true, attributeFilter: ['class'] });
 
             cnetAllAccordions.add(accordion);
         });

@@ -431,5 +431,7 @@
     });
   }
 
-  onUiUpdate(loadPhotopea);
+  onUiUpdate(() => {
+    try { loadPhotopea(); } catch (e) { /* ignore until UI ready */ }
+  });
 })();
