@@ -21,7 +21,7 @@ ORIGINAL_MODULE_NAME = __name__
 MODULE_STEM = Path(__file__).stem
 if ORIGINAL_MODULE_NAME.endswith(".py"):
     globals()["__name__"] = MODULE_STEM
-    sys.modules.setdefault(MODULE_STEM, sys.modules[ORIGINAL_MODULE_NAME])
+    sys.modules.setdefault(MODULE_STEM, sys)
 
 # Ensure Stable Diffusion command-line parser tolerates script-specific flags.
 os.environ.setdefault("IGNORE_CMD_ARGS_ERRORS", "1")
