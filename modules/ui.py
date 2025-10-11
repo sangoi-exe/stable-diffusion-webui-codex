@@ -1056,6 +1056,10 @@ checkpoint: <a id="sd_checkpoint_hash">N/A</a>
 
 def setup_ui_api(app):
     from pydantic import BaseModel, Field
+    import os
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+    from modules.paths import script_path
 
     class QuicksettingsHint(BaseModel):
         name: str = Field(title="Name of the quicksettings field")
@@ -1083,3 +1087,15 @@ def setup_ui_api(app):
 
     import fastapi.staticfiles
     app.mount("/webui-assets", fastapi.staticfiles.StaticFiles(directory=launch_utils.repo_dir('stable-diffusion-webui-assets')), name="webui-assets")
+
+    # Back-compat static file shim for assets referenced as /file=path/to/asset
+    @app.get("/file={req_path:path}")
+    def _serve_legacy_file(req_path: str):
+        # Normalize and restrict to repo root
+        safe_path = os.path.normpath(req_path).lstrip("/\\")
+        abs_path = os.path.abspath(os.path.join(script_path, safe_path))
+        if not abs_path.startswith(os.path.abspath(script_path)):
+            raise HTTPException(status_code=404)
+        if os.path.isfile(abs_path):
+            return FileResponse(abs_path)
+        raise HTTPException(status_code=404)
