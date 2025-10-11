@@ -287,8 +287,9 @@ class Txt2ImgRuntime:
             bridge.ensure_lora_registry()
         if hasattr(self.processing, "parse_extra_network_prompts"):
             self.processing.parse_extra_network_prompts()
-        if hasattr(self.processing, "extra_network_data"):
-            extra_networks.activate(self.processing, self.processing.extra_network_data)
+        data = getattr(self.processing, "extra_network_data", None)
+        if data:
+            extra_networks.activate(self.processing, data)
 
     def _set_shared_job(self):
         if getattr(self.processing, "n_iter", 1) <= 1:
