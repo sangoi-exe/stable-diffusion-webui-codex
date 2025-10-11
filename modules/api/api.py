@@ -31,6 +31,7 @@ from contextlib import closing
 from modules.progress import create_task_id, current_task
 from backend.services.image_service import ImageService
 from backend.services.media_service import MediaService
+from backend.services.options_service import OptionsService
 
 def script_name_to_index(name, scripts):
     try:
@@ -134,6 +135,7 @@ class Api:
         self.queue_lock = queue_lock
         self.image_service = ImageService()
         self.media = MediaService()
+        self.options = OptionsService()
         #api_middleware(self.app)  # FIXME: (legacy) this will have to be fixed
         self.add_api_route("/sdapi/v1/txt2img", self.text2imgapi, methods=["POST"], response_model=models.TextToImageResponse)
         self.add_api_route("/sdapi/v1/img2img", self.img2imgapi, methods=["POST"], response_model=models.ImageToImageResponse)
@@ -591,15 +593,13 @@ class Api:
         shared.state.skip()
 
     def get_config(self):
-        from modules.sysinfo import get_config
-        return get_config()
+        return self.options.get_config()
 
     def set_config(self, req: dict[str, Any]):
-        from modules.sysinfo import set_config
-        set_config(req)
+        self.options.set_config(req)
 
     def get_cmd_flags(self):
-        return vars(shared.cmd_opts)
+        return self.options.get_cmd_flags()
 
     def get_samplers(self):
         return [{"name": sampler[0], "aliases":sampler[2], "options":sampler[3]} for sampler in sd_samplers.all_samplers]

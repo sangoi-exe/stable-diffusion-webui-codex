@@ -12,7 +12,9 @@ Session Log
 
 2025-10-11 – Backend refactor (API)
 - Unified duplicated txt2img/img2img execution in `modules/api/api.py` into `_execute_generation()` helper. Behaviour and responses unchanged; centralizes queue/run/encode flow.
- - Introduced `backend/services/image_service.py` and moved execution path there. API now delegates to the service (keeps lock and HTTP specifics in API, generation in service).
+- Introduced `backend/services/image_service.py` and moved execution path there. API now delegates to the service (keeps lock and HTTP specifics in API, generation in service).
+- Moved image encode/decode into `backend/services/media_service.py` and wired all API call sites.
+- Added `backend/services/options_service.py`; API routes for options/cmd-flags delegate to it.
 
 2025-10-11 – Frontend cleanup
 - Removed `javascript/compat_gradio5.js` which wrapped `onUiUpdate/onUiLoaded` and `executeCallbacks` to suppress errors.
