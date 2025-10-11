@@ -21,6 +21,7 @@ Scope and Milestones
 3) Dependencies and Tooling
    - Done: `scripts/update_requirements.py` to bump pins via PyPI while excluding PyTorch family; `--drop-excluded` for locally compiled torch.
    - Next: routine pin refresh CI step (documented command), narrow any remaining backtracking hot‑spots.
+   - TODO: add a manual installer helper that installs each pinned package with `pip install --no-deps` in a stable order (reads `requirements_versions.txt`, supports `--subset` filters, prints per‑package results, and never touches torch/vision/audio). Document that resolver is bypassed by design; users must keep pins coherent.
 
 4) Testing Strategy
    - Baselines: `scripts/capture_txt2img_baselines.py` for deterministic PNG+metadata capture (manual GPU host).
@@ -35,4 +36,3 @@ Exit Criteria
 - Backend runtime owns the full txt2img orchestration (including hires/refiner) with equivalent behaviour under representative prompts/baselines.
 - Logs are readable by default (Rich) and controllable via env.
 - Requirements can be refreshed without breaking torch pins.
-

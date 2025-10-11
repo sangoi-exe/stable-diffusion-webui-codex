@@ -21,9 +21,9 @@ Refactor Status – 2025-10-11
 3) Dependencies
 - Status: Adopted
 - Completed: requirements updater script; drop‑excluded torch family; resolved open‑clip/protobuf conflict via pin bump
+ - Planned: manual no‑deps installer (per‑package `pip install --no-deps` runner) to bypass resolver entirely on Windows/RTX host; ships with progress + summary.
 
 Next Steps
 - Harden LoRA registry bridging and remove temporary diagnostics
 - Port hires/refiner path; add targeted tests or baseline runs to lock behaviour
 - Sweep modules for logger usage and update docs
-
