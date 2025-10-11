@@ -70,7 +70,7 @@ def sanitize_options(opts):
     clamp_int('SD_upscale_override_upscale', 64, 2048)
     clamp_int('Hires_upscale_minimal', 64, 2048)
 
-    clamp_int('img2img_background_color', 0, 0xFFFFFF)
+    clamp_hex('img2img_background_color')
     clamp_float('realesrgan_visibility', 0.0, 1.0)
 
     clamp_int('img2img_width', 64, 2048)
@@ -97,3 +97,21 @@ def _clamp_option(opts, key, lo, hi, cast=int):
     if hi is not None:
         val = min(hi, val)
     opts.data[key] = val
+
+
+def clamp_hex(key):
+    if key not in shared.opts.data:
+        return
+
+    def to_int(value):
+        if isinstance(value, str):
+            return int(value.lstrip('#'), 16)
+        return int(value)
+
+    try:
+        val = to_int(shared.opts.data[key])
+    except Exception:
+        val = to_int(shared.opts.data_labels[key].default)
+
+    val = max(0, min(0xFFFFFF, val))
+    shared.opts.data[key] = f"#{val:06x}"
