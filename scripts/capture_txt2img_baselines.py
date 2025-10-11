@@ -481,21 +481,26 @@ def maybe_overwrite_directory(path: Path, *, overwrite: bool) -> None:
 
 
 def configure_logging(log_level: str) -> None:
+    level = getattr(logging, log_level, logging.INFO)
     logging.basicConfig(
-        level=getattr(logging, log_level),
+        level=level,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
+        force=True,
     )
+    LOGGER.setLevel(level)
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
     configure_logging(args.log_level)
 
-    LOGGER.debug("Arguments: %s", args)
+    LOGGER.info("Arguments: %s", args)
 
     scenarios = load_configuration(args.config)
     scenarios = filter_scenarios(scenarios, args.scenario_filters)
+
+    LOGGER.info("Loaded %d scenario(s) from %s", len(scenarios), args.config)
 
     if args.dry_run:
         LOGGER.info("Dry run requested. The following scenarios would be executed:")
@@ -512,12 +517,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             )
         return 0
 
+    LOGGER.info("Ensuring runtime is initialised")
     ensure_runtime_initialized()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     failures: List[str] = []
     for scenario in tqdm(scenarios, desc="txt2img baselines", unit="scenario"):
+        LOGGER.info(
+            "Executing scenario '%s' -> %s",
+            scenario.name,
+            args.output_dir / scenario.slug,
+        )
         scenario_dir = args.output_dir / scenario.slug
         try:
             maybe_overwrite_directory(scenario_dir, overwrite=args.overwrite)
