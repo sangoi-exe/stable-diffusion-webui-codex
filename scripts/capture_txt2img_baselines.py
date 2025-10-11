@@ -12,6 +12,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 # Ensure Stable Diffusion command-line parser tolerates script-specific flags.
 os.environ.setdefault("IGNORE_CMD_ARGS_ERRORS", "1")
 
