@@ -5,6 +5,8 @@ Session Log
 - Align expected Gradio to 5.49.1 in `modules/errors.py`.
 - Switch global queue to `concurrency_limit=64` in `webui.py` per Gradio 5 (replaces positional arg).
 - Cross-checked guide “Guia de Migração do Gradio 4.40 para 5.md”; no `every=` usage found; no listener-level limits added yet (defaults inherit from Blocks.queue).
+ - Replaced legacy JS tab switching for img2img copy buttons with Python-only `gr.Tabs.update` chain; capture inner `mode_img2img` Tabs for programmatic selection.
+ - Added optional SSR gating via `GRADIO_SSR_MODE` env; defaults off.
 
 2025-10-11 – Frontend cleanup
 - Removed `javascript/compat_gradio5.js` which wrapped `onUiUpdate/onUiLoaded` and `executeCallbacks` to suppress errors.
