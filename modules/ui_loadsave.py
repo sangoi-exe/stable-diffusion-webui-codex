@@ -60,6 +60,7 @@ class UiLoadsave:
             elif condition and not condition(saved_value):
                 pass
             else:
+                # Normalize types per component quirks
                 if isinstance(obj, gr.Textbox) and field == 'value':  # due to an undesirable behavior of gr.Textbox, if you give it an int value instead of str, everything dies
                     saved_value = str(saved_value)
                 elif isinstance(obj, gr.Number) and field == 'value':
@@ -67,6 +68,24 @@ class UiLoadsave:
                         saved_value = float(saved_value)
                     except ValueError:
                         return
+
+                # Clamp sliders to their current min/max before assignment (Gradio 5 enforces bounds strictly)
+                if isinstance(obj, gr.Slider) and field == 'value':
+                    try:
+                        mn = getattr(obj, 'minimum', None)
+                        mx = getattr(obj, 'maximum', None)
+                        val = float(saved_value)
+                        if mn is not None:
+                            val = max(float(mn), val)
+                        if mx is not None:
+                            val = min(float(mx), val)
+                        # Preserve integer sliders if current value is int
+                        if isinstance(getattr(obj, 'value', None), int):
+                            saved_value = int(val)
+                        else:
+                            saved_value = val
+                    except Exception:
+                        pass
 
                 setattr(obj, field, saved_value)
                 if init_field is not None:
@@ -79,10 +98,11 @@ class UiLoadsave:
             apply_field(x, 'visible')
 
         if type(x) == gr.Slider:
-            apply_field(x, 'value')
+            # Apply bounds first, then value (which will be clamped to bounds)
             apply_field(x, 'minimum')
             apply_field(x, 'maximum')
             apply_field(x, 'step')
+            apply_field(x, 'value')
 
         if type(x) == gr.Radio:
             apply_field(x, 'value', lambda val: val in radio_choices(x))

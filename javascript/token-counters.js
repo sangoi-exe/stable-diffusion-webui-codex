@@ -72,6 +72,9 @@ function setupTokenCounting(id, id_counter, id_button) {
 
 function toggleTokenCountingVisibility(id, id_counter, id_button) {
     var counter = gradioApp().getElementById(id_counter);
+    if (!counter) {
+        return;
+    }
 
     counter.style.display = opts.disable_token_counters ? "none" : "block";
     counter.classList.toggle("token-counter-visible", !opts.disable_token_counters);
@@ -85,6 +88,10 @@ function runCodeForTokenCounters(fun) {
 }
 
 onUiLoaded(function() {
+    runCodeForTokenCounters(setupTokenCounting);
+});
+
+onUiUpdate(function() {
     runCodeForTokenCounters(setupTokenCounting);
 });
 

@@ -15,6 +15,81 @@ Key Differences vs 4.x
 - Queue uses `concurrency_limit` at listener level (not `concurrency_count`).
 - Optional SSR (Node ≥ 20) — keep off by default for now.
 
+Detailed API/Syntax Notes (5.49.x)
+----------------------------------
+
+Components
+
+- Update pattern: always return `gr.update(...)` for partial updates. Common keys:
+  - `value=...`, `visible=True|False`, `interactive=True|False`, `choices=[...]`, `minimum=...`, `maximum=...`, `label=...`.
+  - Sliders/Number: front‑end enforces `[minimum, maximum]` before Python runs. Clamp on the server side and never emit ambiguous updates for them.
+
+Events
+
+- Standard: `component.change(fn, inputs=[...], outputs=[...], queue=True|False, concurrency_limit=N)`
+- Buttons: `component.click(...)`
+- Tabs: `tabs.select(fn, inputs=[...], outputs=[...])` (fires when user changes tabs)
+
+Queue/Concurrency
+
+- Prefer `concurrency_limit` on each listener. If needed, a global default via `blocks.queue(concurrency_limit=N)`.
+
+State
+
+- Use `gr.State(value)` to hold internal UI state across events; pass as input and (optionally) return an updated state as output.
+
+Tabs: programmatic selection
+
+- Pattern 1 (direct): return only a Tabs update in the first hop.
+  ```python
+  def to_txt2img():
+      return gr.Tabs.update(selected="txt2img")
+
+  btn.click(to_txt2img, outputs=[tabs])
+  ```
+
+- Pattern 2 (chain): first hop switches tabs; subsequent UI updates in `.then(...)`.
+  ```python
+  btn.click(lambda: gr.Tabs.update(selected="img2img"), outputs=[tabs]) \
+     .then(update_fields, inputs=[...], outputs=[...])
+  ```
+
+Paste/Send‑to (safe sliders)
+
+- Clamp and avoid empty updates for sliders:
+  ```python
+  def _clamp(x, lo, hi, cast=int):
+      try: x = cast(float(x))
+      except Exception: return lo
+      return max(lo, min(hi, x))
+
+  def paste_from_pnginfo(params):
+      w = _clamp(params.get("Size-1", 512), 64, 2048)
+      h = _clamp(params.get("Size-2", 512), 64, 2048)
+      return gr.update(value=w), gr.update(value=h)
+  ```
+
+Gallery → Image
+
+- Prefer retornos Python (PIL `Image` ou `None`) em vez de manipulação DOM. Use um helper JS mínimo só quando inevitável.
+
+SSR (optional)
+
+- Launch with: `demo.launch(ssr_mode=True)` or set `GRADIO_SSR_MODE=true`. Requires Node ≥ 20. Keep disabled by default on Windows.
+
+API endpoints (optional)
+
+- Minimal typed route without explicit components:
+  ```python
+  import gradio as gr
+
+  def ping():
+      return {"ok": True}
+
+  with gr.Blocks() as demo:
+      gr.api(ping, api_name="ping")
+  ```
+
 Policy
 - No DOM manipulation if a Gradio 5 API exists.
 - TypeScript only where needed (Canvas overlays, legacy extension UIs, hotkeys).
@@ -38,4 +113,3 @@ Validation Checklist
 - PNG Info → Send to txt2img/img2img (no errors, tab switches, sliders valid).
 - Generation hotkeys (Ctrl+Enter/Esc) work; if kept JS, ensure guards.
 - ControlNet pages: no recurring console errors; fallbacks idempotent.
-

@@ -191,12 +191,27 @@ def connect_paste_params_buttons():
                 show_progress=False,
             )
 
+        # Tab switching will be attached later from ui.py using a Python-only update
+        # to avoid relying on legacy _js handlers under Gradio 5.
+        # See: connect_tab_switches(tabs)
+
+
+def connect_tab_switches(tabs_component: gr.Tabs):
+    """Attach Python-only tab switching for all registered paste buttons.
+
+    This replaces legacy _js switch_to_* handlers that were brittle under Gradio 5.
+    """
+    for binding in registered_param_bindings:
+        def _select_tab(tabname=binding.tabname):
+            return gr.Tabs.update(selected=tabname)
+
+        # Click once more to also switch the Tabs selection
         binding.paste_button.click(
-            fn=None,
-            _js=f"switch_to_{binding.tabname}",
-            inputs=None,
-            outputs=None,
+            fn=_select_tab,
+            inputs=[],
+            outputs=[tabs_component],
             show_progress=False,
+            queue=False,
         )
 
 

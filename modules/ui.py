@@ -976,6 +976,7 @@ def create_ui():
     with gr.Blocks(theme=shared.gradio_theme, analytics_enabled=False, title="Stable Diffusion", head=canvas_head) as demo:
         quicksettings_row = settings.add_quicksettings()
 
+        # Defer JS-based tab switching; we'll attach Python-only tab updates after Tabs are defined
         parameters_copypaste.connect_paste_params_buttons()
 
         with gr.Tabs(elem_id="tabs") as tabs:
@@ -994,6 +995,9 @@ def create_ui():
             loadsave.add_component(f"webui/Tabs@{tabs.elem_id}", tabs)
 
             loadsave.setup_ui()
+
+        # Attach Python-only tab switching for all "Send to …" buttons
+        parameters_copypaste.connect_tab_switches(tabs)
 
         def tab_changed(evt: gr.SelectData):
             no_quick_setting = getattr(shared.opts, "tabs_without_quick_settings_bar", [])
