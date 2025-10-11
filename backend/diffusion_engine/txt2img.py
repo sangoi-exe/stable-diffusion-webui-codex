@@ -293,10 +293,12 @@ class Txt2ImgRuntime:
         if bridge is not None:
             bridge.ensure_lora_registry()
         elif lora_networks is not None:
+            logger = logging.getLogger(__name__)
             try:
+                logger.debug("Listing available LoRAs in %s", getattr(shared.cmd_opts, "lora_dir", "<unset>"))
                 lora_networks.list_available_networks()
             except Exception:
-                logging.getLogger(__name__).debug("LoRA network listing failed", exc_info=True)
+                logger.debug("LoRA network listing failed", exc_info=True)
         if hasattr(self.processing, "parse_extra_network_prompts"):
             self.processing.parse_extra_network_prompts()
         data = getattr(self.processing, "extra_network_data", None)
