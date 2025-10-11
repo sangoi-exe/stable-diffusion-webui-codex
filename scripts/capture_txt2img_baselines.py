@@ -332,17 +332,17 @@ def filter_scenarios(scenarios: List[Scenario], filters: Optional[Iterable[str]]
 
 def ensure_runtime_initialized() -> None:
     from modules import initialize, shared
+
+    if getattr(shared, "opts", None) is None or getattr(shared, "sd_model", None) is None:
+        LOGGER.info("Initialising Stable Diffusion runtime (imports, models, extensions).")
+        initialize.imports()
+        initialize.check_versions()
+        initialize.initialize()
+    else:
+        LOGGER.debug("Shared runtime already initialised; reusing existing state.")
+
     from modules.sd_models import model_data
     from modules_forge import main_entry
-
-    if getattr(shared, "opts", None) is not None and getattr(shared, "sd_model", None):
-        LOGGER.debug("Shared runtime already initialised; reusing existing state.")
-        return
-
-    LOGGER.info("Initialising Stable Diffusion runtime (imports, models, extensions).")
-    initialize.imports()
-    initialize.check_versions()
-    initialize.initialize()
 
     if not model_data.forge_loading_parameters.get("checkpoint_info"):
         main_entry.refresh_model_loading_parameters()
