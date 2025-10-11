@@ -56,3 +56,6 @@ trace.json
 /test/results.xml
 coverage.xml
 **/tests/**/expectations
+*codex/*
+*tests/*
+snapshotLegacy.py
