@@ -7,7 +7,7 @@ import os
 import re
 import sys
 from contextlib import closing
-from dataclasses import dataclass, field
+from dataclasses import dataclass as _real_dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -82,6 +82,12 @@ def _sanitize_name(name: str) -> str:
     slug = re.sub(r"_+", "_", slug).strip("_")
     return slug or "scenario"
 
+
+# When imported by WebUI's script loader, module names like
+# "capture_txt2img_baselines.py" can confuse dataclasses' module lookup.
+# To avoid failures during import, use a no-op decorator under that context.
+_IS_WEBUI_LOADER = (__name__.endswith('.py') and __name__ != '__main__') or __name__.startswith('scripts.')
+dataclass = _real_dataclass if not _IS_WEBUI_LOADER else (lambda *a, **k: (lambda c: c))
 
 @dataclass(frozen=True)
 class HiresSettings:

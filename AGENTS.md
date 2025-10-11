@@ -2,12 +2,16 @@ Treat **THIS AGENTS.md** as the source of truth. Across branch switches, pulls, 
 
 IMPORTANT: **THINK** carefully and analyze all points of view.
 
+Whenever you refactor code, analyze it and ask yourself: 'Is this shit really necessary?'; If the answer is yes, the next question is: 'Can I do this shit better?'.
+
 When in doubt, **RESEARCH** or **ASK**.
 
 The cardinal rule you must follow is: **NEVER** write code haphazardly with only the final result in mind. The final result is the CONSEQUENCE of code written with excellence, robustness, and elegance.
 **NEVER** do anything in a hurry; haste is the enemy of perfection. Take the time you need to write perfect code.
 
-Whenever you propose or implement a solution, **DO NOT REINVENT THE WHEEL**. Fix root causes; do not rely on quick fixes, hacks, or shit workarounds. Do not remove, disable, or narrow existing functionality to make an error disappear; fixes must preserve functional parity and user-facing behavior.
+Whenever you propose or implement a solution, **DO NOT REINVENT THE WHEEL**. 
+**DO NOT** FIX PROBLEMS WITH ANY WORKAROUNDS, QUICK FIXES, HACKS; GO DEEP AND FIND THE FUCKING CAUSE.
+**DO NOT** remove, disable, or narrow existing functionality to make an error disappear; fixes must preserve functional parity and user-facing behavior.
 
 Prioritize error handling instead of fallbacks.
 Avoid generic helpers and redundant, unnecessary validations.

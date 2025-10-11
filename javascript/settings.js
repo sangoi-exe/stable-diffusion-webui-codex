@@ -17,33 +17,53 @@ function settingsShowOneTab() {
     gradioApp().querySelector('#settings_show_one_page').click();
 }
 
-onUiLoaded(function() {
-    var edit = gradioApp().querySelector('#settings_search');
-    var editTextarea = gradioApp().querySelector('#settings_search > label > input');
-    var buttonShowAllPages = gradioApp().getElementById('settings_show_all_pages');
-    var settings_tabs = gradioApp().querySelector('#settings div');
+function attachSettingsSearch() {
+    var root = gradioApp();
+    if (!root) return;
+
+    var edit = root.querySelector('#settings_search');
+    var editTextarea = root.querySelector('#settings_search > label > input');
+    var buttonShowAllPages = root.getElementById('settings_show_all_pages');
+    var settings_tabs = root.querySelector('#settings div');
+
+    if (!edit || !editTextarea || !buttonShowAllPages || !settings_tabs) {
+        return;
+    }
+
+    if (edit.dataset.bound === 'true') {
+        return;
+    }
+    edit.dataset.bound = 'true';
 
     onEdit('settingsSearch', editTextarea, 250, function() {
         var searchText = (editTextarea.value || "").trim().toLowerCase();
 
-        gradioApp().querySelectorAll('#settings > div[id^=settings_] div[id^=column_settings_] > *').forEach(function(elem) {
-            var visible = elem.textContent.trim().toLowerCase().indexOf(searchText) != -1;
+        root.querySelectorAll('#settings > div[id^=settings_] div[id^=column_settings_] > *').forEach(function(elem) {
+            var visible = elem.textContent.trim().toLowerCase().indexOf(searchText) !== -1;
             elem.style.display = visible ? "" : "none";
         });
 
-        if (searchText != "") {
+        if (searchText !== "") {
             settingsShowAllTabs();
         } else {
             settingsShowOneTab();
         }
     });
 
-    settings_tabs.insertBefore(edit, settings_tabs.firstChild);
-    settings_tabs.appendChild(buttonShowAllPages);
+    if (settings_tabs.firstChild !== edit) {
+        settings_tabs.insertBefore(edit, settings_tabs.firstChild || null);
+    }
+    if (!buttonShowAllPages.dataset.bound) {
+        buttonShowAllPages.addEventListener("click", settingsShowAllTabs);
+        buttonShowAllPages.dataset.bound = 'true';
+    }
+    if (settings_tabs.lastChild !== buttonShowAllPages) {
+        settings_tabs.appendChild(buttonShowAllPages);
+    }
+}
 
-
-    buttonShowAllPages.addEventListener("click", settingsShowAllTabs);
-});
+onUiLoaded(attachSettingsSearch);
+onUiUpdate(attachSettingsSearch);
 
 
 onOptionsChanged(function() {
@@ -68,4 +88,3 @@ onOptionsChanged(function() {
         sectionElem.parentElement.insertBefore(span, sectionElem);
     });
 });
-
