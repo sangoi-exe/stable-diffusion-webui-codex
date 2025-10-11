@@ -9,17 +9,17 @@ re-evaluating the fundamentals.
 
 ### Port txt2img execution path to `backend/diffusion_engine/txt2img.py`
 - **Status:** In Progress
-- **Progress:** Expanded unit harness in `tests/backend/test_txt2img.py` to validate base
-  sampling, modified-noise overrides, LoRA object lifetimes, and hires reload sequencing,
-  and introduced `scripts/capture_txt2img_baselines.py` (with sample config under
-  `codex/examples/`) to emit deterministic PNG + metadata bundles for regression checks.
-- **Dependencies:** Tight coupling between `modules/processing.py` and UI script hooks;
-  golden image fixtures still pending to guarantee parity for hires/refiner hand-offs
-  under production checkpoints.
-- **Next Steps:** Run the new baseline capture script on curated prompts (CFG + hires +
-  refiner) to populate `tests/backend/fixtures/txt2img/`, then begin migrating noise
-  preparation, script callbacks, and refiner scheduling into
-  `backend/diffusion_engine/txt2img.py` guarded by the expanded unit coverage.
+- **Progress:** Backend runtime now constructs `ImageRNG`, restores base/LoRA forge
+  objects, fires script batch hooks, activates extra networks, runs post-sample
+  callbacks, and propagates progress updates; unit harness asserts each callback,
+  RNG shape, and extra-network activation. Baseline capture CLI remains in place for
+  higher-level regressions.
+- **Dependencies:** Golden image fixtures are still required to validate hires/refiner
+  parity under production checkpoints; portions of refiner scheduling and noise schedule
+  overrides still live in `modules/processing.py`.
+- **Next Steps:** Port refiner/hires orchestration (conditioning setup, checkpoint
+  reloads), migrate noise schedule overrides, and extend GPU baseline captures to cover
+  those flows before flipping the main UI path.
 
 ### Implement shared scheduler registry bridging `modules/sd_samplers.py` and `backend/sampling/`
 - **Status:** Blocked

@@ -5,6 +5,10 @@ This roadmap aligns modernization work across the repository. Update it as miles
 > **Status Note:** See `codex/refactor-roadmap-status.md` for the latest assessment,
 > blockers, and next-step recommendations for each milestone.
 
+### Naming Discipline
+- When refactoring, rename meaningless identifiers (e.g., `p`, `x2`, `foo`) to descriptive names that reflect their role. Keep renames scoped and justified; do not leave ambiguous throwaway names in migrated code.
+- Do not preserve poor legacy structure for its own sake: when behaviour is covered by tests or captured baselines, prefer a clean reimplementation that expresses intent clearly over incremental patchwork.
+
 ## 1. Backend Modernization
 
 ### Milestone 1.1 – Txt2Img runtime parity

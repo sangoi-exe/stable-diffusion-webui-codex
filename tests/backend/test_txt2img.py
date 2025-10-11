@@ -41,6 +41,55 @@ sd_samplers_common_module.decode_first_stage = lambda _model, batch: batch
 sd_samplers_common_module.images_tensor_to_samples = lambda tensor, *_args, **_kwargs: tensor
 sys.modules.setdefault("modules.sd_samplers_common", sd_samplers_common_module)
 
+rng_module = types.ModuleType("modules.rng")
+
+
+class _StubImageRNG:
+    created = []
+
+    def __init__(self, shape, seeds, **_kwargs):
+        self.shape = tuple(int(dim) for dim in shape)
+        self.seeds = list(seeds)
+        self.calls = 0
+        self.__class__.created.append(
+            {
+                "shape": self.shape,
+                "seeds": self.seeds,
+                "kwargs": dict(_kwargs),
+            }
+        )
+
+    def next(self):
+        self.calls += 1
+        batch = len(self.seeds) or 1
+        return torch.zeros((batch, *self.shape), dtype=torch.float32)
+
+
+rng_module.ImageRNG = _StubImageRNG
+sys.modules.setdefault("modules.rng", rng_module)
+
+extra_networks_module = types.ModuleType("modules.extra_networks")
+extra_networks_module.invoke_log = []
+
+
+def _activate(processing, data):
+    extra_networks_module.invoke_log.append((processing, data))
+
+
+extra_networks_module.activate = _activate
+sys.modules.setdefault("modules.extra_networks", extra_networks_module)
+
+scripts_module = types.ModuleType("modules.scripts")
+
+
+class _PostSampleArgs:
+    def __init__(self, samples):
+        self.samples = samples
+
+
+scripts_module.PostSampleArgs = _PostSampleArgs
+sys.modules.setdefault("modules.scripts", scripts_module)
+
 shared_module = types.ModuleType("modules.shared")
 shared_module.opts = types.SimpleNamespace(sd_vae_encode_method="Full")
 shared_module.shared = types.SimpleNamespace(device=torch.device("cpu"), state=None)
@@ -196,6 +245,7 @@ from backend.diffusion_engine import txt2img
 class DummyForgeObjects:
     def __init__(self):
         self.copies = 0
+        self.vae = types.SimpleNamespace(latent_channels=4)
 
     def shallow_copy(self):
         self.copies += 1
@@ -215,9 +265,21 @@ class DummySampler:
 class DummyScripts:
     def __init__(self):
         self.calls = []
+        self.post_samples = []
+        self.before_batches = []
+        self.process_batches = []
 
     def process_before_every_sampling(self, *args, **kwargs):
         self.calls.append((args, kwargs))
+
+    def post_sample(self, _processing, args):
+        self.post_samples.append(args.samples)
+
+    def before_process_batch(self, _processing, **kwargs):
+        self.before_batches.append(kwargs)
+
+    def process_batch(self, _processing, **kwargs):
+        self.process_batches.append(kwargs)
 
 
 class DummyRNG:
@@ -235,6 +297,7 @@ class DummyProcessing:
         self.sampler_name = "Euler"
         self.sd_model = types.SimpleNamespace(
             forge_objects_after_applying_lora=DummyForgeObjects(),
+            forge_objects_original=DummyForgeObjects(),
             forge_objects=None,
             use_distilled_cfg_scale=False,
         )
@@ -249,6 +312,15 @@ class DummyProcessing:
         self.hr_additional_modules = None
         self.hr_checkpoint_name = "Use same checkpoint"
         self.hr_distilled_cfg = 0.0
+        self.extra_network_data = ["network-a"]
+        self.disable_extra_networks = False
+        self.width = 512
+        self.height = 512
+        self.seeds = [1]
+        self.subseeds = [2]
+        self.subseed_strength = 0.0
+        self.seed_resize_from_h = 0
+        self.seed_resize_from_w = 0
 
     def get_token_merging_ratio(self):
         return 0.0
@@ -262,6 +334,8 @@ class DummyProcessing:
 def _isolate_opts(monkeypatch):
     monkeypatch.setattr(txt2img, "apply_token_merging", lambda *args, **kwargs: None)
     monkeypatch.setattr(txt2img.devices, "torch_gc", lambda: None)
+    _StubImageRNG.created.clear()
+    extra_networks_module.invoke_log.clear()
     return None
 
 
@@ -303,7 +377,11 @@ def test_generate_without_hr_runs_sampler(monkeypatch):
     called_noise = processing.scripts.calls[0][1]["noise"]
     assert torch.equal(called_noise, processing.txt2img_image_conditioning_calls[0])
     assert processing.sd_model.forge_objects_after_applying_lora.copies == 1
+    assert processing.sd_model.forge_objects_original.copies == 1
     assert merge_calls == [(processing.sd_model, 0.0)]
+    assert processing.scripts.before_batches[0]["prompts"] == ["prompt"]
+    assert processing.scripts.process_batches[0]["seeds"] == [1]
+    assert extra_networks_module.invoke_log == [(processing, ["network-a"])]
 
 
 def test_generate_uses_first_pass_artifacts(monkeypatch):
@@ -496,7 +574,12 @@ def test_generate_updates_shared_state_and_triggers_gc(monkeypatch):
     gc_calls = []
     monkeypatch.setattr(txt2img.devices, "torch_gc", lambda: gc_calls.append(None))
 
-    shared_state = types.SimpleNamespace(current_latent=None)
+    nextjob_calls = []
+
+    def _nextjob():
+        nextjob_calls.append(True)
+
+    shared_state = types.SimpleNamespace(current_latent=None, nextjob=_nextjob)
     monkeypatch.setattr(txt2img.shared, "state", shared_state, raising=False)
 
     runtime = _runtime(processing=processing)
@@ -504,3 +587,52 @@ def test_generate_updates_shared_state_and_triggers_gc(monkeypatch):
 
     assert shared_state.current_latent is result
     assert gc_calls, "devices.torch_gc should be invoked after sampling"
+    assert nextjob_calls == [True]
+
+
+def test_generate_initializes_rng(monkeypatch):
+    processing = DummyProcessing()
+    sampler = DummySampler(torch.zeros((1, 1, 1, 1)))
+    monkeypatch.setattr(txt2img.sd_samplers, "create_sampler", lambda *_, **__: sampler)
+
+    runtime = _runtime(processing=processing)
+    runtime.generate()
+
+    assert _StubImageRNG.created
+    created = _StubImageRNG.created[0]
+    assert created["shape"] == (4, 64, 64)
+    assert created["seeds"] == [1]
+    assert created["kwargs"]["subseeds"] == [2]
+
+
+def test_generate_applies_post_sample_hooks(monkeypatch):
+    processing = DummyProcessing()
+
+    class RecordingScripts(DummyScripts):
+        def post_sample(self, _processing, args):
+            args.samples = torch.full_like(args.samples, 2.0)
+            super().post_sample(_processing, args)
+
+    processing.scripts = RecordingScripts()
+
+    sampler_output = torch.ones((1, 1, 1, 1))
+    sampler = DummySampler(sampler_output)
+    monkeypatch.setattr(txt2img.sd_samplers, "create_sampler", lambda *_, **__: sampler)
+
+    runtime = _runtime(processing=processing)
+    result = runtime.generate()
+
+    assert torch.equal(result, torch.full_like(sampler_output, 2.0))
+    assert processing.scripts.post_samples, "post_sample should have been invoked"
+
+
+def test_generate_skips_extra_networks_when_disabled(monkeypatch):
+    processing = DummyProcessing()
+    processing.disable_extra_networks = True
+    sampler = DummySampler(torch.zeros((1, 1, 1, 1)))
+    monkeypatch.setattr(txt2img.sd_samplers, "create_sampler", lambda *_, **__: sampler)
+
+    runtime = _runtime(processing=processing)
+    runtime.generate()
+
+    assert not extra_networks_module.invoke_log
