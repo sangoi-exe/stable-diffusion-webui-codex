@@ -44,8 +44,45 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
             return cls.from_pretrained(os.path.join(repo_path, component_name))
         if component_name.startswith('tokenizer'):
             cls = getattr(importlib.import_module(lib_name), cls_name)
-            # Match master behavior: rely on transformers loader at config_path
-            comp = cls.from_pretrained(os.path.join(repo_path, component_name))
+            path = os.path.join(repo_path, component_name)
+
+            # Prefer fast tokenizer via tokenizer.json when available
+            tokenizer_json_candidates = [
+                os.path.join(path, 'tokenizer.json'),
+                os.path.join(repo_path, 'tokenizer.json'),
+            ]
+            tokenizer_json = next((p for p in tokenizer_json_candidates if os.path.isfile(p)), None)
+
+            merges_candidates = [
+                os.path.join(path, 'merges.txt'),
+                os.path.join(path, 'bpe_merges.txt'),
+            ]
+            vocab_candidates = [
+                os.path.join(path, 'vocab.json'),
+                os.path.join(path, 'bpe_vocab.json'),
+            ]
+            merges_txt = next((p for p in merges_candidates if os.path.isfile(p)), None)
+            vocab_json = next((p for p in vocab_candidates if os.path.isfile(p)), None)
+
+            try:
+                if tokenizer_json is not None:
+                    try:
+                        from transformers import CLIPTokenizerFast
+                        comp = CLIPTokenizerFast.from_pretrained(path, tokenizer_file=tokenizer_json)
+                    except Exception:
+                        from transformers import AutoTokenizer
+                        comp = AutoTokenizer.from_pretrained(path, use_fast=True, tokenizer_file=tokenizer_json)
+                elif merges_txt is not None and vocab_json is not None:
+                    comp = cls.from_pretrained(path)
+                else:
+                    # Fallback to master behavior (directory-based); may still raise, but with clearer path
+                    comp = cls.from_pretrained(path)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Tokenizer assets not found or incompatible under {path}. "
+                    f"Tried tokenizer.json (fast) and (vocab.json + merges.txt). Original error: {e}"
+                )
+
             if hasattr(comp, "_eventual_warn_about_too_long_sequence"):
                 comp._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None
             return comp
