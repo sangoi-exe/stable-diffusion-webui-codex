@@ -273,13 +273,27 @@ def create_override_settings_dropdown(tabname, row):
         allow_custom_value=True,
     )
 
+    # Hidden state actually used as input for processing; avoids Dropdown
+    # type/choices mismatches during preprocess. The dropdown remains purely
+    # a UI control and mirrors into this state.
+    state = gr.State(value=[])
+
     dropdown.change(
         fn=lambda x: gr.Dropdown.update(visible=bool(x)),
         inputs=[dropdown],
         outputs=[dropdown],
     )
 
-    return dropdown
+    # Keep state in sync with dropdown selections
+    dropdown.change(
+        fn=lambda v: (v or []),
+        inputs=[dropdown],
+        outputs=[state],
+        show_progress=False,
+        queue=False,
+    )
+
+    return dropdown, state
 
 
 def create_ui():
@@ -403,7 +417,7 @@ def create_ui():
 
                     elif category == "override_settings":
                         with FormRow(elem_id="txt2img_override_settings_row") as row:
-                            override_settings = create_override_settings_dropdown('txt2img', row)
+                            override_settings_dropdown, override_settings = create_override_settings_dropdown('txt2img', row)
 
                     elif category == "scripts":
                         with FormGroup(elem_id="txt2img_script_container"):
@@ -545,7 +559,7 @@ def create_ui():
                 PasteField(hr_prompts_container, lambda d: gr.update(visible=True) if d.get("Hires prompt", "") != "" or d.get("Hires negative prompt", "") != "" else gr.update()),
                 *scripts.scripts_txt2img.infotext_fields
             ]
-            parameters_copypaste.add_paste_fields("txt2img", None, txt2img_paste_fields, override_settings)
+            parameters_copypaste.add_paste_fields("txt2img", None, txt2img_paste_fields, override_settings_dropdown)
             parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
                 paste_button=toprow.paste, tabname="txt2img", source_text_component=toprow.prompt, source_image_component=None,
             ))
@@ -748,7 +762,7 @@ def create_ui():
 
                     elif category == "override_settings":
                         with FormRow(elem_id="img2img_override_settings_row") as row:
-                            override_settings = create_override_settings_dropdown('img2img', row)
+                            override_settings_dropdown, override_settings = create_override_settings_dropdown('img2img', row)
 
                     elif category == "scripts":
                         with FormGroup(elem_id="img2img_script_container"):
@@ -929,8 +943,8 @@ def create_ui():
                 (inpaint_full_res_padding, 'Masked area padding'),
                 *scripts.scripts_img2img.infotext_fields
             ]
-            parameters_copypaste.add_paste_fields("img2img", init_img.background, img2img_paste_fields, override_settings)
-            parameters_copypaste.add_paste_fields("inpaint", init_img_with_mask.background, img2img_paste_fields, override_settings)
+            parameters_copypaste.add_paste_fields("img2img", init_img.background, img2img_paste_fields, override_settings_dropdown)
+            parameters_copypaste.add_paste_fields("inpaint", init_img_with_mask.background, img2img_paste_fields, override_settings_dropdown)
             parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
                 paste_button=toprow.paste, tabname="img2img", source_text_component=toprow.prompt, source_image_component=None,
             ))
