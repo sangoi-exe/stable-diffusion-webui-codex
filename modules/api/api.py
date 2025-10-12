@@ -531,7 +531,7 @@ class Api:
         with self.queue_lock:
             result = postprocessing.run_extras(extras_mode=1, image_folder=image_folder, image="", input_dir="", output_dir="", save_output=False, **reqDict)
 
-        return models.ExtrasBatchImagesResponse(images=list(map(encode_pil_to_base64, result[0])), html_info=result[1])
+        return models.ExtrasBatchImagesResponse(images=[self.media.encode_image(img) for img in result[0]], html_info=result[1])
 
     def pnginfoapi(self, req: models.PNGInfoRequest):
         image = self.media.decode_image(req.image.strip())

@@ -32,7 +32,7 @@ This repository powers **stable-diffusion-webui-codex** — a fork built on top 
 ## Engineering Principles
 - Pursue robustness before optimizations; never sacrifice existing functionality just to silence errors.
 - Keep changes cohesive. Avoid mixing refactors with unrelated feature work in a single commit.
-- Parity policy during refactors: do not aim for bit‑exact parity. Maintain functional continuity (it keeps working) and prefer improvements. Preserve public API contracts unless explicitly versioned; internals may change.
+- Parity policy during refactors: do not aim for bit‑exact parity. Maintain functional continuity (it keeps working) and prefer improvements. Public API contracts may evolve when it improves UX/perf; document in `NEWS.md` and migration notes.
 
 ## Collaboration Workflow
 - Update or add documentation when behaviour or configuration surfaces change.
