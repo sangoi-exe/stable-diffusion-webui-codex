@@ -1,4 +1,5 @@
 import os
+import shutil
 import torch
 import logging
 import importlib
@@ -32,6 +33,20 @@ logging.getLogger("diffusers").setLevel(logging.ERROR)
 dir_path = os.path.dirname(__file__)
 
 
+def _copy_tree(src_root: str, dst_root: str, patterns: list[str] | None = None):
+    os.makedirs(dst_root, exist_ok=True)
+    for root, dirs, files in os.walk(src_root):
+        rel = os.path.relpath(root, src_root)
+        for f in files:
+            src = os.path.join(root, f)
+            relpath = os.path.normpath(os.path.join(rel, f)) if rel != os.curdir else f
+            if patterns and not any(relpath.replace('\\', '/') == p or relpath.replace('\\', '/').startswith(p.rstrip('*')) for p in patterns):
+                continue
+            dst = os.path.join(dst_root, relpath)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+
+
 def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_path, state_dict):
     config_path = os.path.join(repo_path, component_name)
 
@@ -56,7 +71,7 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                 vocab = next((p for p in [os.path.join(dirpath, 'vocab.json'), os.path.join(dirpath, 'bpe_vocab.json')] if os.path.isfile(p)), None)
                 return merges is not None and vocab is not None
 
-            # Strict local-only resolution. No remote lookups, no implicit fallbacks.
+            # Resolve locally first; if missing and online fetch allowed, download tokenizer assets to repo_path.
             tok_json_path = _tokenizer_json_in(path) or _tokenizer_json_in(root)
             repo_hint = getattr(guess, 'huggingface_repo', None)
             if tok_json_path is not None:
@@ -77,12 +92,46 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                         f"Found merges/vocab under {merges_dir} but failed to load {cls_name}: {e}."
                     )
             else:
-                hint = (f" (hint: repo_id='{repo_hint}')" if repo_hint else "")
-                raise RuntimeError(
-                    f"Tokenizer assets missing under {path} (root: {root}).\n"
-                    f"Expected tokenizer.json or (vocab.json + merges.txt).{hint}\n"
-                    f"For SDXL, ensure both 'tokenizer/' and 'tokenizer_2/' exist and contain their files."
-                )
+                # Attempt online fetch if enabled and repo is known
+                if not backend.args.args.disable_online_tokenizer and repo_hint:
+                    try:
+                        from huggingface_hub import snapshot_download
+                    except Exception as e:
+                        raise RuntimeError(
+                            "Tokenizer assets missing locally and online fetch requested, but huggingface_hub is not available: "
+                            f"{e}. Please install huggingface_hub or provide tokenizer files locally."
+                        )
+
+                    # Download only tokenizer-related files to cache
+                    allow = [
+                        'tokenizer/*', 'tokenizer_2/*',
+                        'tokenizer.json', 'tokenizer_config.json',
+                        'vocab.json', 'merges.txt', 'tokenizer.model'
+                    ]
+                    cached_dir = snapshot_download(repo_id=repo_hint, allow_patterns=allow, local_files_only=False)
+
+                    # Copy relevant files into repo_path (preserve tokenizer/ subfolders)
+                    _copy_tree(cached_dir, repo_path, patterns=allow)
+
+                    # Re-resolve after fetch
+                    tok_json_path = _tokenizer_json_in(path) or _tokenizer_json_in(root)
+                    if tok_json_path is not None:
+                        from transformers import CLIPTokenizerFast
+                        comp = CLIPTokenizerFast.from_pretrained(os.path.dirname(tok_json_path), tokenizer_file=tok_json_path, local_files_only=True)
+                    elif _has_merges_vocab(path) or _has_merges_vocab(root):
+                        merges_dir = path if _has_merges_vocab(path) else root
+                        comp = cls.from_pretrained(merges_dir, local_files_only=True)
+                    else:
+                        raise RuntimeError(
+                            f"Online fetch attempted for repo '{repo_hint}', but tokenizer assets remain missing under {repo_path}."
+                        )
+                else:
+                    hint = (f" (hint: repo_id='{repo_hint}')" if repo_hint else "")
+                    raise RuntimeError(
+                        f"Tokenizer assets missing under {path} (root: {root}).\n"
+                        f"Expected tokenizer.json or (vocab.json + merges.txt).{hint}\n"
+                        f"For SDXL, ensure both 'tokenizer/' and 'tokenizer_2/' exist and contain their files, or enable online fetch."
+                    )
 
             if hasattr(comp, "_eventual_warn_about_too_long_sequence"):
                 comp._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None

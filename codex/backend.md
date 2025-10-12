@@ -37,7 +37,7 @@ Next
 - Optional: ProgressService to centralize task/time metrics and future telemetry.
 - Optional: move sampler/scheduler listing to SamplerService.
 
-Tokenizer Assets (Strict)
+Tokenizer Assets (Strict + Online Cache)
 -------------------------
 
 - Tokenizers are not embedded in `.safetensors`. They must exist in the model directory (or be cached locally from the Hub) as standard files:
@@ -46,9 +46,9 @@ Tokenizer Assets (Strict)
   - SentencePiece: `tokenizer.model`
 - SDXL requires two tokenizer folders: `tokenizer/` and `tokenizer_2/`.
 - Loader behavior (backend/loader.py):
-  - Resolves tokenizers strictly from local disk (component dir first, then repo root).
-  - No remote or implicit fallbacks. If missing/incompatible, raises a clear RuntimeError with the exact path(s) checked and an optional repo hint.
+  - Primeiro tenta resolver no disco (pasta do componente e raiz do repositório local).
+  - Se faltar e `--disable-online-tokenizer` NÃO estiver habilitado e `huggingface_repo` for conhecido, baixa do Hub apenas os artefatos do tokenizer e copia para o diretório do modelo (cache explícito, sem “magia”).
+  - Se ainda assim não existir ou falhar, erro explícito (sem mascarar). Não há fallback silencioso.
 - Recommended workflow when you only have a checkpoint `.safetensors`:
   - Download tokenizers (and `config.json`) from the original repo (e.g., via `huggingface_hub.snapshot_download(allow_patterns=["tokenizer.*", "vocab.json", "merges.txt", "tokenizer.model", "tokenizer_config.json", "config.json"])`).
   - Place them under the model directory alongside your weights.
-
