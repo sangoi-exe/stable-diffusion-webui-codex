@@ -1116,6 +1116,48 @@ def setup_ui_api(app):
     import fastapi.staticfiles
     app.mount("/webui-assets", fastapi.staticfiles.StaticFiles(directory=launch_utils.repo_dir('stable-diffusion-webui-assets')), name="webui-assets")
 
+    # Internal memory endpoint (diagnostics)
+    @app.get("/internal/memory")
+    def _memory_info():
+        import os as _os
+        import psutil as _ps
+        _proc = _ps.Process(_os.getpid())
+        _rss = _proc.memory_info().rss
+        _pct = _proc.memory_percent()
+        _ram_total = 0
+        try:
+            _ram_total = int(100 * _rss / _pct) if _pct > 0 else _ps.virtual_memory().total
+        except Exception:
+            _ram_total = _ps.virtual_memory().total
+        _ram = {"free": _ram_total - _rss, "used": _rss, "total": _ram_total}
+
+        try:
+            import torch as _torch
+            if _torch.cuda.is_available():
+                free_b, total_b = _torch.cuda.mem_get_info()
+                cuda = {
+                    "system": {"free": free_b, "used": total_b - free_b, "total": total_b},
+                }
+            else:
+                cuda = {"error": "unavailable"}
+        except Exception as e:
+            cuda = {"error": str(e)}
+
+        try:
+            from backend import memory_management as _mm
+            vram_state = getattr(_mm, 'vram_state', None)
+            cpu_state = getattr(_mm, 'cpu_state', None)
+            flags = {
+                "vram_state": getattr(vram_state, 'name', str(vram_state)),
+                "cpu_state": getattr(cpu_state, 'name', str(cpu_state)),
+                "pin_shared_memory": getattr(_mm, 'PIN_SHARED_MEMORY', None),
+                "always_offload_from_vram": getattr(_mm, 'ALWAYS_VRAM_OFFLOAD', None),
+            }
+        except Exception:
+            flags = {}
+
+        return {"ram": _ram, "cuda": cuda, "flags": flags}
+
     # Back-compat static file shims for assets referenced as /file=path/to/asset or /file/path/to/asset
     @app.get("/file={req_path:path}")
     def _serve_legacy_file(req_path: str):
