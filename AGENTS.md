@@ -1,4 +1,4 @@
-AGENTS.md is maintained like any other documentation in this repo. It may be edited or replaced when processes evolve. In merges, resolve conflicts contextually (no special-casing “OURS” for this file).
+Treat **THIS AGENTS.md** as the source of truth. Across branch switches, pulls, rebases, and resets (including hard resets), do not modify, replace, or delete this file. If a merge conflict involves AGENTS.md, resolve it by choosing **OURS** (keep the local version) for this file only. If preservation cannot be guaranteed, stop and notify me.
 
 End-of-sprint documentation: log each sprint under `codex/sprint-logs/` using the provided template and follow `codex/sprint-guidelines.md`. Summarise user‑visible highlights in `NEWS.md`.
 
@@ -32,7 +32,7 @@ This repository powers **stable-diffusion-webui-codex** — a fork built on top 
 ## Engineering Principles
 - Pursue robustness before optimizations; never sacrifice existing functionality just to silence errors.
 - Keep changes cohesive. Avoid mixing refactors with unrelated feature work in a single commit.
-- Parity policy during refactors: do not aim for bit‑exact parity. Maintain functional continuity (it keeps working) and prefer improvements. Public API contracts may evolve when it improves UX/perf; document in `NEWS.md` and migration notes.
+ 
 
 ## Collaboration Workflow
 - Update or add documentation when behaviour or configuration surfaces change.
@@ -67,12 +67,11 @@ This repository powers **stable-diffusion-webui-codex** — a fork built on top 
 - Maintain a clean working tree before concluding a session; ensure artifacts such as `outputs/`, caches, or `models/` remain untracked.
 - When adding new dependencies or configuration files, reflect the changes in `requirements_versions.txt` or `package.json` as appropriate and document the impact.
 - End of each delivery: make an atomic commit and push (no uncommitted leftovers). Document highlights in `NEWS.md` and add/update a sprint log in `codex/sprint-logs/`.
- - Antes de finalizar uma entrega: faça commit atômico e push. Atualize o `NEWS.md` e registre o log do sprint em `codex/sprint-logs/`.
 
 ## Session Handoff
 - Summarise completed work, validations, and outstanding risks in your final message; point to the exact files touched.
 - If new tasks arise, append them to the relevant roadmap or checklist under `codex/` and mention them in the handoff.
- - Do not block refactors on rigid golden‑output tests; rely on smoke checks and API contract validation unless a regression is suspected.
+ 
 
 ## Coding Practices (Augmented)
 - Logging must remain actionable: include identifiers (job id, sampler, model hash) and avoid flooding outputs; ensure log levels (`info`, `warning`, `error`) match severity.
