@@ -98,10 +98,33 @@ class UiLoadsave:
             apply_field(x, 'visible')
 
         if type(x) == gr.Slider:
-            # Apply bounds first, then value (which will be clamped to bounds)
+            # Apply bounds first, coercing to numeric types, then apply value (clamped)
+            def _coerce_numeric(val, integer=False):
+                try:
+                    f = float(val)
+                    return int(f) if integer else f
+                except Exception:
+                    return val
+
             apply_field(x, 'minimum')
+            if isinstance(x.minimum, str):
+                try:
+                    x.minimum = float(x.minimum)
+                except Exception:
+                    pass
             apply_field(x, 'maximum')
+            if isinstance(x.maximum, str):
+                try:
+                    x.maximum = float(x.maximum)
+                except Exception:
+                    pass
             apply_field(x, 'step')
+            if isinstance(x.step, str):
+                try:
+                    # keep step's original numeric nature
+                    x.step = _coerce_numeric(x.step, integer=isinstance(getattr(x, 'step', None), int))
+                except Exception:
+                    pass
             apply_field(x, 'value')
 
         if type(x) == gr.Radio:

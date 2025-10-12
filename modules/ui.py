@@ -346,6 +346,7 @@ def create_ui():
                         with gr.Row(elem_id="txt2img_accordions", elem_classes="accordions"):
                             with InputAccordion(False, label="Hires. fix", elem_id="txt2img_hr") as enable_hr:
                                 with enable_hr.extra():
+                                    hr_enable = gr.Checkbox(value=False, label="Enable", show_label=False, elem_id="txt2img_hr_enable")
                                     hr_final_resolution = FormHTML(value="", elem_id="txtimg_hr_finalres", label="Upscaled resolution")
 
                                 with FormRow(elem_id="txt2img_hires_fix_row1", variant="compact"):
@@ -411,7 +412,7 @@ def create_ui():
                     if category not in {"accordions"}:
                         scripts.scripts_txt2img.setup_ui_for_section(category)
 
-            hr_resolution_preview_inputs = [enable_hr, width, height, hr_scale, hr_resize_x, hr_resize_y]
+            hr_resolution_preview_inputs = [hr_enable, width, height, hr_scale, hr_resize_x, hr_resize_y]
 
             for component in hr_resolution_preview_inputs:
                 event = component.release if isinstance(component, gr.Slider) else component.change
@@ -443,7 +444,7 @@ def create_ui():
                 distilled_cfg_scale,
                 height,
                 width,
-                enable_hr,
+                hr_enable,
                 denoising_strength,
                 hr_scale,
                 hr_upscaler,
@@ -478,6 +479,12 @@ def create_ui():
 
             toprow.prompt.submit(**txt2img_args)
             toprow.submit.click(**txt2img_args)
+
+            # Sync visible checkbox with hidden InputAccordion and accordion open state
+            def _sync_hr(v):
+                return v, gr.Accordion.update(open=bool(v))
+            hr_enable.change(fn=_sync_hr, inputs=[hr_enable], outputs=[enable_hr, enable_hr.accordion], show_progress=False, queue=False)
+            enable_hr.change(fn=lambda v: gr.update(value=v), inputs=[enable_hr], outputs=[hr_enable], show_progress=False, queue=False)
 
             def select_gallery_image(index):
                 index = int(index)
