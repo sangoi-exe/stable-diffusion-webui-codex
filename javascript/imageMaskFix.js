@@ -1,41 +1,53 @@
+"use strict";
+// @ts-check
+
 /**
  * temporary fix for https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/668
  * @see https://github.com/gradio-app/gradio/issues/1721
  */
 function imageMaskResize() {
-    const canvases = gradioApp().querySelectorAll('#img2maskimg .touch-none canvas');
-    if (!canvases.length) {
+    const canvases = Array.from(gradioApp().querySelectorAll('#img2maskimg .touch-none canvas'))
+        .filter((canvas) => canvas instanceof HTMLCanvasElement);
+
+    const firstCanvas = canvases[0];
+    if (!firstCanvas) {
         window.removeEventListener('resize', imageMaskResize);
         return;
     }
 
-    const wrapper = canvases[0].closest('.touch-none');
-    const previewImage = wrapper.previousElementSibling;
+    const wrapper = firstCanvas.closest('.touch-none');
+    if (!(wrapper instanceof HTMLElement)) return;
+
+    const prevSibling = wrapper.previousElementSibling;
+    const previewImage = prevSibling instanceof HTMLImageElement ? prevSibling : null;
+    if (!previewImage) return;
 
     if (!previewImage.complete) {
-        previewImage.addEventListener('load', imageMaskResize);
+        previewImage.addEventListener('load', imageMaskResize, { once: true });
         return;
     }
 
-    const w = previewImage.width;
-    const h = previewImage.height;
-    const nw = previewImage.naturalWidth;
-    const nh = previewImage.naturalHeight;
-    const portrait = nh > nw;
+    const { width: w, height: h, naturalWidth: nw, naturalHeight: nh } = previewImage;
+    if (!nw || !nh) return;
 
-    const wW = Math.min(w, portrait ? h / nh * nw : w / nw * nw);
-    const wH = Math.min(h, portrait ? h / nh * nh : w / nw * nh);
+    const portrait = nh > nw;
+    const projectedWidth = portrait ? (h / nh) * nw : w;
+    const projectedHeight = portrait ? h : (w / nw) * nh;
+
+    const wW = Math.min(w, projectedWidth);
+    const wH = Math.min(h, projectedHeight);
 
     wrapper.style.width = `${wW}px`;
     wrapper.style.height = `${wH}px`;
-    wrapper.style.left = `0px`;
-    wrapper.style.top = `0px`;
+    wrapper.style.left = '0px';
+    wrapper.style.top = '0px';
 
-    canvases.forEach(c => {
-        c.style.width = c.style.height = '';
-        c.style.maxWidth = '100%';
-        c.style.maxHeight = '100%';
-        c.style.objectFit = 'contain';
+    canvases.forEach((canvas) => {
+        canvas.style.width = '';
+        canvas.style.height = '';
+        canvas.style.maxWidth = '100%';
+        canvas.style.maxHeight = '100%';
+        canvas.style.objectFit = 'contain';
     });
 }
 

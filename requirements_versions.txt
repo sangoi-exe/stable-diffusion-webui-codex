@@ -1,5 +1,4 @@
 
---extra-index-url https://download.pytorch.org/whl/cu124
 setuptools==80.9.0
 GitPython==3.1.45
 Pillow==11.3.0
@@ -44,3 +43,4 @@ pydantic==2.11.10 # pinned: bumping often causes resolver conflicts
 huggingface-hub==0.35.3
 joblib==1.5.2
 onnxruntime-gpu==1.23.0 # pinned: bumping often causes resolver conflicts
+clip-interrogator

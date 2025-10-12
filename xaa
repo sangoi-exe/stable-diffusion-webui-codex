@@ -1,0 +1,200 @@
+        localRemove("img2img_task_id");
+        showRestoreProgressButton('img2img', false);
+    });
+
+    var res = create_submit_args(arguments);
+    res = normalizeSubmitArgs('img2img', res);
+
+    res[0] = id;
+
+    return res;
+}
+
+function submit_extras() {
+    showSubmitButtons('extras', false);
+
+    var id = randomId();
+
+    requestProgress(id, gradioApp().getElementById('extras_gallery_container'), gradioApp().getElementById('extras_gallery'), function() {
+        showSubmitButtons('extras', true);
+    });
+
+    var res = create_submit_args(arguments);
+
+    res[0] = id;
+
+    return res;
+}
+
+function restoreProgressTxt2img() {
+    showRestoreProgressButton("txt2img", false);
+    var id = localGet("txt2img_task_id");
+
+    if (id) {
+        showSubmitInterruptingPlaceholder('txt2img');
+        requestProgress(id, gradioApp().getElementById('txt2img_gallery_container'), gradioApp().getElementById('txt2img_gallery'), function() {
+            showSubmitButtons('txt2img', true);
+        }, null, 0);
+    }
+
+    return id;
+}
+
+function restoreProgressImg2img() {
+    showRestoreProgressButton("img2img", false);
+
+    var id = localGet("img2img_task_id");
+
+    if (id) {
+        showSubmitInterruptingPlaceholder('img2img');
+        requestProgress(id, gradioApp().getElementById('img2img_gallery_container'), gradioApp().getElementById('img2img_gallery'), function() {
+            showSubmitButtons('img2img', true);
+        }, null, 0);
+    }
+
+    return id;
+}
+
+// Expose functions for Gradio's _js hooks explicitly on window
+window.submit = submit;
+window.submit_txt2img_upscale = submit_txt2img_upscale;
+window.restoreProgressTxt2img = restoreProgressTxt2img;
+window.restoreProgressImg2img = restoreProgressImg2img;
+
+
+/**
+ * Configure the width and height elements on `tabname` to accept
+ * pasting of resolutions in the form of "width x height".
+ */
+function setupResolutionPasting(tabname) {
+    var width = gradioApp().querySelector(`#${tabname}_width input[type=number]`);
+    var height = gradioApp().querySelector(`#${tabname}_height input[type=number]`);
+    for (const el of [width, height]) {
+        el.addEventListener('paste', function(event) {
+            var pasteData = event.clipboardData.getData('text/plain');
+            var parsed = pasteData.match(/^\s*(\d+)\D+(\d+)\s*$/);
+            if (parsed) {
+                width.value = parsed[1];
+                height.value = parsed[2];
+                updateInput(width);
+                updateInput(height);
+                event.preventDefault();
+            }
+        });
+    }
+}
+
+onUiLoaded(function() {
+    showRestoreProgressButton('txt2img', localGet("txt2img_task_id"));
+    showRestoreProgressButton('img2img', localGet("img2img_task_id"));
+    setupResolutionPasting('txt2img');
+    setupResolutionPasting('img2img');
+});
+
+
+function modelmerger() {
+    var id = randomId();
+    requestProgress(id, gradioApp().getElementById('modelmerger_results_panel'), null, function() {});
+
+    var res = create_submit_args(arguments);
+    res[0] = id;
+    return res;
+}
+
+
+function ask_for_style_name(_, prompt_text, negative_prompt_text) {
+    var name_ = prompt('Style name:');
+    return [name_, prompt_text, negative_prompt_text];
+}
+
+function confirm_clear_prompt(prompt, negative_prompt) {
+    if (confirm("Delete prompt?")) {
+        prompt = "";
+        negative_prompt = "";
+    }
+
+    return [prompt, negative_prompt];
+}
+
+
+var opts = {};
+onAfterUiUpdate(function() {
+    if (Object.keys(opts).length != 0) return;
+
+    var json_elem = gradioApp().getElementById('settings_json');
+    if (json_elem == null) return;
+
+    var textarea = json_elem.querySelector('textarea');
+    var jsdata = textarea.value;
+    opts = JSON.parse(jsdata);
+
+    executeCallbacks(optionsAvailableCallbacks, undefined, 'onOptionsAvailable'); /*global optionsAvailableCallbacks*/
+    executeCallbacks(optionsChangedCallbacks, undefined, 'onOptionsChanged'); /*global optionsChangedCallbacks*/
+
+    Object.defineProperty(textarea, 'value', {
+        set: function(newValue) {
+            var valueProp = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+            var oldValue = valueProp.get.call(textarea);
+            valueProp.set.call(textarea, newValue);
+
+            if (oldValue != newValue) {
+                opts = JSON.parse(textarea.value);
+            }
+
+            executeCallbacks(optionsChangedCallbacks, undefined, 'onOptionsChanged');
+        },
+        get: function() {
+            var valueProp = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+            return valueProp.get.call(textarea);
+        }
+    });
+
+    json_elem.parentElement.style.display = "none";
+});
+
+onOptionsChanged(function() {
+    var elem = gradioApp().getElementById('sd_checkpoint_hash');
+    var sd_checkpoint_hash = opts.sd_checkpoint_hash || "";
+    var shorthash = sd_checkpoint_hash.substring(0, 10);
+
+    if (elem && elem.textContent != shorthash) {
+        elem.textContent = shorthash;
+        elem.title = sd_checkpoint_hash;
+        elem.href = "https://google.com/search?q=" + sd_checkpoint_hash;
+    }
+});
+
+let txt2img_textarea, img2img_textarea = undefined;
+
+function restart_reload() {
+    document.body.style.backgroundColor = "var(--background-fill-primary)";
+    document.body.innerHTML = '<h1 style="font-family:monospace;margin-top:20%;color:lightgray;text-align:center;">Reloading...</h1>';
+    var requestPing = function() {
+        requestGet("./internal/ping", {}, function(data) {
+            location.reload();
+        }, function() {
+            setTimeout(requestPing, 500);
+        });
+    };
+
+    setTimeout(requestPing, 2000);
+
+    return [];
+}
+
+// Simulate an `input` DOM event for Gradio Textbox component. Needed after you edit its contents in javascript, otherwise your edits
+// will only visible on web page and not sent to python.
+function updateInput(target) {
+    let e = new Event("input", {bubbles: true});
+    Object.defineProperty(e, "target", {value: target});
+    target.dispatchEvent(e);
+}
+
+
+var desiredCheckpointName = null;
+function selectCheckpoint(name) {
+    desiredCheckpointName = name;
+    gradioApp().getElementById('change_checkpoint').click();
+}
+var desiredVAEName = 0;
+function selectVAE(vae) {

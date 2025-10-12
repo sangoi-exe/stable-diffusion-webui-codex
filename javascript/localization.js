@@ -1,7 +1,21 @@
+"use strict";
+// @ts-check
+/*
+ DevNotes (2025-10-12)
+ - Purpose: Apply i18n titles/placeholders using backend-provided dictionary.
+ - Behaviour: Traverses Gradio tree, translates eligible nodes, supports RTL via media queries.
+ - Safety: Guards for node kinds, component resolution via elem_id or fallback.
+*/
 
-// localization = {} -- the dict with translations is created by the backend
+/** @typedef {{ [key: string]: string | boolean | undefined; rtl?: boolean }} LocalizationDict */
+/** @typedef {{ id: number; props?: { elem_id?: string; webui_tooltip?: boolean; placeholder?: string } }} GradioComponent */
+/** @typedef {Window & { localization?: LocalizationDict; gradio_config?: { components?: GradioComponent[] } }} LocalizationWindow */
 
-var ignore_ids_for_localization = {
+/** @type {LocalizationWindow} */
+const localizationWindow = window;
+
+/** @type {Record<string, string>} */
+const ignoreIdsForLocalization = {
     setting_sd_hypernetwork: 'OPTION',
     setting_sd_model_checkpoint: 'OPTION',
     modelmerger_primary_model_name: 'OPTION',
@@ -18,119 +32,156 @@ var ignore_ids_for_localization = {
     extras_upscaler_2: 'OPTION',
 };
 
-var re_num = /^[.\d]+$/;
-var re_emoji = /[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}\u{1F9B0}-\u{1F9B3}]/u;
+const reNum = /^[.\d]+$/;
+const reEmoji = /[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}\u{1F9B0}-\u{1F9B3}]/u;
 
-var original_lines = {};
-var translated_lines = {};
+/** @type {Record<string, number>} */
+const originalLines = {};
+/** @type {Record<string, number>} */
+const translatedLines = {};
 
 function hasLocalization() {
-    return window.localization && Object.keys(window.localization).length > 0;
+    const dict = localizationWindow.localization;
+    return !!(dict && Object.keys(dict).length > 0);
 }
 
+/**
+ * @param {Element} el
+ * @returns {Text[]}
+ */
 function textNodesUnder(el) {
-    var n, a = [], walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
-    while ((n = walk.nextNode())) a.push(n);
-    return a;
+    const nodes = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    let current = walker.nextNode();
+    while (current) {
+        nodes.push(/** @type {Text} */ (current));
+        current = walker.nextNode();
+    }
+    return nodes;
 }
 
+/**
+ * @param {Node} node
+ * @param {string} text
+ */
 function canBeTranslated(node, text) {
     if (!text) return false;
-    if (!node.parentElement) return false;
+    if (!(node.parentElement instanceof HTMLElement)) return false;
 
-    var parentType = node.parentElement.nodeName;
-    if (parentType == 'SCRIPT' || parentType == 'STYLE' || parentType == 'TEXTAREA') return false;
+    const parentType = node.parentElement.nodeName;
+    if (parentType === 'SCRIPT' || parentType === 'STYLE' || parentType === 'TEXTAREA') return false;
 
-    if (parentType == 'OPTION' || parentType == 'SPAN') {
-        var pnode = node;
-        for (var level = 0; level < 4; level++) {
+    if (parentType === 'OPTION' || parentType === 'SPAN') {
+        let level = 0;
+        let pnode = node.parentElement instanceof HTMLElement ? node.parentElement : null;
+        while (pnode instanceof HTMLElement && level < 4) {
+            if (ignoreIdsForLocalization[pnode.id] === parentType) return false;
             pnode = pnode.parentElement;
-            if (!pnode) break;
-
-            if (ignore_ids_for_localization[pnode.id] == parentType) return false;
+            level += 1;
         }
     }
 
-    if (re_num.test(text)) return false;
-    if (re_emoji.test(text)) return false;
+    if (reNum.test(text)) return false;
+    if (reEmoji.test(text)) return false;
     return true;
 }
 
+/**
+ * @param {string} text
+ * @returns {string | undefined}
+ */
 function getTranslation(text) {
     if (!text) return undefined;
 
-    if (translated_lines[text] === undefined) {
-        original_lines[text] = 1;
+    if (translatedLines[text] === undefined) {
+        originalLines[text] = 1;
     }
 
-    var tl = localization[text];
-    if (tl !== undefined) {
-        translated_lines[tl] = 1;
+    const dict = localizationWindow.localization;
+    const translated = dict ? dict[text] : undefined;
+    if (typeof translated === 'string') {
+        translatedLines[translated] = 1;
+        return translated;
     }
 
-    return tl;
+    return undefined;
 }
 
+/**
+ * @param {Text} node
+ */
 function processTextNode(node) {
-    var text = node.textContent.trim();
-
+    const text = node.textContent?.trim() ?? '';
     if (!canBeTranslated(node, text)) return;
 
-    var tl = getTranslation(text);
-    if (tl !== undefined) {
-        node.textContent = tl;
+    const translated = getTranslation(text);
+    if (translated !== undefined) {
+        node.textContent = translated;
     }
 }
 
+/**
+ * @param {Element | Node} node
+ */
 function processNode(node) {
-    if (node.nodeType == 3) {
+    if (node instanceof Text) {
         processTextNode(node);
         return;
     }
 
+    if (node instanceof Document || node instanceof ShadowRoot) {
+        node.childNodes.forEach((child) => processNode(child));
+        return;
+    }
+
+    if (!(node instanceof HTMLElement)) return;
+
     if (node.title) {
-        let tl = getTranslation(node.title);
-        if (tl !== undefined) {
-            node.title = tl;
-        }
+        const tl = getTranslation(node.title);
+        if (tl !== undefined) node.title = tl;
     }
 
-    if (node.placeholder) {
-        let tl = getTranslation(node.placeholder);
-        if (tl !== undefined) {
-            node.placeholder = tl;
-        }
+    if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement) {
+        const tl = getTranslation(node.placeholder);
+        if (tl !== undefined) node.placeholder = tl;
     }
 
-    textNodesUnder(node).forEach(function(node) {
-        processTextNode(node);
-    });
+    textNodesUnder(node).forEach(processTextNode);
 }
 
 function localizeWholePage() {
-    processNode(gradioApp());
+    const root = gradioApp();
+    processNode(root);
 
-    function elem(comp) {
-        var elem_id = comp.props.elem_id ? comp.props.elem_id : "component-" + comp.id;
-        return gradioApp().getElementById(elem_id);
-    }
-
-    for (var comp of window.gradio_config.components) {
-        if (comp.props.webui_tooltip) {
-            let e = elem(comp);
-
-            let tl = e ? getTranslation(e.title) : undefined;
-            if (tl !== undefined) {
-                e.title = tl;
-            }
+    const components = /** @type {GradioComponent[]} */ (localizationWindow.gradio_config?.components ?? []);
+    /**
+     * @param {GradioComponent} comp
+     * @returns {HTMLElement | null}
+     */
+    const resolveComponentElement = (comp) => {
+        const elemId = comp.props?.elem_id ? String(comp.props.elem_id) : `component-${comp.id}`;
+        const appRoot = gradioApp();
+        if ('getElementById' in appRoot && typeof appRoot.getElementById === 'function') {
+            const el = appRoot.getElementById(elemId);
+            if (el instanceof HTMLElement) return el;
         }
-        if (comp.props.placeholder) {
-            let e = elem(comp);
-            let textbox = e ? e.querySelector('[placeholder]') : null;
+        const fallback = document.getElementById(elemId);
+        return fallback instanceof HTMLElement ? fallback : null;
+    };
 
-            let tl = textbox ? getTranslation(textbox.placeholder) : undefined;
-            if (tl !== undefined) {
-                textbox.placeholder = tl;
+    for (const comp of components) {
+        const element = resolveComponentElement(comp);
+        if (!element) continue;
+
+        if (comp.props?.webui_tooltip) {
+            const tl = getTranslation(element.title);
+            if (tl !== undefined) element.title = tl;
+        }
+        if (comp.props?.placeholder) {
+            const textbox = element.querySelector('input[placeholder], textarea[placeholder]');
+            if (textbox instanceof HTMLInputElement || textbox instanceof HTMLTextAreaElement) {
+                const tl = getTranslation(textbox.placeholder);
+                if (tl !== undefined) textbox.placeholder = tl;
             }
         }
     }
@@ -138,30 +189,32 @@ function localizeWholePage() {
 
 function dumpTranslations() {
     if (!hasLocalization()) {
-        // If we don't have any localization,
-        // we will not have traversed the app to find
-        // original_lines, so do that now.
         localizeWholePage();
     }
-    var dumped = {};
-    if (localization.rtl) {
+
+    /** @type {Record<string, string | boolean>} */
+    const dumped = {};
+    const dict = localizationWindow.localization ?? {};
+
+    if (dict.rtl) {
         dumped.rtl = true;
     }
 
-    for (const text in original_lines) {
+    for (const text of Object.keys(originalLines)) {
         if (dumped[text] !== undefined) continue;
-        dumped[text] = localization[text] || text;
+        const value = dict[text];
+        dumped[text] = typeof value === 'string' ? value : text;
     }
 
     return dumped;
 }
 
 function download_localization() {
-    var text = JSON.stringify(dumpTranslations(), null, 4);
+    const text = JSON.stringify(dumpTranslations(), null, 4);
 
-    var element = document.createElement('a');
-    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
-    element.setAttribute('download', "localization.json");
+    const element = document.createElement('a');
+    element.href = `data:text/plain;charset=utf-8,${encodeURIComponent(text)}`;
+    element.download = 'localization.json';
     element.style.display = 'none';
     document.body.appendChild(element);
 
@@ -170,36 +223,41 @@ function download_localization() {
     document.body.removeChild(element);
 }
 
-document.addEventListener("DOMContentLoaded", function() {
-    if (!hasLocalization()) {
-        return;
-    }
-
-    onUiUpdate(function(m) {
-        m.forEach(function(mutation) {
-            mutation.addedNodes.forEach(function(node) {
-                processNode(node);
-            });
+/**
+ * @param {MutationRecord[] | MutationRecord | null | undefined} mutations
+ */
+function handleLocalizationMutations(mutations) {
+    const records = Array.isArray(mutations) ? mutations : mutations ? [mutations] : [];
+    for (const record of records) {
+        if (!record) continue;
+        record.addedNodes.forEach((node) => {
+            processNode(node);
         });
-    });
+    }
+}
 
+document.addEventListener('DOMContentLoaded', () => {
+    if (!hasLocalization()) return;
+
+    onUiUpdate(handleLocalizationMutations);
     localizeWholePage();
 
-    if (localization.rtl) { // if the language is from right to left,
-        (new MutationObserver((mutations, observer) => { // wait for the style to load
-            mutations.forEach(mutation => {
-                mutation.addedNodes.forEach(node => {
-                    if (node.tagName === 'STYLE') {
-                        observer.disconnect();
-
-                        for (const x of node.sheet.rules) { // find all rtl media rules
-                            if (Array.from(x.media || []).includes('rtl')) {
-                                x.media.appendMedium('all'); // enable them
+    if (localizationWindow.localization?.rtl) {
+        const observer = new MutationObserver((mutations, obs) => {
+            for (const mutation of mutations) {
+                mutation.addedNodes.forEach((node) => {
+                    if (node instanceof HTMLStyleElement && node.sheet) {
+                        obs.disconnect();
+                        const rules = node.sheet.cssRules;
+                        for (const rule of Array.from(rules)) {
+                            if (rule instanceof CSSMediaRule && Array.from(rule.media).includes('rtl')) {
+                                rule.media.appendMedium('all');
                             }
                         }
                     }
                 });
-            });
-        })).observe(gradioApp(), {childList: true});
+            }
+        });
+        observer.observe(document.head, { childList: true });
     }
 });

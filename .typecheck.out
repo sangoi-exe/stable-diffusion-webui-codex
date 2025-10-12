@@ -1,0 +1,52 @@
+javascript/ui.js(60,5): error TS2322: Type 'HTMLElement[]' is not assignable to type 'HTMLButtonElement[]'.
+  Type 'HTMLElement' is missing the following properties from type 'HTMLButtonElement': disabled, form, formAction, formEnctype, and 15 more.
+javascript/ui.js(109,10): error TS2339: Property 'args_to_array' does not exist on type 'UIWindow'.
+javascript/ui.js(175,13): error TS2532: Object is possibly 'undefined'.
+javascript/ui.js(248,28): error TS7006: Parameter 'tabname' implicitly has an 'any' type.
+javascript/ui.js(248,37): error TS7006: Parameter 'show' implicitly has an 'any' type.
+javascript/ui.js(252,44): error TS7006: Parameter 'tabname' implicitly has an 'any' type.
+javascript/ui.js(288,39): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+javascript/ui.js(292,37): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+javascript/ui.js(292,76): error TS2352: Conversion of type 'unknown[]' to type 'IArguments' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Property 'callee' is missing in type 'unknown[]' but required in type 'IArguments'.
+javascript/ui.js(298,31): error TS2345: Argument of type 'IArguments' is not assignable to parameter of type 'unknown[]'.
+  Type 'IArguments' is missing the following properties from type 'unknown[]': pop, push, concat, join, and 26 more.
+javascript/ui.js(308,31): error TS2345: Argument of type 'IArguments' is not assignable to parameter of type 'unknown[]'.
+  Type 'IArguments' is missing the following properties from type 'unknown[]': pop, push, concat, join, and 26 more.
+javascript/ui.js(312,31): error TS2345: Argument of type 'IArguments' is not assignable to parameter of type 'unknown[]'.
+  Type 'IArguments' is missing the following properties from type 'unknown[]': pop, push, concat, join, and 26 more.
+javascript/ui.js(315,26): error TS7006: Parameter 'tabname' implicitly has an 'any' type.
+javascript/ui.js(359,17): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+javascript/ui.js(360,17): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+javascript/ui.js(384,29): error TS7006: Parameter '_' implicitly has an 'any' type.
+javascript/ui.js(384,32): error TS7006: Parameter 'promptText' implicitly has an 'any' type.
+javascript/ui.js(384,44): error TS7006: Parameter 'negativePromptText' implicitly has an 'any' type.
+javascript/ui.js(389,31): error TS7006: Parameter 'promptValue' implicitly has an 'any' type.
+javascript/ui.js(389,44): error TS7006: Parameter 'negativePromptValue' implicitly has an 'any' type.
+javascript/ui.js(398,5): error TS2451: Cannot redeclare block-scoped variable 'opts'.
+javascript/ui.js(410,9): error TS2588: Cannot assign to 'opts' because it is a constant.
+javascript/ui.js(423,34): error TS2684: The 'this' context of type '(() => any) | undefined' is not assignable to method's 'this' of type '(this: HTMLTextAreaElement) => any'.
+  Type 'undefined' is not assignable to type '(this: HTMLTextAreaElement) => any'.
+javascript/ui.js(423,34): error TS18048: 'valueDescriptor.get' is possibly 'undefined'.
+javascript/ui.js(424,17): error TS2684: The 'this' context of type '((v: any) => void) | undefined' is not assignable to method's 'this' of type '(this: HTMLTextAreaElement, args_0: any) => void'.
+  Type 'undefined' is not assignable to type '(this: HTMLTextAreaElement, args_0: any) => void'.
+javascript/ui.js(424,17): error TS18048: 'valueDescriptor.set' is possibly 'undefined'.
+javascript/ui.js(427,25): error TS2588: Cannot assign to 'opts' because it is a constant.
+javascript/ui.js(435,24): error TS2684: The 'this' context of type '(() => any) | undefined' is not assignable to method's 'this' of type '(this: HTMLTextAreaElement) => any'.
+  Type 'undefined' is not assignable to type '(this: HTMLTextAreaElement) => any'.
+javascript/ui.js(435,24): error TS18048: 'valueDescriptor.get' is possibly 'undefined'.
+javascript/ui.js(481,27): error TS7006: Parameter 'name' implicitly has an 'any' type.
+javascript/ui.js(487,20): error TS7006: Parameter 'vae' implicitly has an 'any' type.
+javascript/ui.js(491,41): error TS7006: Parameter 'w' implicitly has an 'any' type.
+javascript/ui.js(491,44): error TS7006: Parameter 'h' implicitly has an 'any' type.
+javascript/ui.js(491,47): error TS7006: Parameter 'r' implicitly has an 'any' type.
+javascript/ui.js(494,21): error TS2339: Property 'naturalWidth' does not exist on type 'HTMLCanvasElement | HTMLImageElement'.
+  Property 'naturalWidth' does not exist on type 'HTMLCanvasElement'.
+javascript/ui.js(494,52): error TS2339: Property 'naturalHeight' does not exist on type 'HTMLCanvasElement | HTMLImageElement'.
+  Property 'naturalHeight' does not exist on type 'HTMLCanvasElement'.
+javascript/ui.js(506,24): error TS7006: Parameter 'elemId' implicitly has an 'any' type.
+javascript/ui.js(514,28): error TS7006: Parameter 'tabname' implicitly has an 'any' type.

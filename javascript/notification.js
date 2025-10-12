@@ -1,53 +1,81 @@
-// Monitors the gallery and sends a browser notification when the leading image is new.
+"use strict";
+// @ts-check
+/*
+ DevNotes (2025-10-12)
+ - Purpose: Desktop notification + audio cue when new images land in the gallery.
+ - Safety: Permission checks; volume clamped; dedup count via Set; requires Notification API.
+*/
 
+/**
+ * Monitor the gallery and send a browser notification when a new image appears.
+ */
+
+/** @type {string | null} */
 let lastHeadImg = null;
-
+/** @type {HTMLButtonElement | null} */
 let notificationButton = null;
 
-onAfterUiUpdate(function() {
-    if (notificationButton == null) {
-        notificationButton = gradioApp().getElementById('request_notifications');
+/**
+ * @param {string} id
+ * @returns {HTMLElement | null}
+ */
+function getAppElementById(id) {
+    const root = gradioApp();
+    if ('getElementById' in root && typeof root.getElementById === 'function') {
+        const element = root.getElementById(id);
+        if (element instanceof HTMLElement) return element;
+    }
+    const fallback = document.getElementById(id);
+    return fallback instanceof HTMLElement ? fallback : null;
+}
 
-        if (notificationButton != null) {
+onAfterUiUpdate(() => {
+    if (!notificationButton) {
+        const button = getAppElementById('request_notifications');
+        if (button instanceof HTMLButtonElement) {
+            notificationButton = button;
             notificationButton.addEventListener('click', () => {
                 void Notification.requestPermission();
             }, true);
         }
     }
 
-    const galleryPreviews = gradioApp().querySelectorAll('div[id^="tab_"] div[id$="_results"] .thumbnail-item > img');
+    const galleryPreviews = Array.from(gradioApp().querySelectorAll('div[id^="tab_"] div[id$="_results"] .thumbnail-item > img'))
+        .filter((img) => img instanceof HTMLImageElement);
 
-    if (galleryPreviews == null) return;
+    if (!galleryPreviews.length) return;
 
-    const headImg = galleryPreviews[0]?.src;
-
-    if (headImg == null || headImg == lastHeadImg) return;
-
+    const headImg = /** @type {HTMLImageElement} */ (galleryPreviews[0]).src;
+    if (!headImg || headImg === lastHeadImg) return;
     lastHeadImg = headImg;
 
-    // play notification sound if available
-    const notificationAudio = gradioApp().querySelector('#audio_notification #waveform > div')?.shadowRoot?.querySelector('audio');
-    if (notificationAudio) {
-        notificationAudio.volume = opts.notification_volume / 100.0 || 1.0;
-        notificationAudio.play();
+    const audioContainer = gradioApp().querySelector('#audio_notification #waveform > div');
+    const audio = audioContainer && audioContainer instanceof HTMLElement
+        ? audioContainer.shadowRoot?.querySelector('audio')
+        : null;
+    if (audio instanceof HTMLAudioElement) {
+        const volume = Number(opts.notification_volume ?? 100) / 100;
+        audio.volume = Number.isFinite(volume) ? Math.min(Math.max(volume, 0), 1) : 1;
+        void audio.play();
     }
 
     if (document.hasFocus()) return;
 
-    // Multiple copies of the images are in the DOM when one is selected. Dedup with a Set to get the real number generated.
-    const imgs = new Set(Array.from(galleryPreviews).map(img => img.src));
+    const uniqueImages = new Set(galleryPreviews.map((img) => /** @type {HTMLImageElement} */ (img).src));
+    const gridAdjustment = opts.return_grid ? 1 : 0;
+    const count = uniqueImages.size > 1 ? Math.max(uniqueImages.size - gridAdjustment, 1) : 1;
 
-    const notification = new Notification(
-        'Stable Diffusion',
-        {
-            body: `Generated ${imgs.size > 1 ? imgs.size - opts.return_grid : 1} image${imgs.size > 1 ? 's' : ''}`,
-            icon: headImg,
-            image: headImg,
-        }
-    );
+    if (Notification.permission !== 'granted') return;
 
-    notification.onclick = function(_) {
-        parent.focus();
-        this.close();
+    const options = /** @type {NotificationOptions & { image?: string }} */ ({
+        body: `Generated ${count} image${count !== 1 ? 's' : ''}`,
+        icon: headImg,
+    });
+    options.image = headImg;
+
+    const notification = new Notification('Stable Diffusion', options);
+    notification.onclick = () => {
+        window.focus();
+        notification.close();
     };
 });

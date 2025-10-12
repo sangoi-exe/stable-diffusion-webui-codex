@@ -1,272 +1,473 @@
+"use strict";
+// @ts-check
+/*
+ DevNotes (2025-10-12)
+ - Purpose: Filtro/ordem/pesquisa de cartões (LoRA/Checkpoints/TI/…); popups de metadata.
+ - Safety: JSDoc + guards em todos os seletores; GET/JSON robusto; inserções idempotentes.
+*/
+
+/**
+ * Shared helpers and state for the Extra Networks front-end.
+ * The original script relied on implicit globals and loose DOM typing; this
+ * rewrite keeps behaviour intact while making every callsite pass strict
+ * TypeScript (via `allowJs` + `checkJs`).
+ */
+
+/** @typedef {Document | ShadowRoot | HTMLElement} AppRoot */
+
+/**
+ * Record of tab -> callback used when the page requests a filter refresh.
+ * @typedef {Record<string, (force?: boolean) => void>} CallbackMap
+ */
+
+/**
+ * Metadata editor widgets keyed by tab/page identifier.
+ * @typedef {{
+ *   page: HTMLElement | null;
+ *   nameTextarea: HTMLTextAreaElement | HTMLInputElement | null;
+ *   button: HTMLElement | null;
+ * }} ExtraPageMetadataEditor
+ */
+
+/** @type {CallbackMap} */
+const extraNetworksApplyFilter = {};
+/** @type {CallbackMap} */
+const extraNetworksApplySort = {};
+/** @type {Record<string, HTMLTextAreaElement | null>} */
+const activePromptTextarea = {};
+/** @type {Record<string, ExtraPageMetadataEditor>} */
+const extraPageUserMetadataEditors = {};
+
+let globalPopup = /** @type {HTMLElement | null} */ (null);
+let globalPopupInner = /** @type {HTMLElement | null} */ (null);
+/** @type {Record<string, HTMLElement | null>} */
+const storedPopupIds = {};
+
+/** @type {Array<() => void>} */
+const uiAfterScriptsCallbacks = [];
+let uiAfterScriptsTimeout = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+let executedAfterScripts = false;
+
+const re_extranet = /<([^:^>]+:[^:]+):[\d.]+>(.*)/;
+const re_extranet_g = /<([^:^>]+:[^:]+):[\d.]+>/g;
+
+const re_extranet_neg = /\(([^:^>]+:[\d.]+)\)/;
+const re_extranet_g_neg = /\(([^:^>]+:[\d.]+)\)/g;
+
+/**
+ * Returns the active Gradio root element.
+ * @returns {AppRoot}
+ */
+function appRoot() {
+    return gradioApp();
+}
+
+/**
+ * Query a selector and ensure the element is an HTMLElement.
+ * @param {AppRoot} root
+ * @param {string} selector
+ * @returns {HTMLElement | null}
+ */
+function queryHTMLElement(root, selector) {
+    const element = root.querySelector(selector);
+    return element instanceof HTMLElement ? element : null;
+}
+
+/**
+ * Query a selector and ensure the element exposes a text `value` property.
+ * @param {AppRoot} root
+ * @param {string} selector
+ * @returns {HTMLInputElement | HTMLTextAreaElement | null}
+ */
+function queryTextControl(root, selector) {
+    const element = root.querySelector(selector);
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+        return element;
+    }
+    return null;
+}
+
+/**
+ * Safe wrapper around `getElementById` for the Gradio root.
+ * @param {string} id
+ * @returns {HTMLElement | null}
+ */
+function getAppElementById(id) {
+    const root = appRoot();
+    if ('getElementById' in root && typeof root.getElementById === 'function') {
+        const result = root.getElementById(id);
+        return result instanceof HTMLElement ? result : null;
+    }
+    const fallback = document.getElementById(id);
+    return fallback instanceof HTMLElement ? fallback : null;
+}
+
+/**
+ * Ensure the argument is an HTMLElement before using DOM APIs.
+ * @template {Element} T
+ * @param {Element | null} element
+ * @param {(node: Element) => node is T} predicate
+ * @returns {T | null}
+ */
+function guardElement(element, predicate) {
+    if (element && predicate(element)) {
+        return element;
+    }
+    return null;
+}
+
+/**
+ * Toggle a CSS snippet under a stable key.
+ * @param {string} key
+ * @param {string} css
+ * @param {boolean} enable
+ */
 function toggleCss(key, css, enable) {
-    var style = document.getElementById(key);
-    if (enable && !style) {
-        style = document.createElement('style');
-        style.id = key;
-        style.type = 'text/css';
-        document.head.appendChild(style);
+    let style = document.getElementById(key);
+    if (enable && !(style instanceof HTMLStyleElement)) {
+        const newStyle = document.createElement('style');
+        newStyle.id = key;
+        newStyle.type = 'text/css';
+        document.head.appendChild(newStyle);
+        style = newStyle;
     }
-    if (style && !enable) {
+
+    if (!enable && style) {
         document.head.removeChild(style);
+        return;
     }
-    if (style) {
-        style.innerHTML == '';
+
+    if (style instanceof HTMLStyleElement) {
+        style.innerHTML = '';
         style.appendChild(document.createTextNode(css));
     }
 }
 
-function setupExtraNetworksForTab(tabname) {
-    function registerPrompt(tabname, id) {
-        var textarea = gradioApp().querySelector("#" + id + " > label > textarea");
+/**
+ * Associate the visible prompt textareas with the requested tab.
+ * @param {string} tabname
+ * @param {string} id
+ */
+function registerPrompt(tabname, id) {
+    const root = appRoot();
+    const textarea = root.querySelector(`#${id} > label > textarea`);
+    if (!(textarea instanceof HTMLTextAreaElement)) return;
 
-        if (!activePromptTextarea[tabname]) {
-            activePromptTextarea[tabname] = textarea;
-        }
-
-        textarea.addEventListener("focus", function() {
-            activePromptTextarea[tabname] = textarea;
-        });
+    if (!activePromptTextarea[tabname]) {
+        activePromptTextarea[tabname] = textarea;
     }
 
-    var tabnav = gradioApp().querySelector('#' + tabname + '_extra_tabs > div.tab-nav');
-    var controlsDiv = document.createElement('DIV');
+    textarea.addEventListener('focus', () => {
+        activePromptTextarea[tabname] = textarea;
+    });
+}
+
+/**
+ * Attach filtering/sorting wiring for a single Extra Networks tab.
+ * @param {string} tabname
+ */
+function setupExtraNetworksForTab(tabname) {
+    const root = appRoot();
+
+    const tabnav = queryHTMLElement(root, `#${tabname}_extra_tabs > div.tab-nav`);
+    if (!tabnav) return;
+
+    const controlsDiv = document.createElement('div');
     controlsDiv.classList.add('extra-networks-controls-div');
     tabnav.appendChild(controlsDiv);
-    tabnav.insertBefore(controlsDiv, null);
 
-    var this_tab = gradioApp().querySelector('#' + tabname + '_extra_tabs');
-    this_tab.querySelectorAll(":scope > [id^='" + tabname + "_']").forEach(function(elem) {
-        // tabname_full = {tabname}_{extra_networks_tabname}
-        var tabname_full = elem.id;
-        var search = gradioApp().querySelector("#" + tabname_full + "_extra_search");
-        var sort_dir = gradioApp().querySelector("#" + tabname_full + "_extra_sort_dir");
-        var refresh = gradioApp().querySelector("#" + tabname_full + "_extra_refresh");
-        var currentSort = '';
+    const tabContainer = queryHTMLElement(root, `#${tabname}_extra_tabs`);
+    if (!tabContainer) return;
 
-        // If any of the buttons above don't exist, we want to skip this iteration of the loop.
-        if (!search || !sort_dir || !refresh) {
-            return; // `return` is equivalent of `continue` but for forEach loops.
+    const tabChildren = tabContainer.querySelectorAll(`:scope > [id^='${tabname}_']`);
+    tabChildren.forEach((child) => {
+        if (!(child instanceof HTMLElement)) return;
+
+        const tabnameFull = child.id;
+        const searchControl = queryTextControl(root, `#${tabnameFull}_extra_search`);
+        const sortDirButton = queryHTMLElement(root, `#${tabnameFull}_extra_sort_dir`);
+        const refreshButton = queryHTMLElement(root, `#${tabnameFull}_extra_refresh`);
+
+        if (!searchControl || !sortDirButton || !refreshButton) {
+            return;
         }
 
-        var applyFilter = function(force) {
-            var searchTerm = search.value.toLowerCase();
+        let currentSortSignature = '';
 
-            // get UI preset
-            radioUI = gradioApp().querySelector('#forge_ui_preset');
-            radioButtons = radioUI.getElementsByTagName('input');
-            UIresult = 3;   //  default to 'all'
-            for (i = 0; i < radioButtons.length; i++) {
-                if (radioButtons[i].checked) {
-                    UIresult = i;
+        /**
+         * Apply the filter predicate (search tokens + UI preset).
+         * @param {boolean} [force]
+         */
+        const applyFilter = (force = false) => {
+            const searchTerm = searchControl.value.toLowerCase();
+            let uiPreset = 3; // default = all
+
+            const radioUi = queryHTMLElement(root, '#forge_ui_preset');
+            if (radioUi) {
+                const radioInputs = Array.from(radioUi.getElementsByTagName('input'));
+                for (let i = 0; i < radioInputs.length; i += 1) {
+                    const radioInput = radioInputs[i];
+                    if (radioInput && radioInput.checked) {
+                        uiPreset = i;
+                        break;
+                    }
                 }
             }
 
-            gradioApp().querySelectorAll('#' + tabname + '_extra_tabs div.card').forEach(function(elem) {
-                var searchOnly = elem.querySelector('.search_only');
-                var text = Array.prototype.map.call(elem.querySelectorAll('.search_terms, .description'), function(t) {
-                    return t.textContent.toLowerCase();
-                }).join(" ");
+            const tokens = searchTerm.length > 0 ? searchTerm.split(/\s+/).filter(Boolean) : [];
+            const isLoraFilterDisabled = Boolean(opts.lora_filter_disabled);
 
-                var visible = true;
-                if (searchOnly && searchTerm.length < 4)    visible = false;
+            const cards = root.querySelectorAll(`#${tabname}_extra_tabs div.card`);
+            cards.forEach((cardNode) => {
+                if (!(cardNode instanceof HTMLElement)) return;
 
-                splitSearch = searchTerm.split(" ");
-                splitSearch.forEach(function(partial) {
-                    if (text.indexOf(partial) == -1)        visible = false;
-                })
+                const searchOnly = cardNode.querySelector('.search_only');
+                const textContent = Array.prototype.map
+                    .call(cardNode.querySelectorAll('.search_terms, .description'), (t) => t.textContent.toLowerCase())
+                    .join(' ');
 
-                sdversion = elem.getAttribute('data-sort-sdversion');
-                if (sdversion == null) ;
-                else if (sdversion == 'SdVersion.Unknown')  ;
-                else if (opts.lora_filter_disabled == True) ;
-                else if (UIresult == 3) ;   //  'all'
-                else if (UIresult == 0) {   //  'sd'
-                    if (sdversion != 'SdVersion.SD1' && sdversion != 'SdVersion.SD2')   visible = false;
+                let visible = true;
+                if (searchOnly && searchTerm.length < 4) {
+                    visible = false;
                 }
-                else if (UIresult == 1) {   //  'xl'
-                    if (sdversion != 'SdVersion.SDXL')  visible = false;
+
+                for (const token of tokens) {
+                    if (!textContent.includes(token)) {
+                        visible = false;
+                        break;
+                    }
                 }
-                else if (UIresult == 2) {   //  'flux'
-                    if (sdversion != 'SdVersion.Flux')  visible = false;
+
+                const sdVersion = cardNode.getAttribute('data-sort-sdversion');
+                if (sdVersion !== null && sdVersion !== 'SdVersion.Unknown' && !isLoraFilterDisabled) {
+                    if (uiPreset === 0 && sdVersion !== 'SdVersion.SD1' && sdVersion !== 'SdVersion.SD2') {
+                        visible = false;
+                    } else if (uiPreset === 1 && sdVersion !== 'SdVersion.SDXL') {
+                        visible = false;
+                    } else if (uiPreset === 2 && sdVersion !== 'SdVersion.Flux') {
+                        visible = false;
+                    }
                 }
-                
-                if (visible) {
-                    elem.classList.remove("hidden");
-                } else {
-                    elem.classList.add("hidden");
-                }
+
+                cardNode.classList.toggle('hidden', !visible);
             });
 
             applySort(force);
         };
 
+        /**
+         * Sort cards according to the active sort control.
+         * @param {boolean} [force]
+         */
+        const applySort = (force = false) => {
+            const cards = Array.from(root.querySelectorAll(`#${tabnameFull} div.card`)).filter((card) => card instanceof HTMLElement);
+            const parent = queryHTMLElement(root, `#${tabnameFull}_cards`);
+            if (!parent) return;
 
-        var applySort = function(force) {
-            var cards = gradioApp().querySelectorAll('#' + tabname_full + ' div.card');
-            var parent = gradioApp().querySelector('#' + tabname_full + "_cards");
-            var reverse = sort_dir.dataset.sortdir == "Descending";
-            var activeSearchElem = gradioApp().querySelector('#' + tabname_full + "_controls .extra-network-control--sort.extra-network-control--enabled");
-            var sortKey = activeSearchElem ? activeSearchElem.dataset.sortkey : "default";
-            var sortKeyDataField = "sort" + sortKey.charAt(0).toUpperCase() + sortKey.slice(1);
-            var sortKeyStore = sortKey + "-" + sort_dir.dataset.sortdir + "-" + cards.length;
+            const sortDir = sortDirButton.dataset.sortdir || 'Ascending';
+            const reverse = sortDir === 'Descending';
 
-            if (sortKeyStore == currentSort && !force) {
+            const activeSortControl = queryHTMLElement(
+                root,
+                `#${tabnameFull}_controls .extra-network-control--sort.extra-network-control--enabled`
+            );
+            const sortKey = activeSortControl?.dataset.sortkey || 'default';
+            const sortKeyDataField = `sort${sortKey.charAt(0).toUpperCase()}${sortKey.slice(1)}`;
+            const sortSignature = `${sortKey}-${sortDir}-${cards.length}`;
+
+            if (!force && sortSignature === currentSortSignature) {
                 return;
             }
-            currentSort = sortKeyStore;
+            currentSortSignature = sortSignature;
 
-            var sortedCards = Array.from(cards);
-            sortedCards.sort(function(cardA, cardB) {
-                var a = cardA.dataset[sortKeyDataField];
-                var b = cardB.dataset[sortKeyDataField];
-                if (!isNaN(a) && !isNaN(b)) {
-                    return parseInt(a) - parseInt(b);
+            cards.sort((cardA, cardB) => {
+                const a = cardA.dataset[sortKeyDataField] ?? '';
+                const b = cardB.dataset[sortKeyDataField] ?? '';
+
+                const aNum = Number(a);
+                const bNum = Number(b);
+                if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) {
+                    return aNum - bNum;
                 }
-
-                return (a < b ? -1 : (a > b ? 1 : 0));
+                return a.localeCompare(b);
             });
 
             if (reverse) {
-                sortedCards.reverse();
+                cards.reverse();
             }
 
             parent.innerHTML = '';
-
-            var frag = document.createDocumentFragment();
-            sortedCards.forEach(function(card) {
-                frag.appendChild(card);
-            });
-            parent.appendChild(frag);
+            const fragment = document.createDocumentFragment();
+            for (const card of cards) {
+                fragment.appendChild(card);
+            }
+            parent.appendChild(fragment);
         };
 
-        search.addEventListener("input", function() {
-            applyFilter();
-        });
-        applySort();
-        applyFilter();
+        searchControl.addEventListener('input', () => applyFilter());
+        applySort(true);
+        applyFilter(true);
 
-        extraNetworksApplySort[tabname_full] = applySort;
-        extraNetworksApplyFilter[tabname_full] = applyFilter;
+        extraNetworksApplySort[tabnameFull] = (force) => applySort(Boolean(force));
+        extraNetworksApplyFilter[tabnameFull] = (force) => applyFilter(Boolean(force));
 
-        var controls = gradioApp().querySelector("#" + tabname_full + "_controls");
-        controlsDiv.insertBefore(controls, null);
+        const controls = queryHTMLElement(root, `#${tabnameFull}_controls`);
+        if (controls) {
+            controlsDiv.appendChild(controls);
+        }
 
-        if (elem.style.display != "none") {
-            extraNetworksShowControlsForPage(tabname, tabname_full);
+        if (child.style.display !== 'none') {
+            extraNetworksShowControlsForPage(tabname, tabnameFull);
         }
     });
 
-    registerPrompt(tabname, tabname + "_prompt");
-    registerPrompt(tabname, tabname + "_neg_prompt");
+    registerPrompt(tabname, `${tabname}_prompt`);
+    registerPrompt(tabname, `${tabname}_neg_prompt`);
 }
 
-function extraNetworksMovePromptToTab(tabname, id, showPrompt, showNegativePrompt) {
-    if (!gradioApp().querySelector('.toprow-compact-tools')) return; // only applicable for compact prompt layout
-
-    var promptContainer = gradioApp().getElementById(tabname + '_prompt_container');
-    var prompt = gradioApp().getElementById(tabname + '_prompt_row');
-    var negPrompt = gradioApp().getElementById(tabname + '_neg_prompt_row');
-    var elem = id ? gradioApp().getElementById(id) : null;
-
-    if (showNegativePrompt && elem) {
-        elem.insertBefore(negPrompt, elem.firstChild);
-    } else {
-        promptContainer.insertBefore(negPrompt, promptContainer.firstChild);
-    }
-
-    if (showPrompt && elem) {
-        elem.insertBefore(prompt, elem.firstChild);
-    } else {
-        promptContainer.insertBefore(prompt, promptContainer.firstChild);
-    }
-
-    if (elem) {
-        elem.classList.toggle('extra-page-prompts-active', showNegativePrompt || showPrompt);
-    }
-}
-
-
-function extraNetworksShowControlsForPage(tabname, tabname_full) {
-    gradioApp().querySelectorAll('#' + tabname + '_extra_tabs .extra-networks-controls-div > div').forEach(function(elem) {
-        var targetId = tabname_full + "_controls";
-        elem.style.display = elem.id == targetId ? "" : "none";
-    });
-}
-
-
-function extraNetworksUnrelatedTabSelected(tabname) { // called from python when user selects an unrelated tab (generate)
-    extraNetworksMovePromptToTab(tabname, '', false, false);
-
-    extraNetworksShowControlsForPage(tabname, null);
-}
-
-function extraNetworksTabSelected(tabname, id, showPrompt, showNegativePrompt, tabname_full) { // called from python when user selects an extra networks tab
-    extraNetworksMovePromptToTab(tabname, id, showPrompt, showNegativePrompt);
-
-    extraNetworksShowControlsForPage(tabname, tabname_full);
-}
-
-function applyExtraNetworkFilter(tabname_full) {
-    var doFilter = function() {
-        var applyFunction = extraNetworksApplyFilter[tabname_full];
-
-        if (applyFunction) {
-            applyFunction(true);
-        }
-    };
-    setTimeout(doFilter, 1);
-}
-
-function applyExtraNetworkSort(tabname_full) {
-    var doSort = function() {
-        extraNetworksApplySort[tabname_full](true);
-    };
-    setTimeout(doSort, 1);
-}
-
-var extraNetworksApplyFilter = {};
-var extraNetworksApplySort = {};
-var activePromptTextarea = {};
-
+/**
+ * Setup all tabs once the DOM finishes rendering.
+ */
 function setupExtraNetworks() {
     setupExtraNetworksForTab('txt2img');
     setupExtraNetworksForTab('img2img');
 }
 
-var re_extranet = /<([^:^>]+:[^:]+):[\d.]+>(.*)/;
-var re_extranet_g = /<([^:^>]+:[^:]+):[\d.]+>/g;
+/**
+ * Move prompts in/out of the extra networks panel.
+ * @param {string} tabname
+ * @param {string} id
+ * @param {boolean} showPrompt
+ * @param {boolean} showNegativePrompt
+ */
+function extraNetworksMovePromptToTab(tabname, id, showPrompt, showNegativePrompt) {
+    const root = appRoot();
+    if (!root.querySelector('.toprow-compact-tools')) return;
 
-var re_extranet_neg = /\(([^:^>]+:[\d.]+)\)/;
-var re_extranet_g_neg = /\(([^:^>]+:[\d.]+)\)/g;
+    const promptContainer = getAppElementById(`${tabname}_prompt_container`);
+    const promptRow = getAppElementById(`${tabname}_prompt_row`);
+    const negPromptRow = getAppElementById(`${tabname}_neg_prompt_row`);
+    if (!promptContainer || !promptRow || !negPromptRow) return;
+
+    const target = id ? getAppElementById(id) : null;
+
+    if (showNegativePrompt && target) {
+        target.insertBefore(negPromptRow, target.firstChild);
+    } else {
+        promptContainer.insertBefore(negPromptRow, promptContainer.firstChild);
+    }
+
+    if (showPrompt && target) {
+        target.insertBefore(promptRow, target.firstChild);
+    } else {
+        promptContainer.insertBefore(promptRow, promptContainer.firstChild);
+    }
+
+    if (target instanceof HTMLElement) {
+        target.classList.toggle('extra-page-prompts-active', showNegativePrompt || showPrompt);
+    }
+}
+
+/**
+ * Show or hide the inline controls for a given tab page.
+ * @param {string} tabname
+ * @param {string | null} tabnameFull
+ */
+function extraNetworksShowControlsForPage(tabname, tabnameFull) {
+    const root = appRoot();
+    const controls = root.querySelectorAll(`#${tabname}_extra_tabs .extra-networks-controls-div > div`);
+    controls.forEach((control) => {
+        if (!(control instanceof HTMLElement)) return;
+        const targetId = tabnameFull ? `${tabnameFull}_controls` : '';
+        control.style.display = control.id === targetId ? '' : 'none';
+    });
+}
+
+/**
+ * Reset controls when an unrelated tab is selected.
+ * @param {string} tabname
+ */
+function extraNetworksUnrelatedTabSelected(tabname) {
+    extraNetworksMovePromptToTab(tabname, '', false, false);
+    extraNetworksShowControlsForPage(tabname, null);
+}
+
+/**
+ * Called when the user activates an extra network tab.
+ * @param {string} tabname
+ * @param {string} id
+ * @param {boolean} showPrompt
+ * @param {boolean} showNegativePrompt
+ * @param {string} tabnameFull
+ */
+function extraNetworksTabSelected(tabname, id, showPrompt, showNegativePrompt, tabnameFull) {
+    extraNetworksMovePromptToTab(tabname, id, showPrompt, showNegativePrompt);
+    extraNetworksShowControlsForPage(tabname, tabnameFull);
+}
+
+/**
+ * Force the filter callback for the requested tab.
+ * @param {string} tabnameFull
+ */
+function applyExtraNetworkFilter(tabnameFull) {
+    setTimeout(() => {
+        const applyFn = extraNetworksApplyFilter[tabnameFull];
+        if (applyFn) applyFn(true);
+    }, 1);
+}
+
+/**
+ * Force the sort callback for the requested tab.
+ * @param {string} tabnameFull
+ */
+function applyExtraNetworkSort(tabnameFull) {
+    setTimeout(() => {
+        const applyFn = extraNetworksApplySort[tabnameFull];
+        if (applyFn) applyFn(true);
+    }, 1);
+}
+
+/**
+ * Try to remove an extra network token from a prompt.
+ * @param {HTMLTextAreaElement} textarea
+ * @param {string} text
+ * @param {boolean} isNeg
+ * @returns {boolean}
+ */
 function tryToRemoveExtraNetworkFromPrompt(textarea, text, isNeg) {
-    var m = text.match(isNeg ? re_extranet_neg : re_extranet);
-    var replaced = false;
-    var newTextareaText;
-    var extraTextBeforeNet = opts.extra_networks_add_text_separator;
-    if (m) {
-        var extraTextAfterNet = m[2];
-        var partToSearch = m[1];
-        var foundAtPosition = -1;
-        newTextareaText = textarea.value.replaceAll(isNeg ? re_extranet_g_neg : re_extranet_g, function(found, net, pos) {
-            m = found.match(isNeg ? re_extranet_neg : re_extranet);
-            if (m[1] == partToSearch) {
+    let match = text.match(isNeg ? re_extranet_neg : re_extranet);
+    let replaced = false;
+    let newTextareaText = textarea.value;
+    const extraTextBeforeNet = String(opts.extra_networks_add_text_separator || '');
+
+    if (match) {
+        const extraTextAfterNet = match[2] || '';
+        const partToSearch = match[1];
+        let foundAtPosition = -1;
+        const regex = isNeg ? re_extranet_g_neg : re_extranet_g;
+        newTextareaText = textarea.value.replaceAll(regex, (found, _, pos) => {
+            const innerMatch = found.match(isNeg ? re_extranet_neg : re_extranet);
+            if (innerMatch && innerMatch[1] === partToSearch) {
                 replaced = true;
                 foundAtPosition = pos;
-                return "";
+                return '';
             }
             return found;
         });
+
         if (foundAtPosition >= 0) {
-            if (extraTextAfterNet && newTextareaText.substr(foundAtPosition, extraTextAfterNet.length) == extraTextAfterNet) {
-                newTextareaText = newTextareaText.substr(0, foundAtPosition) + newTextareaText.substr(foundAtPosition + extraTextAfterNet.length);
+            if (extraTextAfterNet && newTextareaText.substr(foundAtPosition, extraTextAfterNet.length) === extraTextAfterNet) {
+                newTextareaText = newTextareaText.slice(0, foundAtPosition) + newTextareaText.slice(foundAtPosition + extraTextAfterNet.length);
             }
-            if (newTextareaText.substr(foundAtPosition - extraTextBeforeNet.length, extraTextBeforeNet.length) == extraTextBeforeNet) {
-                newTextareaText = newTextareaText.substr(0, foundAtPosition - extraTextBeforeNet.length) + newTextareaText.substr(foundAtPosition);
+            const beforeStart = foundAtPosition - extraTextBeforeNet.length;
+            if (extraTextBeforeNet && beforeStart >= 0 && newTextareaText.substr(beforeStart, extraTextBeforeNet.length) === extraTextBeforeNet) {
+                newTextareaText = newTextareaText.slice(0, beforeStart) + newTextareaText.slice(beforeStart + extraTextBeforeNet.length);
             }
         }
     } else {
-        newTextareaText = textarea.value.replaceAll(new RegExp(`((?:${extraTextBeforeNet})?${text})`, "g"), "");
-        replaced = (newTextareaText != textarea.value);
+        const pattern = new RegExp(`((?:${extraTextBeforeNet})?${text})`, 'g');
+        newTextareaText = textarea.value.replaceAll(pattern, '');
+        replaced = newTextareaText !== textarea.value;
     }
 
     if (replaced) {
@@ -277,285 +478,350 @@ function tryToRemoveExtraNetworkFromPrompt(textarea, text, isNeg) {
     return false;
 }
 
-function updatePromptArea(text, textArea, isNeg) {
+/**
+ * Append or replace prompt text with the requested token.
+ * @param {string} text
+ * @param {HTMLTextAreaElement | null} textArea
+ * @param {boolean} [isNeg]
+ */
+function updatePromptArea(text, textArea, isNeg = false) {
+    if (!textArea) return;
     if (!tryToRemoveExtraNetworkFromPrompt(textArea, text, isNeg)) {
-        textArea.value = textArea.value + opts.extra_networks_add_text_separator + text;
+        textArea.value = `${textArea.value}${opts.extra_networks_add_text_separator || ''}${text}`;
     }
-
     updateInput(textArea);
 }
 
+/**
+ * Handle card clicks from the extra networks grid.
+ * @param {string} tabname
+ * @param {string} textToAdd
+ * @param {string} textToAddNegative
+ * @param {boolean} allowNegativePrompt
+ */
 function cardClicked(tabname, textToAdd, textToAddNegative, allowNegativePrompt) {
+    const root = appRoot();
+    const prompt = queryTextControl(root, `#${tabname}_prompt > label > textarea`);
+    const negPrompt = queryTextControl(root, `#${tabname}_neg_prompt > label > textarea`);
+    const promptArea = prompt instanceof HTMLTextAreaElement ? prompt : null;
+    const negPromptArea = negPrompt instanceof HTMLTextAreaElement ? negPrompt : null;
+
     if (textToAddNegative.length > 0) {
-        updatePromptArea(textToAdd, gradioApp().querySelector("#" + tabname + "_prompt > label > textarea"));
-        updatePromptArea(textToAddNegative, gradioApp().querySelector("#" + tabname + "_neg_prompt > label > textarea"), true);
+        updatePromptArea(textToAdd, promptArea, false);
+        updatePromptArea(textToAddNegative, negPromptArea, true);
     } else {
-        var textarea = allowNegativePrompt ? activePromptTextarea[tabname] : gradioApp().querySelector("#" + tabname + "_prompt > label > textarea");
-        updatePromptArea(textToAdd, textarea);
+        const target = allowNegativePrompt ? activePromptTextarea[tabname] : prompt;
+        const resolvedTarget = target instanceof HTMLTextAreaElement ? target : promptArea;
+        updatePromptArea(textToAdd, resolvedTarget || null);
     }
 }
 
+/**
+ * Persist a preview image selection to disk.
+ * @param {MouseEvent} event
+ * @param {string} tabname
+ * @param {string} filename
+ */
 function saveCardPreview(event, tabname, filename) {
-    var textarea = gradioApp().querySelector("#" + tabname + '_preview_filename  > label > textarea');
-    var button = gradioApp().getElementById(tabname + '_save_preview');
+    const root = appRoot();
+    const textarea = queryTextControl(root, `#${tabname}_preview_filename  > label > textarea`);
+    const button = queryHTMLElement(root, `#${tabname}_save_preview`);
+    if (!textarea || !button) return;
 
     textarea.value = filename;
     updateInput(textarea);
-
     button.click();
 
     event.stopPropagation();
     event.preventDefault();
 }
 
-function extraNetworksSearchButton(tabname, extra_networks_tabname, event) {
-    var searchTextarea = gradioApp().querySelector("#" + tabname + "_" + extra_networks_tabname + "_extra_search");
-    var button = event.target;
-    var text = button.classList.contains("search-all") ? "" : button.textContent.trim();
+/**
+ * Update search input when clicking on canned search buttons.
+ * @param {string} tabname
+ * @param {string} extraNetworksTabname
+ * @param {MouseEvent} event
+ */
+/**
+ * Update the search field when a quick filter button is pressed.
+ * @param {string} tabname
+ * @param {string} extraNetworksTabname
+ * @param {MouseEvent} event
+ */
+function extraNetworksSearchButton(tabname, extraNetworksTabname, event) {
+    const root = appRoot();
+    const textarea = queryTextControl(root, `#${tabname}_${extraNetworksTabname}_extra_search`);
+    if (!textarea) return;
 
-    searchTextarea.value = text;
-    updateInput(searchTextarea);
+    const button = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    if (!button) return;
+    const isSearchAll = button.classList.contains('search-all');
+    const text = isSearchAll ? '' : button.textContent.trim();
+
+    textarea.value = text;
+    updateInput(textarea);
 }
 
-function extraNetworksTreeProcessFileClick(event, btn, tabname, extra_networks_tabname) {
-    /**
-     * Processes `onclick` events when user clicks on files in tree.
-     *
-     * @param event                     The generated event.
-     * @param btn                       The clicked `tree-list-item` button.
-     * @param tabname                   The name of the active tab in the sd webui. Ex: txt2img, img2img, etc.
-     * @param extra_networks_tabname    The id of the active extraNetworks tab. Ex: lora, checkpoints, etc.
-     */
-    // NOTE: Currently unused.
-    return;
+function extraNetworksTreeProcessFileClick(
+    /** @type {MouseEvent} */ event,
+    /** @type {HTMLElement} */ btn,
+    /** @type {string} */ tabname,
+    /** @type {string} */ extraNetworksTabname
+) {
+    void event;
+    void btn;
+    void tabname;
+    void extraNetworksTabname;
 }
 
-function extraNetworksTreeProcessDirectoryClick(event, btn, tabname, extra_networks_tabname) {
-    /**
-     * Processes `onclick` events when user clicks on directories in tree.
-     *
-     * Here is how the tree reacts to clicks for various states:
-     * unselected unopened directory: Directory is selected and expanded.
-     * unselected opened directory: Directory is selected.
-     * selected opened directory: Directory is collapsed and deselected.
-     * chevron is clicked: Directory is expanded or collapsed. Selected state unchanged.
-     *
-     * @param event                     The generated event.
-     * @param btn                       The clicked `tree-list-item` button.
-     * @param tabname                   The name of the active tab in the sd webui. Ex: txt2img, img2img, etc.
-     * @param extra_networks_tabname    The id of the active extraNetworks tab. Ex: lora, checkpoints, etc.
-     */
-    var ul = btn.nextElementSibling;
-    // This is the actual target that the user clicked on within the target button.
-    // We use this to detect if the chevron was clicked.
-    var true_targ = event.target;
+/**
+ * Handle directory interactions inside the tree view.
+ * @param {MouseEvent} event
+ * @param {HTMLElement} btn
+ * @param {string} tabname
+ * @param {string} extraNetworksTabname
+ */
+function extraNetworksTreeProcessDirectoryClick(
+    /** @type {MouseEvent} */ event,
+    /** @type {HTMLElement} */ btn,
+    /** @type {string} */ tabname,
+    /** @type {string} */ extraNetworksTabname
+) {
+    const ul = guardElement(btn.nextElementSibling, (node) => node instanceof HTMLElement);
+    if (!ul) return;
 
-    function _expand_or_collapse(_ul, _btn) {
-        // Expands <ul> if it is collapsed, collapses otherwise. Updates button attributes.
-        if (_ul.hasAttribute("hidden")) {
-            _ul.removeAttribute("hidden");
-            _btn.dataset.expanded = "";
+    const trueTarget = event.target instanceof HTMLElement ? event.target : null;
+
+    /** @param {HTMLElement} list @param {HTMLElement} trigger */
+    const expandOrCollapse = (list, trigger) => {
+        if (list.hasAttribute('hidden')) {
+            list.removeAttribute('hidden');
+            trigger.dataset.expanded = '';
         } else {
-            _ul.setAttribute("hidden", "");
-            delete _btn.dataset.expanded;
+            list.setAttribute('hidden', '');
+            delete trigger.dataset.expanded;
         }
+    };
+
+    /** Remove selection markers from all tree entries. */
+    const deselectAll = () => {
+        document
+            .querySelectorAll('div.tree-list-content')
+            .forEach((element) => { if (element instanceof HTMLElement) delete element.dataset.selected; });
+    };
+
+    /** @param {HTMLElement} targetButton */
+    const selectButton = (targetButton) => {
+        deselectAll();
+        targetButton.dataset.selected = '';
+    };
+
+    /** @param {string} path */
+    const updateSearch = (path) => {
+        const searchInput = queryTextControl(appRoot(), `#${tabname}_${extraNetworksTabname}_extra_search`);
+        if (!searchInput) return;
+        searchInput.value = path;
+        updateInput(searchInput);
+    };
+
+    if (trueTarget && trueTarget.matches('.tree-list-item-action--leading, .tree-list-item-action-chevron')) {
+        expandOrCollapse(ul, btn);
+        return;
     }
 
-    function _remove_selected_from_all() {
-        // Removes the `selected` attribute from all buttons.
-        var sels = document.querySelectorAll("div.tree-list-content");
-        [...sels].forEach(el => {
-            delete el.dataset.selected;
-        });
-    }
+    const isSelected = 'selected' in btn.dataset;
+    const isCollapsed = ul.hasAttribute('hidden');
 
-    function _select_button(_btn) {
-        // Removes `data-selected` attribute from all buttons then adds to passed button.
-        _remove_selected_from_all();
-        _btn.dataset.selected = "";
-    }
-
-    function _update_search(_tabname, _extra_networks_tabname, _search_text) {
-        // Update search input with select button's path.
-        var search_input_elem = gradioApp().querySelector("#" + tabname + "_" + extra_networks_tabname + "_extra_search");
-        search_input_elem.value = _search_text;
-        updateInput(search_input_elem);
-    }
-
-
-    // If user clicks on the chevron, then we do not select the folder.
-    if (true_targ.matches(".tree-list-item-action--leading, .tree-list-item-action-chevron")) {
-        _expand_or_collapse(ul, btn);
+    if (isSelected && !isCollapsed) {
+        expandOrCollapse(ul, btn);
+        delete btn.dataset.selected;
+        updateSearch('');
+    } else if (!isSelected && !isCollapsed) {
+        expandOrCollapse(ul, btn);
+        selectButton(btn);
+        if (btn.dataset.path) updateSearch(btn.dataset.path);
     } else {
-        // User clicked anywhere else on the button.
-        if ("selected" in btn.dataset && !(ul.hasAttribute("hidden"))) {
-            // If folder is select and open, collapse and deselect button.
-            _expand_or_collapse(ul, btn);
-            delete btn.dataset.selected;
-            _update_search(tabname, extra_networks_tabname, "");
-        } else if (!(!("selected" in btn.dataset) && !(ul.hasAttribute("hidden")))) {
-            // If folder is open and not selected, then we don't collapse; just select.
-            // NOTE: Double inversion sucks but it is the clearest way to show the branching here.
-            _expand_or_collapse(ul, btn);
-            _select_button(btn, tabname, extra_networks_tabname);
-            _update_search(tabname, extra_networks_tabname, btn.dataset.path);
-        } else {
-            // All other cases, just select the button.
-            _select_button(btn, tabname, extra_networks_tabname);
-            _update_search(tabname, extra_networks_tabname, btn.dataset.path);
-        }
+        selectButton(btn);
+        if (btn.dataset.path) updateSearch(btn.dataset.path);
     }
 }
 
-function extraNetworksTreeOnClick(event, tabname, extra_networks_tabname) {
-    /**
-     * Handles `onclick` events for buttons within an `extra-network-tree .tree-list--tree`.
-     *
-     * Determines whether the clicked button in the tree is for a file entry or a directory
-     * then calls the appropriate function.
-     *
-     * @param event                     The generated event.
-     * @param tabname                   The name of the active tab in the sd webui. Ex: txt2img, img2img, etc.
-     * @param extra_networks_tabname    The id of the active extraNetworks tab. Ex: lora, checkpoints, etc.
-     */
-    var btn = event.currentTarget;
-    var par = btn.parentElement;
-    if (par.dataset.treeEntryType === "file") {
-        extraNetworksTreeProcessFileClick(event, btn, tabname, extra_networks_tabname);
+/**
+ * Tree click routing between files and directories.
+ * @param {MouseEvent} event
+ * @param {string} tabname
+ * @param {string} extraNetworksTabname
+ */
+function extraNetworksTreeOnClick(event, tabname, extraNetworksTabname) {
+    const button = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    if (!button) return;
+
+    const entryType = button.parentElement?.dataset.treeEntryType;
+    if (entryType === 'file') {
+        extraNetworksTreeProcessFileClick(event, button, tabname, extraNetworksTabname);
     } else {
-        extraNetworksTreeProcessDirectoryClick(event, btn, tabname, extra_networks_tabname);
+        extraNetworksTreeProcessDirectoryClick(event, button, tabname, extraNetworksTabname);
     }
 }
 
-function extraNetworksControlSortOnClick(event, tabname, extra_networks_tabname) {
-    /** Handles `onclick` events for Sort Mode buttons. */
+/**
+ * Handle sort mode button clicks.
+ * @param {MouseEvent} event
+ * @param {string} tabname
+ * @param {string} extraNetworksTabname
+ */
+function extraNetworksControlSortOnClick(event, tabname, extraNetworksTabname) {
+    const button = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    const parent = button?.parentElement;
+    if (!button || !parent) return;
 
-    var self = event.currentTarget;
-    var parent = event.currentTarget.parentElement;
-
-    parent.querySelectorAll('.extra-network-control--sort').forEach(function(x) {
-        x.classList.remove('extra-network-control--enabled');
+    parent.querySelectorAll('.extra-network-control--sort').forEach((elem) => {
+        if (elem instanceof HTMLElement) elem.classList.remove('extra-network-control--enabled');
     });
 
-    self.classList.add('extra-network-control--enabled');
-
-    applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
+    button.classList.add('extra-network-control--enabled');
+    applyExtraNetworkSort(`${tabname}_${extraNetworksTabname}`);
 }
 
-function extraNetworksControlSortDirOnClick(event, tabname, extra_networks_tabname) {
-    /**
-     * Handles `onclick` events for the Sort Direction button.
-     *
-     * Modifies the data attributes of the Sort Direction button to cycle between
-     * ascending and descending sort directions.
-     *
-     * @param event                     The generated event.
-     * @param tabname                   The name of the active tab in the sd webui. Ex: txt2img, img2img, etc.
-     * @param extra_networks_tabname    The id of the active extraNetworks tab. Ex: lora, checkpoints, etc.
-     */
-    if (event.currentTarget.dataset.sortdir == "Ascending") {
-        event.currentTarget.dataset.sortdir = "Descending";
-        event.currentTarget.setAttribute("title", "Sort descending");
+/**
+ * Cycle sort direction (ascending/descending).
+ * @param {MouseEvent} event
+ * @param {string} tabname
+ * @param {string} extraNetworksTabname
+ */
+function extraNetworksControlSortDirOnClick(event, tabname, extraNetworksTabname) {
+    const button = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    if (!button) return;
+
+    const current = button.dataset.sortdir || 'Ascending';
+    if (current === 'Ascending') {
+        button.dataset.sortdir = 'Descending';
+        button.setAttribute('title', 'Sort descending');
     } else {
-        event.currentTarget.dataset.sortdir = "Ascending";
-        event.currentTarget.setAttribute("title", "Sort ascending");
+        button.dataset.sortdir = 'Ascending';
+        button.setAttribute('title', 'Sort ascending');
     }
-    applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
+    applyExtraNetworkSort(`${tabname}_${extraNetworksTabname}`);
 }
 
-function extraNetworksControlTreeViewOnClick(event, tabname, extra_networks_tabname) {
-    /**
-     * Handles `onclick` events for the Tree View button.
-     *
-     * Toggles the tree view in the extra networks pane.
-     *
-     * @param event                     The generated event.
-     * @param tabname                   The name of the active tab in the sd webui. Ex: txt2img, img2img, etc.
-     * @param extra_networks_tabname    The id of the active extraNetworks tab. Ex: lora, checkpoints, etc.
-     */
-    var button = event.currentTarget;
-    button.classList.toggle("extra-network-control--enabled");
-    var show = !button.classList.contains("extra-network-control--enabled");
+/**
+ * Toggle the visibility of the tree view pane.
+ * @param {MouseEvent} event
+ * @param {string} tabname
+ * @param {string} extraNetworksTabname
+ */
+function extraNetworksControlTreeViewOnClick(event, tabname, extraNetworksTabname) {
+    const button = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    if (!button) return;
 
-    var pane = gradioApp().getElementById(tabname + "_" + extra_networks_tabname + "_pane");
-    pane.classList.toggle("extra-network-dirs-hidden", show);
+    button.classList.toggle('extra-network-control--enabled');
+    const show = !button.classList.contains('extra-network-control--enabled');
+
+    const pane = getAppElementById(`${tabname}_${extraNetworksTabname}_pane`);
+    if (pane instanceof HTMLElement) {
+        pane.classList.toggle('extra-network-dirs-hidden', show);
+    }
 }
 
+/** Refresh the active LoRA-like tabs when the backend signals a change. */
 function clickLoraRefresh() {
-    const targets = ['txt2img_lora', 'txt2img_checkpoints', 'txt2img_textural_inversion', 'img2img_lora', 'img2img_checkpoints', 'img2img_textural_inversion'];
-    targets.forEach(function(t) {
-        const tab = gradioApp().getElementById(t + '-button');
-        if (tab && tab.getAttribute('aria-selected') == "true") {
-            const applyFunction = extraNetworksApplyFilter[t];
-            if (applyFunction) {
-                applyFunction(true);
-            }
+    const targets = [
+        'txt2img_lora',
+        'txt2img_checkpoints',
+        'txt2img_textural_inversion',
+        'img2img_lora',
+        'img2img_checkpoints',
+        'img2img_textural_inversion',
+    ];
+
+    targets.forEach((target) => {
+        const tabButton = getAppElementById(`${target}-button`);
+        if (tabButton && tabButton.getAttribute('aria-selected') === 'true') {
+            const applyFn = extraNetworksApplyFilter[target];
+            if (applyFn) applyFn(true);
         }
     });
 }
 
-function extraNetworksControlRefreshOnClick(event, tabname, extra_networks_tabname) {
-    /**
-     * Handles `onclick` events for the Refresh Page button.
-     *
-     * In order to actually call the python functions in `ui_extra_networks.py`
-     * to refresh the page, we created an empty gradio button in that file with an
-     * event handler that refreshes the page. So what this function here does
-     * is it manually raises a `click` event on that button.
-     *
-     * @param event                     The generated event.
-     * @param tabname                   The name of the active tab in the sd webui. Ex: txt2img, img2img, etc.
-     * @param extra_networks_tabname    The id of the active extraNetworks tab. Ex: lora, checkpoints, etc.
-     */
-    var btn_refresh_internal = gradioApp().getElementById(tabname + "_" + extra_networks_tabname + "_extra_refresh_internal");
-    btn_refresh_internal.dispatchEvent(new Event("click"));
-}
-
-var globalPopup = null;
-var globalPopupInner = null;
-
-function closePopup() {
-    if (!globalPopup) return;
-    globalPopup.style.display = "none";
-}
-
-function popup(contents) {
-    if (!globalPopup) {
-        globalPopup = document.createElement('div');
-        globalPopup.classList.add('global-popup');
-
-        var close = document.createElement('div');
-        close.classList.add('global-popup-close');
-        close.addEventListener("click", closePopup);
-        close.title = "Close";
-        globalPopup.appendChild(close);
-
-        globalPopupInner = document.createElement('div');
-        globalPopupInner.classList.add('global-popup-inner');
-        globalPopup.appendChild(globalPopupInner);
-
-        gradioApp().querySelector('.main').appendChild(globalPopup);
+/**
+ * Trigger backend refresh via the hidden button.
+ * @param {MouseEvent} event
+ * @param {string} tabname
+ * @param {string} extraNetworksTabname
+ */
+function extraNetworksControlRefreshOnClick(event, tabname, extraNetworksTabname) {
+    void event;
+    const button = getAppElementById(`${tabname}_${extraNetworksTabname}_extra_refresh_internal`);
+    if (button instanceof HTMLElement) {
+        button.dispatchEvent(new Event('click'));
     }
+}
+
+/** Hide the global popup if present. */
+function closePopup() {
+    if (globalPopup) {
+        globalPopup.style.display = 'none';
+    }
+}
+
+/**
+ * Ensure the reusable popup exists and display arbitrary content inside it.
+ * @param {HTMLElement} contents
+ */
+function popup(contents) {
+    const root = appRoot();
+    if (!globalPopup) {
+        const popupElem = document.createElement('div');
+        popupElem.classList.add('global-popup');
+
+        const close = document.createElement('div');
+        close.classList.add('global-popup-close');
+        close.title = 'Close';
+        close.addEventListener('click', closePopup);
+
+        const inner = document.createElement('div');
+        inner.classList.add('global-popup-inner');
+
+        popupElem.appendChild(close);
+        popupElem.appendChild(inner);
+
+        const main = queryHTMLElement(root, '.main');
+        if (!main) return;
+        main.appendChild(popupElem);
+
+        globalPopup = popupElem;
+        globalPopupInner = inner;
+    }
+
+    if (!globalPopupInner) return;
 
     globalPopupInner.innerHTML = '';
     globalPopupInner.appendChild(contents);
-
-    globalPopup.style.display = "flex";
+    globalPopup.style.display = 'flex';
 }
 
-var storedPopupIds = {};
+/**
+ * Store popup content by id for reuse.
+ * @param {string} id
+ */
 function popupId(id) {
     if (!storedPopupIds[id]) {
-        storedPopupIds[id] = gradioApp().getElementById(id);
+        storedPopupIds[id] = getAppElementById(id);
     }
-
-    popup(storedPopupIds[id]);
+    const stored = storedPopupIds[id];
+    if (stored instanceof HTMLElement) {
+        popup(stored);
+    }
 }
 
+/**
+ * Flatten metadata dictionaries for easier rendering.
+ * @param {Record<string, unknown>} obj
+ * @returns {Record<string, unknown>}
+ */
 function extraNetworksFlattenMetadata(obj) {
-    const result = {};
+    const result = /** @type {Record<string, unknown>} */ ({});
 
-    // Convert any stringified JSON objects to actual objects
     for (const key of Object.keys(obj)) {
         if (typeof obj[key] === 'string') {
             try {
@@ -564,38 +830,36 @@ function extraNetworksFlattenMetadata(obj) {
                     obj[key] = parsed;
                 }
             } catch (error) {
-                continue;
+                console.error(error);
             }
         }
     }
 
-    // Flatten the object
     for (const key of Object.keys(obj)) {
-        if (typeof obj[key] === 'object' && obj[key] !== null) {
-            const nested = extraNetworksFlattenMetadata(obj[key]);
+        const value = obj[key];
+        if (value && typeof value === 'object') {
+            const nested = extraNetworksFlattenMetadata(/** @type {Record<string, unknown>} */ (value));
             for (const nestedKey of Object.keys(nested)) {
                 result[`${key}/${nestedKey}`] = nested[nestedKey];
             }
         } else {
-            result[key] = obj[key];
+            result[key] = value;
         }
     }
 
-    // Special case for handling modelspec keys
     for (const key of Object.keys(result)) {
-        if (key.startsWith("modelspec.")) {
-            result[key.replaceAll(".", "/")] = result[key];
+        if (key.startsWith('modelspec.')) {
+            result[key.replaceAll('.', '/')] = result[key];
             delete result[key];
         }
     }
 
-    // Add empty keys to designate hierarchy
     for (const key of Object.keys(result)) {
-        const parts = key.split("/");
-        for (let i = 1; i < parts.length; i++) {
-            const parent = parts.slice(0, i).join("/");
-            if (!result[parent]) {
-                result[parent] = "";
+        const parts = key.split('/');
+        for (let i = 1; i < parts.length; i += 1) {
+            const parent = parts.slice(0, i).join('/');
+            if (!(parent in result)) {
+                result[parent] = '';
             }
         }
     }
@@ -603,40 +867,53 @@ function extraNetworksFlattenMetadata(obj) {
     return result;
 }
 
+/**
+ * Display metadata either as a flattened tree table or raw preformatted text.
+ * @param {string} text
+ */
 function extraNetworksShowMetadata(text) {
     try {
-        let parsed = JSON.parse(text);
+        const parsed = JSON.parse(text);
         if (parsed && typeof parsed === 'object') {
-            parsed = extraNetworksFlattenMetadata(parsed);
-            const table = createVisualizationTable(parsed, 0);
-            popup(table);
-            return;
+            const flattened = extraNetworksFlattenMetadata(parsed);
+            const numericEntries = Object.fromEntries(
+                Object.entries(flattened).filter(([, value]) => typeof value === 'number')
+            );
+            if (Object.keys(numericEntries).length > 0) {
+                const table = createVisualizationTable(/** @type {Record<string, number>} */ (numericEntries), 0);
+                popup(table);
+                return;
+            }
         }
     } catch (error) {
         console.error(error);
     }
 
-    var elem = document.createElement('pre');
+    const elem = document.createElement('pre');
     elem.classList.add('popup-metadata');
     elem.textContent = text;
-
     popup(elem);
-    return;
 }
 
+/**
+ * Send a GET request with JSON payload and parse the response.
+ * @param {string} url
+ * @param {Record<string, string>} data
+ * @param {(response: any) => void} handler
+ * @param {() => void} errorHandler
+ */
 function requestGet(url, data, handler, errorHandler) {
-    var xhr = new XMLHttpRequest();
-    var args = Object.keys(data).map(function(k) {
-        return encodeURIComponent(k) + '=' + encodeURIComponent(data[k]);
-    }).join('&');
-    xhr.open("GET", url + "?" + args, true);
+    const xhr = new XMLHttpRequest();
+    const args = Object.entries(data)
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+        .join('&');
+    xhr.open('GET', `${url}?${args}`, true);
 
-    xhr.onreadystatechange = function() {
+    xhr.onreadystatechange = function onReadyStateChange() {
         if (xhr.readyState === 4) {
             if (xhr.status === 200) {
                 try {
-                    var js = JSON.parse(xhr.responseText);
-                    handler(js);
+                    handler(JSON.parse(xhr.responseText));
                 } catch (error) {
                     console.error(error);
                     errorHandler();
@@ -646,118 +923,160 @@ function requestGet(url, data, handler, errorHandler) {
             }
         }
     };
-    var js = JSON.stringify(data);
-    xhr.send(js);
+
+    xhr.send(JSON.stringify(data));
 }
 
+/**
+ * Copy the card path to clipboard.
+ * @param {MouseEvent} event
+ */
 function extraNetworksCopyCardPath(event) {
-    navigator.clipboard.writeText(event.target.getAttribute("data-clipboard-text"));
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target) return;
+
+    const text = target.getAttribute('data-clipboard-text');
+    if (text) {
+        void navigator.clipboard.writeText(text);
+    }
     event.stopPropagation();
 }
 
+/**
+ * Request metadata for a card.
+ * @param {MouseEvent} event
+ * @param {string} extraPage
+ */
 function extraNetworksRequestMetadata(event, extraPage) {
-    var showError = function() {
-        extraNetworksShowMetadata("there was an error getting metadata");
-    };
+    const showError = () => extraNetworksShowMetadata('there was an error getting metadata');
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target) return;
 
-    var cardName = event.target.parentElement.parentElement.getAttribute("data-name");
-    if (cardName == null) { // from tree
-        cardName = event.target.parentElement.parentElement.parentElement.getAttribute("data-name");
+    const cardElement = target.closest('[data-name]');
+    if (!(cardElement instanceof HTMLElement)) {
+        showError();
+        return;
     }
 
-    requestGet("./sd_extra_networks/metadata", {page: extraPage, item: cardName}, function(data) {
-        if (data && data.metadata) {
-            extraNetworksShowMetadata(data.metadata);
-        } else {
-            showError();
-        }
-    }, showError);
+    const cardName = cardElement.getAttribute('data-name');
+    if (!cardName) {
+        showError();
+        return;
+    }
+
+    requestGet(
+        './sd_extra_networks/metadata',
+        { page: extraPage, item: cardName },
+        (data) => {
+            if (data && data.metadata) {
+                extraNetworksShowMetadata(data.metadata);
+            } else {
+                showError();
+            }
+        },
+        showError
+    );
 
     event.stopPropagation();
 }
 
-var extraPageUserMetadataEditors = {};
-
+/**
+ * Launch the user-metadata editor for a card.
+ * @param {MouseEvent} event
+ * @param {string} tabname
+ * @param {string} extraPage
+ */
 function extraNetworksEditUserMetadata(event, tabname, extraPage) {
-    var id = tabname + '_' + extraPage + '_edit_user_metadata';
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target) return;
 
-    var editor = extraPageUserMetadataEditors[id];
+    const editorId = `${tabname}_${extraPage}_edit_user_metadata`;
+    let editor = extraPageUserMetadataEditors[editorId];
+
     if (!editor) {
-        editor = {};
-        editor.page = gradioApp().getElementById(id);
-        editor.nameTextarea = gradioApp().querySelector("#" + id + "_name" + ' textarea');
-        editor.button = gradioApp().querySelector("#" + id + "_button");
-        extraPageUserMetadataEditors[id] = editor;
+        editor = {
+            page: getAppElementById(editorId),
+            nameTextarea: queryTextControl(appRoot(), `#${editorId}_name textarea`),
+            button: queryHTMLElement(appRoot(), `#${editorId}_button`),
+        };
+        extraPageUserMetadataEditors[editorId] = editor;
     }
 
-    var cardName = event.target.parentElement.parentElement.getAttribute("data-name");
-    if (cardName == null) { // from tree
-        cardName = event.target.parentElement.parentElement.parentElement.getAttribute("data-name");
-    }
+    if (!editor.nameTextarea || !editor.button || !(editor.page instanceof HTMLElement)) return;
+
+    const cardElement = target.closest('[data-name]');
+    if (!(cardElement instanceof HTMLElement)) return;
+
+    const cardName = cardElement.getAttribute('data-name');
+    if (!cardName) return;
+
     editor.nameTextarea.value = cardName;
     updateInput(editor.nameTextarea);
-
     editor.button.click();
-
     popup(editor.page);
 
     event.stopPropagation();
 }
 
+/**
+ * Refresh the HTML of a single card.
+ * @param {string} page
+ * @param {string} tabname
+ * @param {string} name
+ */
 function extraNetworksRefreshSingleCard(page, tabname, name) {
-    requestGet("./sd_extra_networks/get-single-card", {page: page, tabname: tabname, name: name}, function(data) {
-        if (data && data.html) {
-            var card = gradioApp().querySelector(`#${tabname}_${page.replace(" ", "_")}_cards > .card[data-name="${name}"]`);
+    requestGet(
+        './sd_extra_networks/get-single-card',
+        { page, tabname, name },
+        (data) => {
+            if (!(data && data.html)) return;
 
-            var newDiv = document.createElement('DIV');
+            const root = appRoot();
+            const card = queryHTMLElement(root, `#${tabname}_${page.replace(/\s+/g, '_')}_cards > .card[data-name="${name}"]`);
+            if (!card || !card.parentElement) return;
+
+            const newDiv = document.createElement('div');
             newDiv.innerHTML = data.html;
-            var newCard = newDiv.firstElementChild;
+            const newCard = newDiv.firstElementChild;
+            if (!(newCard instanceof HTMLElement)) return;
 
             newCard.style.display = '';
             card.parentElement.insertBefore(newCard, card);
             card.parentElement.removeChild(card);
-        }
-    });
+        },
+        () => {}
+    );
 }
 
-window.addEventListener("keydown", function(event) {
-    if (event.key == "Escape") {
+window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
         closePopup();
     }
 });
 
-/**
- * Setup custom loading for this script.
- * We need to wait for all of our HTML to be generated in the extra networks tabs
- * before we can actually run the `setupExtraNetworks` function.
- * The `onUiLoaded` function actually runs before all of our extra network tabs are
- * finished generating. Thus we needed this new method.
- *
- */
-
-var uiAfterScriptsCallbacks = [];
-var uiAfterScriptsTimeout = null;
-var executedAfterScripts = false;
-
+/** Schedule callbacks that need the extra network HTML to be present. */
 function scheduleAfterScriptsCallbacks() {
-    clearTimeout(uiAfterScriptsTimeout);
-    uiAfterScriptsTimeout = setTimeout(function() {
+    if (uiAfterScriptsTimeout) {
+        clearTimeout(uiAfterScriptsTimeout);
+    }
+    uiAfterScriptsTimeout = setTimeout(() => {
         executeCallbacks(uiAfterScriptsCallbacks, undefined, 'uiAfterScripts');
     }, 200);
 }
 
-onUiLoaded(function() {
-    var mutationObserver = new MutationObserver(function(m) {
-        let existingSearchfields = gradioApp().querySelectorAll("[id$='_extra_search']").length;
-        let neededSearchfields = gradioApp().querySelectorAll("[id$='_extra_tabs'] > .tab-nav > button").length - 2;
+onUiLoaded(() => {
+    const observer = new MutationObserver(() => {
+        const root = appRoot();
+        const existingSearchfields = root.querySelectorAll("[id$='_extra_search']").length;
+        const neededSearchfields = root.querySelectorAll("[id$='_extra_tabs'] > .tab-nav > button").length - 2;
 
         if (!executedAfterScripts && existingSearchfields >= neededSearchfields) {
-            mutationObserver.disconnect();
+            observer.disconnect();
             executedAfterScripts = true;
             scheduleAfterScriptsCallbacks();
         }
     });
-    mutationObserver.observe(gradioApp(), {childList: true, subtree: true});
+    observer.observe(appRoot(), { childList: true, subtree: true });
 });
 
 uiAfterScriptsCallbacks.push(setupExtraNetworks);

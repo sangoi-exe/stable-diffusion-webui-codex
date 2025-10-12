@@ -1,5 +1,30 @@
+"use strict";
+// @ts-check
+/*
+ DevNotes (2025-10-12)
+ - Purpose: Atualiza contadores de tokens dos prompts (txt2img/img2img).
+ - Safety: onEdit com debounce; resolve IDs sob Gradio root; evita rebind duplo.
+*/
+
+/** @type {Record<string, () => void>} */
 let promptTokenCountUpdateFunctions = {};
 
+/**
+ * Safe lookup for an element by id inside the Gradio root with a document fallback.
+ * @param {string} id
+ * @returns {HTMLElement | null}
+ */
+function getAppElementById(id) {
+    const root = gradioApp();
+    if (root && 'getElementById' in root && typeof root.getElementById === 'function') {
+        const el = root.getElementById(id);
+        if (el instanceof HTMLElement) return el;
+    }
+    const fallback = document.getElementById(id);
+    return fallback instanceof HTMLElement ? fallback : null;
+}
+
+/** @param {...unknown} args */
 function update_txt2img_tokens(...args) {
     // Called from Gradio
     update_token_counter("txt2img_token_button");
@@ -10,6 +35,7 @@ function update_txt2img_tokens(...args) {
     return args;
 }
 
+/** @param {...unknown} args */
 function update_img2img_tokens(...args) {
     // Called from Gradio
     update_token_counter("img2img_token_button");
@@ -20,11 +46,13 @@ function update_img2img_tokens(...args) {
     return args;
 }
 
+/** @param {string} button_id */
 function update_token_counter(button_id) {
     promptTokenCountUpdateFunctions[button_id]?.();
 }
 
 
+/** @param {string} name */
 function recalculatePromptTokens(name) {
     promptTokenCountUpdateFunctions[name]?.();
 }
@@ -43,10 +71,11 @@ function recalculate_prompts_img2img() {
     return Array.from(arguments);
 }
 
+/** @param {string} id @param {string} id_counter @param {string} id_button */
 function setupTokenCounting(id, id_counter, id_button) {
-    var prompt = gradioApp().getElementById(id);
-    var counter = gradioApp().getElementById(id_counter);
-    var textarea = gradioApp().querySelector(`#${id} > label > textarea`);
+    const prompt = getAppElementById(id);
+    const counter = getAppElementById(id_counter);
+    const textarea = gradioApp().querySelector(`#${id} > label > textarea`);
 
     if (!prompt || !counter || !textarea) {
         return; // UI not ready yet in Gradio 5; skip safely
@@ -66,17 +95,19 @@ function setupTokenCounting(id, id_counter, id_button) {
         prompt.parentElement.style.position = "relative";
     }
 
-    var func = onEdit(id, textarea, 800, function() {
+    const func = onEdit(id, /** @type {HTMLTextAreaElement} */ (textarea), 800, function() {
         if (counter.classList.contains("token-counter-visible")) {
-            gradioApp().getElementById(id_button)?.click();
+            getAppElementById(id_button)?.click();
         }
     });
     promptTokenCountUpdateFunctions[id] = func;
     promptTokenCountUpdateFunctions[id_button] = func;
 }
 
+/** @param {string} id @param {string} id_counter @param {string} id_button */
 function toggleTokenCountingVisibility(id, id_counter, id_button) {
-    var counter = gradioApp().getElementById(id_counter);
+    void id; // not used but kept for signature stability
+    const counter = getAppElementById(id_counter);
     if (!counter) {
         return;
     }
@@ -85,6 +116,9 @@ function toggleTokenCountingVisibility(id, id_counter, id_button) {
     counter.classList.toggle("token-counter-visible", !opts.disable_token_counters);
 }
 
+/**
+ * @param {(id: string, id_counter: string, id_button: string) => void} fun
+ */
 function runCodeForTokenCounters(fun) {
     fun('txt2img_prompt', 'txt2img_token_counter', 'txt2img_token_button');
     fun('txt2img_neg_prompt', 'txt2img_negative_token_counter', 'txt2img_negative_token_button');

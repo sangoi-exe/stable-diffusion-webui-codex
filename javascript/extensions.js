@@ -1,95 +1,191 @@
+"use strict";
+// @ts-check
+/*
+ DevNotes (2025-10-12)
+ - Purpose: Manage the Extensions page – collect enable/disable/update, status refresh, and index installs.
+ - Safety: All DOM reads are guarded; throws when page not ready to avoid partial state writes.
+ - Public hooks: extensions_apply, extensions_check, install_extension_from_index,
+   config_state_confirm_restore, toggle_all_extensions, toggle_extension.
+*/
 
-function extensions_apply(_disabled_list, _update_list, disable_all) {
-    var disable = [];
-    var update = [];
-    const extensions_input = gradioApp().querySelectorAll('#extensions input[type="checkbox"]');
-    if (extensions_input.length == 0) {
-        throw Error("Extensions page not yet loaded.");
+/**
+ * Utilities for managing the extensions page (enable/disable/update toggles).
+ */
+
+/**
+ * @returns {NodeListOf<HTMLInputElement>}
+ */
+function getExtensionCheckboxes() {
+    return gradioApp().querySelectorAll('#extensions input[type="checkbox"]');
+}
+
+/**
+ * @param {string} id
+ * @returns {HTMLElement | null}
+ */
+function getAppElementById(id) {
+    const root = gradioApp();
+    if ('getElementById' in root && typeof root.getElementById === 'function') {
+        const result = root.getElementById(id);
+        if (result instanceof HTMLElement) return result;
     }
-    extensions_input.forEach(function(x) {
-        if (x.name.startsWith("enable_") && !x.checked) {
-            disable.push(x.name.substring(7));
-        }
+    const fallback = document.getElementById(id);
+    return fallback instanceof HTMLElement ? fallback : null;
+}
 
-        if (x.name.startsWith("update_") && x.checked) {
-            update.push(x.name.substring(7));
+/**
+ * Collect enabled/disabled/update selections from the checkbox list.
+ * @param {unknown} disableList
+ * @param {unknown} updateList
+ * @param {boolean} disableAll
+ * @returns {[string, string, boolean]}
+*/
+function extensions_apply(disableList, updateList, disableAll) {
+    void disableList;
+    void updateList;
+
+    /** @type {string[]} */
+    const disable = [];
+    /** @type {string[]} */
+    const update = [];
+
+    const inputs = getExtensionCheckboxes();
+    if (inputs.length === 0) {
+        throw new Error('Extensions page not yet loaded.');
+    }
+
+    inputs.forEach((input) => {
+        if (!(input instanceof HTMLInputElement)) return;
+        if (input.name.startsWith('enable_') && !input.checked) {
+            disable.push(input.name.substring(7));
+        }
+        if (input.name.startsWith('update_') && input.checked) {
+            update.push(input.name.substring(7));
         }
     });
 
     restart_reload();
 
-    return [JSON.stringify(disable), JSON.stringify(update), disable_all];
+    return [JSON.stringify(disable), JSON.stringify(update), Boolean(disableAll)];
 }
 
+/**
+ * Determine which extensions are disabled and kick off the status refresh.
+ * @returns {[string, string]}
+ */
 function extensions_check() {
-    var disable = [];
+    /** @type {string[]} */
+    const disable = [];
 
-    gradioApp().querySelectorAll('#extensions input[type="checkbox"]').forEach(function(x) {
-        if (x.name.startsWith("enable_") && !x.checked) {
-            disable.push(x.name.substring(7));
+    getExtensionCheckboxes().forEach((input) => {
+        if (input.name.startsWith('enable_') && !input.checked) {
+            disable.push(input.name.substring(7));
         }
     });
 
-    gradioApp().querySelectorAll('#extensions .extension_status').forEach(function(x) {
-        x.innerHTML = "Loading...";
+    gradioApp().querySelectorAll('#extensions .extension_status').forEach((element) => {
+        if (element instanceof HTMLElement) {
+            element.innerHTML = 'Loading...';
+        }
     });
 
-
-    var id = randomId();
-    requestProgress(id, gradioApp().getElementById('extensions_installed_html'), null, function() {
-
-    });
+    const id = randomId();
+    const progressTarget = getAppElementById('extensions_installed_html');
+    if (progressTarget instanceof HTMLElement) {
+        requestProgress(id, progressTarget, null, () => {});
+    }
 
     return [id, JSON.stringify(disable)];
 }
 
+/**
+ * Trigger installation from the extensions index.
+ * @param {HTMLInputElement | HTMLButtonElement} button
+ * @param {string} url
+ */
 function install_extension_from_index(button, url) {
-    button.disabled = "disabled";
-    button.value = "Installing...";
+    button.disabled = true;
+    if ('value' in button) {
+        button.value = 'Installing...';
+    }
 
-    var textarea = gradioApp().querySelector('#extension_to_install textarea');
-    textarea.value = url;
-    updateInput(textarea);
+    const textarea = gradioApp().querySelector('#extension_to_install textarea');
+    if (textarea instanceof HTMLTextAreaElement) {
+        textarea.value = url;
+        updateInput(textarea);
+    }
 
-    gradioApp().querySelector('#install_extension_button').click();
+    const installButton = gradioApp().querySelector('#install_extension_button');
+    if (installButton instanceof HTMLElement) {
+        installButton.click();
+    }
 }
 
+/**
+ * Confirm restoration of saved config states.
+ * @param {unknown} _
+ * @param {string} config_state_name
+ * @param {string} config_restore_type
+ * @returns {[boolean, string, string]}
+ */
 function config_state_confirm_restore(_, config_state_name, config_restore_type) {
-    if (config_state_name == "Current") {
+    if (config_state_name === 'Current') {
         return [false, config_state_name, config_restore_type];
     }
-    let restored = "";
-    if (config_restore_type == "extensions") {
-        restored = "all saved extension versions";
-    } else if (config_restore_type == "webui") {
-        restored = "the webui version";
+
+    let restored;
+    if (config_restore_type === 'extensions') {
+        restored = 'all saved extension versions';
+    } else if (config_restore_type === 'webui') {
+        restored = 'the webui version';
     } else {
-        restored = "the webui version and all saved extension versions";
+        restored = 'the webui version and all saved extension versions';
     }
-    let confirmed = confirm("Are you sure you want to restore from this state?\nThis will reset " + restored + ".");
+
+    const confirmed = window.confirm(
+        `Are you sure you want to restore from this state?\nThis will reset ${restored}.`
+    );
+
     if (confirmed) {
         restart_reload();
-        gradioApp().querySelectorAll('#extensions .extension_status').forEach(function(x) {
-            x.innerHTML = "Loading...";
+        gradioApp().querySelectorAll('#extensions .extension_status').forEach((element) => {
+            if (element instanceof HTMLElement) {
+                element.innerHTML = 'Loading...';
+            }
         });
     }
+
     return [confirmed, config_state_name, config_restore_type];
 }
 
+/**
+ * Toggle all extension checkboxes based on the master toggle.
+ * @param {Event} event
+ */
 function toggle_all_extensions(event) {
-    gradioApp().querySelectorAll('#extensions .extension_toggle').forEach(function(checkbox_el) {
-        checkbox_el.checked = event.target.checked;
+    const checkbox = event.target instanceof HTMLInputElement ? event.target : null;
+    const checked = checkbox ? checkbox.checked : false;
+
+    getExtensionCheckboxes().forEach((input) => {
+        if (input.classList.contains('extension_toggle')) {
+            input.checked = checked;
+        }
     });
 }
 
+/**
+ * Update the master toggle when an individual extension is toggled.
+ */
 function toggle_extension() {
-    let all_extensions_toggled = true;
-    for (const checkbox_el of gradioApp().querySelectorAll('#extensions .extension_toggle')) {
-        if (!checkbox_el.checked) {
-            all_extensions_toggled = false;
-            break;
+    let allExtensionsToggled = true;
+    getExtensionCheckboxes().forEach((input) => {
+        if (allExtensionsToggled && input.classList.contains('extension_toggle') && !input.checked) {
+            allExtensionsToggled = false;
         }
-    }
+    });
 
-    gradioApp().querySelector('#extensions .all_extensions_toggle').checked = all_extensions_toggled;
+    const masterToggle = gradioApp().querySelector('#extensions .all_extensions_toggle');
+    if (masterToggle instanceof HTMLInputElement) {
+        masterToggle.checked = allExtensionsToggled;
+    }
 }

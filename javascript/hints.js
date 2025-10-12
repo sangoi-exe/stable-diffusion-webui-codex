@@ -1,19 +1,33 @@
+"use strict";
+// @ts-check
+/*
+ DevNotes (2025-10-12)
+ - Purpose: Tooltips automáticos conforme elementos são inseridos/alterados.
+ - Safety: Batching com debounce; busca por classes/dataset/label traduzidos.
+*/
+
 // mouseover tooltips for various UI elements
 
-var titles = {
+/** @typedef {Window & { localization?: Record<string, string>; __forgeHintsWarned?: boolean; gradio_config?: unknown }} HintsWindow */
+
+/** @type {HintsWindow} */
+const hintsWindow = window;
+
+/** @type {Record<string, string>} */
+const titles = {
     "Sampling steps": "How many times to improve the generated image iteratively; higher values take longer; very low values can produce bad results",
     "Sampling method": "Which algorithm to use to produce the image",
-    "GFPGAN": "Restore low quality faces using GFPGAN neural network",
+    GFPGAN: "Restore low quality faces using GFPGAN neural network",
     "Euler a": "Euler Ancestral - very creative, each can get a completely different picture depending on step count, setting steps higher than 30-40 does not help",
-    "DDIM": "Denoising Diffusion Implicit Models - best at inpainting",
-    "UniPC": "Unified Predictor-Corrector Framework for Fast Sampling of Diffusion Models",
+    DDIM: "Denoising Diffusion Implicit Models - best at inpainting",
+    UniPC: "Unified Predictor-Corrector Framework for Fast Sampling of Diffusion Models",
     "DPM adaptive": "Ignores step count - uses a number of steps determined by the CFG and resolution",
 
     "\u{1F4D0}": "Auto detect size from img2img",
     "Batch count": "How many batches of images to create (has no impact on generation performance or VRAM usage)",
     "Batch size": "How many image to create in a single batch (increases generation performance at cost of higher VRAM usage)",
     "CFG Scale": "Classifier Free Guidance Scale - how strongly the image should conform to prompt - lower values produce more creative results",
-    "Seed": "A value that determines the output of random number generator - if you create an image with same parameters and seed as another image, you'll get the same result",
+    Seed: "A value that determines the output of random number generator - if you create an image with same parameters and seed as another image, you'll get the same result",
     "\u{1f3b2}\ufe0f": "Set seed to -1, which will cause a new random number to be used every time",
     "\u267b\ufe0f": "Reuse seed from last generation, mostly useful if it was randomized",
     "\u2199\ufe0f": "Read generation parameters from prompt or last generation if prompt is empty into user interface.",
@@ -34,22 +48,22 @@ var titles = {
 
     "Mask blur": "How much to blur the mask before processing, in pixels.",
     "Masked content": "What to put inside the masked area before processing it with Stable Diffusion.",
-    "fill": "fill it with colors of the image",
-    "original": "keep whatever was there originally",
+    fill: "fill it with colors of the image",
+    original: "keep whatever was there originally",
     "latent noise": "fill it with latent space noise",
     "latent nothing": "fill it with latent space zeroes",
     "Inpaint at full resolution": "Upscale masked region to target resolution, do inpainting, downscale back and paste into original image",
 
     "Denoising strength": "Determines how little respect the algorithm should have for image's content. At 0, nothing will change, and at 1 you'll get an unrelated image. With values below 1.0, processing will take less steps than the Sampling Steps slider specifies.",
 
-    "Skip": "Stop processing current image and continue processing.",
-    "Interrupt": "Stop processing images and return any results accumulated so far.",
-    "Save": "Write image to a directory (default - log/images) and generation parameters into csv file.",
+    Skip: "Stop processing current image and continue processing.",
+    Interrupt: "Stop processing images and return any results accumulated so far.",
+    Save: "Write image to a directory (default - log/images) and generation parameters into csv file.",
 
     "X values": "Separate values for X axis using commas.",
     "Y values": "Separate values for Y axis using commas.",
 
-    "None": "Do not do anything special",
+    None: "Do not do anything special",
     "Prompt matrix": "Separate prompts into parts using vertical pipe character (|) and the script will create a picture for every combination of them (except for the first part, which will be present in all combinations)",
     "X/Y/Z plot": "Create grid(s) where images will have different parameters. Use inputs below to specify which parameters will be shared by columns and rows",
     "Custom code": "Run Python code. Advanced user only. Must run program with --allow-code for this to work",
@@ -57,83 +71,47 @@ var titles = {
     "Prompt S/R": "Separate a list of words with commas, and the first word will be used as a keyword: script will search for this word in the prompt, and replace it with others",
     "Prompt order": "Separate a list of words with commas, and the script will make a variation of prompt with those words for their every possible order",
 
-    "Tiling": "Produce an image that can be tiled.",
+    Tiling: "Produce an image that can be tiled.",
     "Tile overlap": "For SD upscale, how much overlap in pixels should there be between tiles. Tiles overlap so that when they are merged back into one picture, there is no clearly visible seam.",
 
     "Variation seed": "Seed of a different picture to be mixed into the generation.",
-    "Variation strength": "How strong of a variation to produce. At 0, there will be no effect. At 1, you will get the complete picture with variation seed (except for ancestral samplers, where you will just get something).",
-    "Resize seed from height": "Make an attempt to produce a picture similar to what would have been produced with same seed at specified resolution",
-    "Resize seed from width": "Make an attempt to produce a picture similar to what would have been produced with same seed at specified resolution",
+    "Variation strength": "How strong should the influence of the variation seed be - at 0, the seed will have no effect, and at 1, you'll just see the image associated with the seed.",
+    "Variation seed strength": "Deprecated alias for Variation strength.",
 
-    "Interrogate": "Reconstruct prompt from existing image and put it into the prompt field.",
-
-    "Images filename pattern": "Use tags like [seed] and [date] to define how filenames for images are chosen. Leave empty for default.",
-    "Directory name pattern": "Use tags like [seed] and [date] to define how subdirectories for images and grids are chosen. Leave empty for default.",
-    "Max prompt words": "Set the maximum number of words to be used in the [prompt_words] option; ATTENTION: If the words are too long, they may exceed the maximum length of the file path that the system can handle",
-
-    "Loopback": "Performs img2img processing multiple times. Output images are used as input for the next loop.",
-    "Loops": "How many times to process an image. Each output is used as the input of the next loop. If set to 1, behavior will be as if this script were not used.",
-    "Final denoising strength": "The denoising strength for the final loop of each image in the batch.",
-    "Denoising strength curve": "The denoising curve controls the rate of denoising strength change each loop. Aggressive: Most of the change will happen towards the start of the loops. Linear: Change will be constant through all loops. Lazy: Most of the change will happen towards the end of the loops.",
-
-    "Style 1": "Style to apply; styles have components for both positive and negative prompts and apply to both",
-    "Style 2": "Style to apply; styles have components for both positive and negative prompts and apply to both",
-    "Apply style": "Insert selected styles into prompt fields",
-    "Create style": "Save current prompts as a style. If you add the token {prompt} to the text, the style uses that as a placeholder for your prompt when you use the style in the future.",
-
-    "Checkpoint name": "Loads weights from checkpoint before making images. You can either use hash or a part of filename (as seen in settings) for checkpoint name. Recommended to use with Y axis for less switching.",
-    "Inpainting conditioning mask strength": "Only applies to inpainting models. Determines how strongly to mask off the original image for inpainting and img2img. 1.0 means fully masked, which is the default behaviour. 0.0 means a fully unmasked conditioning. Lower values will help preserve the overall composition of the image, but will struggle with large changes.",
-
-    "Eta noise seed delta": "If this values is non-zero, it will be added to seed and used to initialize RNG for noises when using samplers with Eta. You can use this to produce even more variation of images, or you can use this to match images of other software if you know what you are doing.",
-
-    "Filename word regex": "This regular expression will be used extract words from filename, and they will be joined using the option below into label text used for training. Leave empty to keep filename text as it is.",
-    "Filename join string": "This string will be used to join split words into a single line if the option above is enabled.",
-
-    "Quicksettings list": "List of setting names, separated by commas, for settings that should go to the quick access bar at the top, rather than the usual setting tab. See modules/shared.py for setting names. Requires restarting to apply.",
-
-    "Weighted sum": "Result = A * (1 - M) + B * M",
-    "Add difference": "Result = A + (B - C) * M",
-    "No interpolation": "Result = A",
-
-    "Initialization text": "If the number of tokens is more than the number of vectors, some may be skipped.\nLeave the textbox empty to start with zeroed out vectors",
-    "Learning rate": "How fast should training go. Low values will take longer to train, high values may fail to converge (not generate accurate results) and/or may break the embedding (This has happened if you see Loss: nan in the training info textbox. If this happens, you need to manually restore your embedding from an older not-broken backup).\n\nYou can set a single numeric value, or multiple learning rates using the syntax:\n\n   rate_1:max_steps_1, rate_2:max_steps_2, ...\n\nEG:   0.005:100, 1e-3:1000, 1e-5\n\nWill train with rate of 0.005 for first 100 steps, then 1e-3 until 1000 steps, then 1e-5 for all remaining steps.",
-
-    "Clip skip": "Early stopping parameter for CLIP model; 1 is stop at last layer as usual, 2 is stop at penultimate layer, etc.",
-
-    "Approx NN": "Cheap neural network approximation. Very fast compared to VAE, but produces pictures with 4 times smaller horizontal/vertical resolution and lower quality.",
-    "Approx cheap": "Very cheap approximation. Very fast compared to VAE, but produces pictures with 8 times smaller horizontal/vertical resolution and extremely low quality.",
-
-    "Hires. fix": "Use a two step process to partially create an image at smaller resolution, upscale, and then improve details in it without changing composition",
-    "Hires steps": "Number of sampling steps for upscaled picture. If 0, uses same as for original.",
-    "Upscale by": "Adjusts the size of the image by multiplying the original width and height by the selected value. Ignored if either Resize width to or Resize height to are non-zero.",
-    "Resize width to": "Resizes image to this width. If 0, width is inferred from either of two nearby sliders.",
-    "Resize height to": "Resizes image to this height. If 0, height is inferred from either of two nearby sliders.",
-    "Discard weights with matching name": "Regular expression; if weights's name matches it, the weights is not written to the resulting checkpoint. Use ^model_ema to discard EMA weights.",
-    "Extra networks tab order": "Comma-separated list of tab names; tabs listed here will appear in the extra networks UI first and in order listed.",
-    "Negative Guidance minimum sigma": "Skip negative prompt for steps where image is already mostly denoised; the higher this value, the more skips there will be; provides increased performance in exchange for minor quality reduction."
+    "Randomize": "Randomize the values",
+    "Add style": "Add style to prompt",
+    "Refresh": "Refresh the list",
 };
 
+/**
+ * @param {HTMLElement} element
+ */
 function updateTooltip(element) {
-    if (element.title) return; // already has a title
+    const localization = typeof hintsWindow.localization === 'object' && hintsWindow.localization
+        ? hintsWindow.localization
+        : /** @type {Record<string, string>} */ ({});
 
-    let text = element.textContent;
-    let tooltip = localization[titles[text]] || titles[text];
-
+    let tooltip = element.title || '';
     if (!tooltip) {
-        let value = element.value;
-        if (value) tooltip = localization[titles[value]] || titles[value];
+        const label = (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)
+            ? element.placeholder || ''
+            : element.innerText || '';
+        if (label && titles[label]) {
+            tooltip = localization[titles[label]] || titles[label];
+        }
+    }
+
+    if (!tooltip && element.dataset) {
+        const dataValue = element.dataset.value;
+        if (dataValue && titles[dataValue]) {
+            tooltip = localization[titles[dataValue]] || titles[dataValue];
+        }
     }
 
     if (!tooltip) {
-        // Gradio dropdown options have `data-value`.
-        let dataValue = element.dataset.value;
-        if (dataValue) tooltip = localization[titles[dataValue]] || titles[dataValue];
-    }
-
-    if (!tooltip) {
-        for (const c of element.classList) {
-            if (c in titles) {
-                tooltip = localization[titles[c]] || titles[c];
+        for (const cls of Array.from(element.classList)) {
+            if (titles[cls]) {
+                tooltip = localization[titles[cls]] || titles[cls];
                 break;
             }
         }
@@ -144,77 +122,88 @@ function updateTooltip(element) {
     }
 }
 
-// Nodes to check for adding tooltips.
+/** @type {Set<HTMLElement>} */
 const tooltipCheckNodes = new Set();
-// Timer for debouncing tooltip check.
+/** @type {ReturnType<typeof setTimeout> | null} */
 let tooltipCheckTimer = null;
 
 function processTooltipCheckNodes() {
-    for (const node of tooltipCheckNodes) {
-        updateTooltip(node);
-    }
+    tooltipCheckNodes.forEach((node) => updateTooltip(node));
     tooltipCheckNodes.clear();
 }
 
-onUiUpdate(function(mutationRecords) {
-    try {
-        const records = Array.isArray(mutationRecords)
-            ? mutationRecords
-            : (mutationRecords ? [mutationRecords] : []);
+/**
+ * @param {HTMLElement} element
+ */
+function enqueueTooltipCheck(element) {
+    tooltipCheckNodes.add(element);
+}
 
-        for (const record of records) {
-            if (!record || !record.target || !(record.target instanceof Element)) continue;
+onUiUpdate((/** @type {MutationRecord[] | MutationRecord | null | undefined} */ mutationRecords) => {
+    const records = Array.isArray(mutationRecords)
+        ? mutationRecords
+        : mutationRecords
+            ? [mutationRecords]
+            : [];
 
-            if (record.type === "childList" && record.target.classList.contains("options")) {
-                // Likely a Gradio dropdown menu update, enqueue an update for the input element
-                const wrap = record.target.parentNode instanceof Element ? record.target.parentNode : null;
-                const input = wrap ? wrap.querySelector("input") : null;
-                if (input) {
-                    input.title = ""; // Force update
-                    tooltipCheckNodes.add(input);
-                }
+    for (const record of records) {
+        if (!record || !(record.target instanceof Element)) continue;
+
+        if (record.type === 'childList' && record.target.classList.contains('options')) {
+            const wrap = record.target.parentElement;
+            const input = wrap instanceof HTMLElement ? wrap.querySelector('input') : null;
+            if (input instanceof HTMLElement) {
+                input.title = '';
+                enqueueTooltipCheck(input);
             }
+        }
 
-            if (record.addedNodes && record.addedNodes.length) {
-                for (const node of record.addedNodes) {
-                    if (!(node instanceof Element) || node.classList.contains("hide")) continue;
-                    if (!node.title) {
-                        const tag = node.tagName;
-                        if (
-                            tag === "SPAN" ||
-                            tag === "BUTTON" ||
-                            tag === "P" ||
-                            tag === "INPUT" ||
-                            (tag === "LI" && node.classList.contains("item"))
-                        ) {
-                            tooltipCheckNodes.add(node);
-                        }
+        if (record.addedNodes && record.addedNodes.length) {
+            record.addedNodes.forEach((/** @type {Node} */ node) => {
+                if (!(node instanceof HTMLElement) || node.classList.contains('hide')) return;
+                if (!node.title) {
+                    const tag = node.tagName;
+                    if (tag === 'SPAN' || tag === 'BUTTON' || tag === 'P' || tag === 'INPUT' || (tag === 'LI' && node.classList.contains('item'))) {
+                        enqueueTooltipCheck(node);
                     }
-                    node.querySelectorAll('span, button, p').forEach(n => tooltipCheckNodes.add(n));
                 }
-            }
+                node.querySelectorAll('span, button, p').forEach((child) => {
+                    if (child instanceof HTMLElement) enqueueTooltipCheck(child);
+                });
+            });
         }
+    }
 
-        if (tooltipCheckNodes.size) {
-            clearTimeout(tooltipCheckTimer);
-            tooltipCheckTimer = setTimeout(processTooltipCheckNodes, 1000);
-        }
-    } catch (e) {
-        // Log once per session to console without breaking the UI
-        if (!window.__forgeHintsWarned) {
-            console.warn('hints onUiUpdate error', e);
-            window.__forgeHintsWarned = true;
-        }
+    if (tooltipCheckNodes.size) {
+        if (tooltipCheckTimer !== null) clearTimeout(tooltipCheckTimer);
+        tooltipCheckTimer = window.setTimeout(processTooltipCheckNodes, 1000);
     }
 });
 
-onUiLoaded(function() {
-    for (var comp of window.gradio_config.components) {
-        if (comp.props.webui_tooltip && comp.props.elem_id) {
-            var elem = gradioApp().getElementById(comp.props.elem_id);
-            if (elem) {
-                elem.title = comp.props.webui_tooltip;
-            }
-        }
+/**
+ * Warn once if localization is missing.
+ */
+function ensureLocalization() {
+    if (hintsWindow.__forgeHintsWarned) return;
+    hintsWindow.__forgeHintsWarned = true;
+    if (!hintsWindow.localization) {
+        console.warn('Localization dictionary missing, tooltips will use defaults.');
     }
+}
+
+onUiLoaded(() => {
+    ensureLocalization();
+    processTooltipCheckNodes();
 });
+
+if (hintsWindow.gradio_config) {
+    const root = gradioApp();
+    let wrap = null;
+    if ('getElementById' in root && typeof root.getElementById === 'function') {
+        wrap = root.getElementById('txt2img_settings');
+    }
+    if (!(wrap instanceof HTMLElement)) {
+        wrap = document.getElementById('txt2img_settings');
+    }
+    if (wrap instanceof HTMLElement) enqueueTooltipCheck(wrap);
+}

@@ -1,66 +1,142 @@
-// various functions for interaction with ui.py not large enough to warrant putting them in separate files
+"use strict";
+// @ts-check
+/*
+ DevNotes (2025-10-12)
+ - Purpose: UI glue for submit flows, gallery helpers, and small UX toggles.
+ - Safety: Use getAppElementById for all ID lookups; never mutate submit arg order.
+ - Helpers: submitWithProgress, normalizeSubmitArgs, updateInput, restoreProgress.
+ - Events: listeners annotated (Keyboard/Mouse), guarded against nulls.
+*/
 
-function set_theme(theme) {
-    var gradioURL = window.location.href;
-    if (!gradioURL.includes('?__theme=')) {
-        window.location.replace(gradioURL + '?__theme=' + theme);
-    }
+/**
+ * Various client-side helpers used by the Gradio UI build in `ui.py`.
+ */
+
+/** @typedef {Window & {
+ *   submit?: (...args: unknown[]) => unknown[];
+ *   submit_txt2img_upscale?: (...args: unknown[]) => unknown[];
+ *   restoreProgressTxt2img?: () => string | null;
+ *   restoreProgressImg2img?: () => string | null;
+ *   args_to_array?: typeof Array.from;
+ * }} UIWindow */
+
+/** @type {UIWindow} */
+const uiWindow = window;
+
+/**
+ * Shortcut to the Gradio app root.
+ * @returns {Document | ShadowRoot | HTMLElement}
+ */
+function gradioRoot() {
+    return gradioApp();
 }
 
+/**
+ * Retrieve an element by id, looking inside the Gradio root first with a DOM fallback.
+ * @param {string} id
+ * @returns {HTMLElement | null}
+ */
+function getAppElementById(id) {
+    const root = gradioRoot();
+    if ('getElementById' in root && typeof root.getElementById === 'function') {
+        const el = root.getElementById(id);
+        if (el instanceof HTMLElement) return el;
+    }
+    const fallback = document.getElementById(id);
+    return fallback instanceof HTMLElement ? fallback : null;
+}
+
+/**
+ * @returns {HTMLElement[]}
+ */
 function all_gallery_buttons() {
-    var allGalleryButtons = gradioApp().querySelectorAll('[style="display: block;"].tabitem div[id$=_gallery].gradio-gallery .thumbnails > .thumbnail-item.thumbnail-small');
-    var visibleGalleryButtons = [];
-    allGalleryButtons.forEach(function(elem) {
-        if (elem.parentElement.offsetParent) {
-            visibleGalleryButtons.push(elem);
+    const buttons = gradioRoot().querySelectorAll('[style="display: block;"] .thumbnail-item.thumbnail-small');
+    /** @type {HTMLElement[]} */
+    const visible = [];
+    buttons.forEach((elem) => {
+        if (elem instanceof HTMLElement && elem.parentElement?.offsetParent) {
+            visible.push(elem);
         }
     });
-    return visibleGalleryButtons;
+    return visible;
 }
 
+/**
+ * @returns {HTMLElement | null}
+ */
 function selected_gallery_button() {
-    return all_gallery_buttons().find(elem => elem.classList.contains('selected')) ?? null;
+    return all_gallery_buttons().find((elem) => elem.classList.contains('selected')) ?? null;
 }
 
+/**
+ * @returns {number}
+ */
 function selected_gallery_index() {
-    return all_gallery_buttons().findIndex(elem => elem.classList.contains('selected'));
+    return all_gallery_buttons().findIndex((elem) => elem.classList.contains('selected'));
 }
 
-function gallery_container_buttons(gallery_container) {
-    return gradioApp().querySelectorAll(`#${gallery_container} .thumbnail-item.thumbnail-small`);
+/**
+ * @param {string} galleryContainer
+ * @returns {NodeListOf<HTMLElement>}
+ */
+function gallery_container_buttons(galleryContainer) {
+    return gradioRoot().querySelectorAll(`#${galleryContainer} .thumbnail-item.thumbnail-small`);
 }
 
-function selected_gallery_index_id(gallery_container) {
-    return Array.from(gallery_container_buttons(gallery_container)).findIndex(elem => elem.classList.contains('selected'));
+/**
+ * @param {string} galleryContainer
+ * @returns {number}
+ */
+function selected_gallery_index_id(galleryContainer) {
+    return Array.from(gallery_container_buttons(galleryContainer)).findIndex((elem) => elem.classList.contains('selected'));
 }
 
+/**
+ * @template T
+ * @param {T[]} gallery
+ * @returns {[T | null][]}
+ */
 function extract_image_from_gallery(gallery) {
-    if (gallery.length == 0) {
-        return [null];
+    if (gallery.length === 0) {
+        return [[null]];
     }
-
-    var index = selected_gallery_index();
-
+    let index = selected_gallery_index();
     if (index < 0 || index >= gallery.length) {
-        // Use the first image in the gallery as the default
         index = 0;
     }
-
-    return [[gallery[index]]];
+    return [[gallery[index] ?? null]];
 }
 
-window.args_to_array = Array.from; // Compatibility with e.g. extensions that may expect this to be around
+uiWindow.args_to_array = Array.from;
+
+/** @param {string} theme */
+function set_theme(theme) {
+    const gradioURL = window.location.href;
+    if (!gradioURL.includes('?__theme=')) {
+        window.location.replace(`${gradioURL}?__theme=${theme}`);
+    }
+}
 
 function switch_to_txt2img() {
-    gradioApp().querySelector('#tabs').querySelectorAll('button')[0].click();
-
+    const tabs = gradioRoot().querySelector('#tabs');
+    const buttons = tabs ? tabs.querySelectorAll('button') : null;
+    buttons?.[0]?.click();
     return Array.from(arguments);
 }
 
-function switch_to_img2img_tab(no) {
-    gradioApp().querySelector('#tabs').querySelectorAll('button')[1].click();
-    gradioApp().getElementById('mode_img2img').querySelectorAll('button')[no].click();
+/** @param {number} index */
+function switch_to_img2img_tab(index) {
+    const tabs = gradioRoot().querySelector('#tabs');
+    const buttons = tabs ? tabs.querySelectorAll('button') : null;
+    buttons?.[1]?.click();
+    const mode = getAppElementById('mode_img2img');
+    if (mode) {
+        const modeButtons = mode.querySelectorAll('button');
+        const button = modeButtons?.[index];
+        if (button instanceof HTMLElement) button.click();
+    }
 }
+
 function switch_to_img2img() {
     switch_to_img2img_tab(0);
     return Array.from(arguments);
@@ -82,383 +158,446 @@ function switch_to_inpaint_sketch() {
 }
 
 function switch_to_extras() {
-    gradioApp().querySelector('#tabs').querySelectorAll('button')[3].click();
-
+    const tabs = gradioRoot().querySelector('#tabs');
+    const buttons = tabs ? tabs.querySelectorAll('button') : null;
+    buttons?.[3]?.click();
     return Array.from(arguments);
 }
 
+/**
+ * @param {string} tabId
+ * @returns {number}
+ */
 function get_tab_index(tabId) {
-    let buttons = gradioApp().getElementById(tabId).querySelector('div').querySelectorAll('button');
-    for (let i = 0; i < buttons.length; i++) {
-        if (buttons[i].classList.contains('selected')) {
-            return i;
-        }
+    const tab = getAppElementById(tabId);
+    const buttons = tab ? tab.querySelector('div')?.querySelectorAll('button') : null;
+    if (!buttons) return 0;
+    const arr = Array.from(buttons);
+    for (let i = 0; i < arr.length; i += 1) {
+        const btn = arr[i];
+        if (btn instanceof HTMLElement && btn.classList.contains('selected')) return i;
     }
     return 0;
 }
 
+/**
+ * @param {string} tabId
+ * @param {IArguments} args
+ */
 function create_tab_index_args(tabId, args) {
-    var res = Array.from(args);
+    const res = Array.from(args);
     res[0] = get_tab_index(tabId);
     return res;
 }
 
 function get_img2img_tab_index() {
-    let res = Array.from(arguments);
+    const res = Array.from(arguments);
     res.splice(-2);
     res[0] = get_tab_index('mode_img2img');
     return res;
 }
 
+/**
+ * @param {IArguments | unknown[]} args
+ * @returns {unknown[]}
+ */
 function create_submit_args(args) {
-    // Gradio 5: do NOT splice or drop trailing values;
-    // argument order is part of the contract and includes
-    // internal fields (e.g. upload tracking). Modifying it
-    // can cause `upload_id=undefined` and queue errors.
-    return Array.from(args);
+    return Array.from(/** @type {any} */ (args));
 }
 
-// Normalize potentially stringified numbers in submit payloads to avoid
-// Slider/Number preprocess type errors in Gradio (e.g., '512' vs 512).
+/**
+ * @param {string} tabname
+ * @param {unknown[]} res
+ * @returns {unknown[]}
+ */
 function normalizeSubmitArgs(tabname, res) {
     try {
-        // Generic coercion: convert purely numeric strings to numbers
-        for (let i = 0; i < res.length; i++) {
-            const v = res[i];
-            if (typeof v === 'string') {
-                const s = v.trim();
-                if (/^-?\d+$/.test(s)) {
-                    const n = parseInt(s, 10);
-                    if (!Number.isNaN(n)) res[i] = n;
-                } else if (/^-?\d*\.\d+$/.test(s)) {
-                    const f = parseFloat(s);
-                    if (!Number.isNaN(f)) res[i] = f;
+        for (let i = 0; i < res.length; i += 1) {
+            const value = res[i];
+            if (typeof value === 'string') {
+                const trimmed = value.trim();
+                if (/^-?\d+$/.test(trimmed)) {
+                    const numeric = Number.parseInt(trimmed, 10);
+                    if (!Number.isNaN(numeric)) res[i] = numeric;
+                } else if (/^-?\d*\.\d+$/.test(trimmed)) {
+                    const floatValue = Number.parseFloat(trimmed);
+                    if (!Number.isNaN(floatValue)) res[i] = floatValue;
                 }
             }
         }
-    } catch (e) {
-        console.warn('normalizeSubmitArgs failed:', e);
+    } catch (error) {
+        console.warn('normalizeSubmitArgs failed:', error);
     }
     return res;
 }
 
+/**
+ * @param {string} tabname
+ * @param {boolean} showInterrupt
+ * @param {boolean} showSkip
+ * @param {boolean} showInterrupting
+ */
 function setSubmitButtonsVisibility(tabname, showInterrupt, showSkip, showInterrupting) {
-    gradioApp().getElementById(tabname + '_interrupt').style.display = showInterrupt ? "block" : "none";
-    gradioApp().getElementById(tabname + '_skip').style.display = showSkip ? "block" : "none";
-    gradioApp().getElementById(tabname + '_interrupting').style.display = showInterrupting ? "block" : "none";
+    const interrupt = getAppElementById(`${tabname}_interrupt`);
+    const skip = getAppElementById(`${tabname}_skip`);
+    const interrupting = getAppElementById(`${tabname}_interrupting`);
+    if (interrupt) interrupt.style.display = showInterrupt ? 'block' : 'none';
+    if (skip) skip.style.display = showSkip ? 'block' : 'none';
+    if (interrupting) interrupting.style.display = showInterrupting ? 'block' : 'none';
 }
 
+/** @param {string} tabname @param {boolean} show */
 function showSubmitButtons(tabname, show) {
     setSubmitButtonsVisibility(tabname, !show, !show, false);
 }
 
+/** @param {string} tabname */
 function showSubmitInterruptingPlaceholder(tabname) {
     setSubmitButtonsVisibility(tabname, false, true, true);
 }
 
+/**
+ * @param {string} tabname
+ * @param {boolean} show
+ */
 function showRestoreProgressButton(tabname, show) {
-    var button = gradioApp().getElementById(tabname + "_restore_progress");
-    if (!button) return;
-    button.style.setProperty('display', show ? 'flex' : 'none', 'important');
+    const button = getAppElementById(`${tabname}_restore_progress`);
+    if (button) button.style.setProperty('display', show ? 'flex' : 'none', 'important');
 }
 
-function submit() {
-    showSubmitButtons('txt2img', false);
+/**
+ * @param {IArguments} args
+ * @param {string} galleryContainerId
+ * @param {string} galleryId
+ * @returns {unknown[]}
+ */
+function submitWithProgress(args, galleryContainerId, galleryId) {
+    const tabname = /** @type {string} */ (galleryContainerId.split('_', 1)[0]);
+    showSubmitButtons(tabname, false);
 
-    var id = randomId();
-    localSet("txt2img_task_id", id);
+    const id = randomId();
+    localSet(`${tabname}_task_id`, id);
 
-    requestProgress(id, gradioApp().getElementById('txt2img_gallery_container'), gradioApp().getElementById('txt2img_gallery'), function() {
-        showSubmitButtons('txt2img', true);
-        localRemove("txt2img_task_id");
-        showRestoreProgressButton('txt2img', false);
-    });
+    const container = getAppElementById(galleryContainerId);
+    const gallery = getAppElementById(galleryId);
 
-    var res = create_submit_args(arguments);
-    res = normalizeSubmitArgs('txt2img', res);
+    requestProgress(
+        id,
+        /** @type {HTMLElement} */ (container),
+        gallery,
+        () => {
+            showSubmitButtons(tabname, true);
+            localRemove(`${tabname}_task_id`);
+            showRestoreProgressButton(tabname, false);
+        }
+    );
 
+    const res = normalizeSubmitArgs(tabname, create_submit_args(args));
     res[0] = id;
-
     return res;
 }
 
+function submit() {
+    return submitWithProgress(arguments, 'txt2img_gallery_container', 'txt2img_gallery');
+}
+
 function submit_txt2img_upscale() {
-    var res = submit(...arguments);
-
+    const res = submit(...arguments);
     res[2] = selected_gallery_index();
-
     return res;
 }
 
 function submit_img2img() {
-    showSubmitButtons('img2img', false);
-
-    var id = randomId();
-    localSet("img2img_task_id", id);
-
-    requestProgress(id, gradioApp().getElementById('img2img_gallery_container'), gradioApp().getElementById('img2img_gallery'), function() {
-        showSubmitButtons('img2img', true);
-        localRemove("img2img_task_id");
-        showRestoreProgressButton('img2img', false);
-    });
-
-    var res = create_submit_args(arguments);
-    res = normalizeSubmitArgs('img2img', res);
-
-    res[0] = id;
-
-    return res;
+    return submitWithProgress(arguments, 'img2img_gallery_container', 'img2img_gallery');
 }
 
 function submit_extras() {
-    showSubmitButtons('extras', false);
+    return submitWithProgress(arguments, 'extras_gallery_container', 'extras_gallery');
+}
 
-    var id = randomId();
-
-    requestProgress(id, gradioApp().getElementById('extras_gallery_container'), gradioApp().getElementById('extras_gallery'), function() {
-        showSubmitButtons('extras', true);
-    });
-
-    var res = create_submit_args(arguments);
-
-    res[0] = id;
-
-    return res;
+/** @param {string} tabname */
+function restoreProgress(tabname) {
+    showRestoreProgressButton(tabname, false);
+    const id = localGet(`${tabname}_task_id`);
+    if (typeof id === 'string') {
+        showSubmitInterruptingPlaceholder(tabname);
+        requestProgress(
+            id,
+            /** @type {HTMLElement} */ (getAppElementById(`${tabname}_gallery_container`)),
+            getAppElementById(`${tabname}_gallery`),
+            () => showSubmitButtons(tabname, true),
+            undefined,
+            0
+        );
+        return id;
+    }
+    return null;
 }
 
 function restoreProgressTxt2img() {
-    showRestoreProgressButton("txt2img", false);
-    var id = localGet("txt2img_task_id");
-
-    if (id) {
-        showSubmitInterruptingPlaceholder('txt2img');
-        requestProgress(id, gradioApp().getElementById('txt2img_gallery_container'), gradioApp().getElementById('txt2img_gallery'), function() {
-            showSubmitButtons('txt2img', true);
-        }, null, 0);
-    }
-
-    return id;
+    return restoreProgress('txt2img');
 }
 
 function restoreProgressImg2img() {
-    showRestoreProgressButton("img2img", false);
-
-    var id = localGet("img2img_task_id");
-
-    if (id) {
-        showSubmitInterruptingPlaceholder('img2img');
-        requestProgress(id, gradioApp().getElementById('img2img_gallery_container'), gradioApp().getElementById('img2img_gallery'), function() {
-            showSubmitButtons('img2img', true);
-        }, null, 0);
-    }
-
-    return id;
+    return restoreProgress('img2img');
 }
 
-// Expose functions for Gradio's _js hooks explicitly on window
-window.submit = submit;
-window.submit_txt2img_upscale = submit_txt2img_upscale;
-window.restoreProgressTxt2img = restoreProgressTxt2img;
-window.restoreProgressImg2img = restoreProgressImg2img;
-
+uiWindow.submit = submit;
+uiWindow.submit_txt2img_upscale = submit_txt2img_upscale;
+uiWindow.restoreProgressTxt2img = restoreProgressTxt2img;
+uiWindow.restoreProgressImg2img = restoreProgressImg2img;
 
 /**
- * Configure the width and height elements on `tabname` to accept
- * pasting of resolutions in the form of "width x height".
+ * Configure the width and height elements on `tabname` to accept pasting of resolutions.
+ * @param {string} tabname
  */
 function setupResolutionPasting(tabname) {
-    var width = gradioApp().querySelector(`#${tabname}_width input[type=number]`);
-    var height = gradioApp().querySelector(`#${tabname}_height input[type=number]`);
-    for (const el of [width, height]) {
-        el.addEventListener('paste', function(event) {
-            var pasteData = event.clipboardData.getData('text/plain');
-            var parsed = pasteData.match(/^\s*(\d+)\D+(\d+)\s*$/);
-            if (parsed) {
-                width.value = parsed[1];
-                height.value = parsed[2];
+    const width = gradioRoot().querySelector(`#${tabname}_width input[type=number]`);
+    const height = gradioRoot().querySelector(`#${tabname}_height input[type=number]`);
+    [width, height].forEach((el) => {
+        if (!(el instanceof HTMLInputElement)) return;
+        el.addEventListener('paste', (event) => {
+            const text = event.clipboardData?.getData('text/plain') ?? '';
+            const match = text.match(/^\s*(\d+)\D+(\d+)\s*$/);
+            if (match && match[1] && match[2] && width instanceof HTMLInputElement && height instanceof HTMLInputElement) {
+                width.value = match[1];
+                height.value = match[2];
                 updateInput(width);
                 updateInput(height);
                 event.preventDefault();
             }
         });
-    }
+    });
 }
 
-onUiLoaded(function() {
-    showRestoreProgressButton('txt2img', localGet("txt2img_task_id"));
-    showRestoreProgressButton('img2img', localGet("img2img_task_id"));
+onUiLoaded(() => {
+    showRestoreProgressButton('txt2img', Boolean(restoreProgressTxt2img()));
+    showRestoreProgressButton('img2img', Boolean(restoreProgressImg2img()));
     setupResolutionPasting('txt2img');
     setupResolutionPasting('img2img');
 });
 
-
 function modelmerger() {
-    var id = randomId();
-    requestProgress(id, gradioApp().getElementById('modelmerger_results_panel'), null, function() {});
-
-    var res = create_submit_args(arguments);
+    const id = randomId();
+    requestProgress(id, /** @type {HTMLElement} */ (getAppElementById('modelmerger_results_panel')), null, () => {});
+    const res = create_submit_args(arguments);
     res[0] = id;
     return res;
 }
 
-
-function ask_for_style_name(_, prompt_text, negative_prompt_text) {
-    var name_ = prompt('Style name:');
-    return [name_, prompt_text, negative_prompt_text];
+/** @param {unknown} _ @param {string} promptText @param {string} negativePromptText */
+function ask_for_style_name(_, promptText, negativePromptText) {
+    const name = prompt('Style name:') ?? '';
+    return [name, promptText, negativePromptText];
 }
 
-function confirm_clear_prompt(prompt, negative_prompt) {
-    if (confirm("Delete prompt?")) {
-        prompt = "";
-        negative_prompt = "";
+/** @param {string} promptValue @param {string} negativePromptValue */
+function confirm_clear_prompt(promptValue, negativePromptValue) {
+    if (confirm('Delete prompt?')) {
+        promptValue = '';
+        negativePromptValue = '';
+    }
+    return [promptValue, negativePromptValue];
+}
+
+/** @type {StableDiffusionOptions} */
+var opts = /** @type {any} */ ({});
+
+onAfterUiUpdate(() => {
+    if (Object.keys(opts).length !== 0) return;
+
+    const jsonElem = getAppElementById('settings_json');
+    if (!jsonElem) return;
+
+    const textarea = jsonElem.querySelector('textarea');
+    if (!(textarea instanceof HTMLTextAreaElement)) return;
+
+    try {
+        opts = JSON.parse(textarea.value);
+    } catch (error) {
+        console.error('Failed to parse settings_json:', error);
+        return;
     }
 
-    return [prompt, negative_prompt];
-}
+    executeCallbacks(optionsAvailableCallbacks, undefined, 'onOptionsAvailable');
+    executeCallbacks(optionsChangedCallbacks, undefined, 'onOptionsChanged');
 
-
-var opts = {};
-onAfterUiUpdate(function() {
-    if (Object.keys(opts).length != 0) return;
-
-    var json_elem = gradioApp().getElementById('settings_json');
-    if (json_elem == null) return;
-
-    var textarea = json_elem.querySelector('textarea');
-    var jsdata = textarea.value;
-    opts = JSON.parse(jsdata);
-
-    executeCallbacks(optionsAvailableCallbacks, undefined, 'onOptionsAvailable'); /*global optionsAvailableCallbacks*/
-    executeCallbacks(optionsChangedCallbacks, undefined, 'onOptionsChanged'); /*global optionsChangedCallbacks*/
-
-    Object.defineProperty(textarea, 'value', {
-        set: function(newValue) {
-            var valueProp = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
-            var oldValue = valueProp.get.call(textarea);
-            valueProp.set.call(textarea, newValue);
-
-            if (oldValue != newValue) {
-                opts = JSON.parse(textarea.value);
+    const valueDescriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+    if (valueDescriptor) {
+        const originalGet = valueDescriptor.get?.bind(textarea);
+        const originalSet = valueDescriptor.set?.bind(textarea);
+        Object.defineProperty(textarea, 'value', {
+            set(newValue) {
+                const oldValue = typeof originalGet === 'function' ? originalGet() : textarea.value;
+                if (typeof originalSet === 'function') originalSet(newValue);
+                if (oldValue !== newValue) {
+                    try {
+                        opts = JSON.parse(textarea.value);
+                    } catch (error) {
+                        console.error('Failed to parse updated settings_json:', error);
+                    }
+                }
+                executeCallbacks(optionsChangedCallbacks, undefined, 'onOptionsChanged');
+            },
+            get() {
+                return typeof originalGet === 'function' ? originalGet() : textarea.value;
             }
+        });
+    }
 
-            executeCallbacks(optionsChangedCallbacks, undefined, 'onOptionsChanged');
-        },
-        get: function() {
-            var valueProp = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
-            return valueProp.get.call(textarea);
-        }
-    });
-
-    json_elem.parentElement.style.display = "none";
+    jsonElem.parentElement?.style && (jsonElem.parentElement.style.display = 'none');
 });
 
-onOptionsChanged(function() {
-    var elem = gradioApp().getElementById('sd_checkpoint_hash');
-    var sd_checkpoint_hash = opts.sd_checkpoint_hash || "";
-    var shorthash = sd_checkpoint_hash.substring(0, 10);
-
-    if (elem && elem.textContent != shorthash) {
-        elem.textContent = shorthash;
-        elem.title = sd_checkpoint_hash;
-        elem.href = "https://google.com/search?q=" + sd_checkpoint_hash;
+onOptionsChanged(() => {
+    const elem = getAppElementById('sd_checkpoint_hash');
+    const hash = typeof opts.sd_checkpoint_hash === 'string' ? opts.sd_checkpoint_hash : '';
+    const shortHash = hash.substring(0, 10);
+    if (elem && elem.textContent !== shortHash) {
+        elem.textContent = shortHash;
+        elem.title = hash;
+        elem.setAttribute('href', `https://google.com/search?q=${hash}`);
     }
 });
 
-let txt2img_textarea, img2img_textarea = undefined;
+/** @type {HTMLTextAreaElement | null} */ let txt2img_textarea = null;
+/** @type {HTMLTextAreaElement | null} */ let img2img_textarea = null;
 
 function restart_reload() {
-    document.body.style.backgroundColor = "var(--background-fill-primary)";
+    document.body.style.backgroundColor = 'var(--background-fill-primary)';
     document.body.innerHTML = '<h1 style="font-family:monospace;margin-top:20%;color:lightgray;text-align:center;">Reloading...</h1>';
-    var requestPing = function() {
-        requestGet("./internal/ping", {}, function(data) {
+    const requestPing = () => {
+        requestGet('./internal/ping', {}, () => {
             location.reload();
-        }, function() {
+        }, () => {
             setTimeout(requestPing, 500);
         });
     };
-
     setTimeout(requestPing, 2000);
-
     return [];
 }
 
-// Simulate an `input` DOM event for Gradio Textbox component. Needed after you edit its contents in javascript, otherwise your edits
-// will only visible on web page and not sent to python.
+/**
+ * Trigger an input event for Gradio textboxes after programmatic edits.
+ * @param {HTMLInputElement | HTMLTextAreaElement} target
+ */
 function updateInput(target) {
-    let e = new Event("input", {bubbles: true});
-    Object.defineProperty(e, "target", {value: target});
-    target.dispatchEvent(e);
+    const event = new Event('input', { bubbles: true });
+    target.dispatchEvent(event);
 }
 
-
-var desiredCheckpointName = null;
+/** @type {string | null} */
+let desiredCheckpointName = null;
+/** @param {string} name */
 function selectCheckpoint(name) {
     desiredCheckpointName = name;
-    gradioApp().getElementById('change_checkpoint').click();
+    getAppElementById('change_checkpoint')?.click();
 }
-var desiredVAEName = 0;
+
+/** @type {string | number} */
+let desiredVAEName = 0;
+/** @param {string | number} vae */
 function selectVAE(vae) {
     desiredVAEName = vae;
 }
 
+/** @param {number} w @param {number} h @param {number} r */
 function currentImg2imgSourceResolution(w, h, r) {
-    var img = gradioApp().querySelector('#mode_img2img > div[style="display: block;"] :is(img, canvas)');
-    return img ? [img.naturalWidth || img.width, img.naturalHeight || img.height, r] : [0, 0, r];
+    const img = gradioRoot().querySelector('#mode_img2img > div[style="display: block;"] img, #mode_img2img > div[style="display: block;"] canvas');
+    if (img instanceof HTMLImageElement) {
+        return [img.naturalWidth || img.width, img.naturalHeight || img.height, r];
+    } else if (img instanceof HTMLCanvasElement) {
+        return [img.width, img.height, r];
+    }
+    return [w, h, r];
 }
 
 function updateImg2imgResizeToTextAfterChangingImage() {
-    // At the time this is called from gradio, the image has no yet been replaced.
-    // There may be a better solution, but this is simple and straightforward so I'm going with it.
-
-    setTimeout(function() {
-        gradioApp().getElementById('img2img_update_resize_to').click();
+    setTimeout(() => {
+        getAppElementById('img2img_update_resize_to')?.click();
     }, 500);
-
     return [];
-
 }
 
-
-
-function setRandomSeed(elem_id) {
-    var input = gradioApp().querySelector("#" + elem_id + " input");
-    if (!input) return [];
-
-    input.value = "-1";
+/** @param {string} elemId */
+function setRandomSeed(elemId) {
+    const input = gradioRoot().querySelector(`#${elemId} input`);
+    if (!(input instanceof HTMLInputElement)) return [];
+    input.value = '-1';
     updateInput(input);
     return [];
 }
 
+/** @param {string} tabname */
 function switchWidthHeight(tabname) {
-    var width = gradioApp().querySelector("#" + tabname + "_width input[type=number]");
-    var height = gradioApp().querySelector("#" + tabname + "_height input[type=number]");
-    if (!width || !height) return [];
-
-    var tmp = width.value;
+    const width = gradioRoot().querySelector(`#${tabname}_width input[type=number]`);
+    const height = gradioRoot().querySelector(`#${tabname}_height input[type=number]`);
+    if (!(width instanceof HTMLInputElement) || !(height instanceof HTMLInputElement)) return [];
+    const tmp = width.value;
     width.value = height.value;
     height.value = tmp;
-
     updateInput(width);
     updateInput(height);
     return [];
 }
 
+/** @type {Record<string, number>} */
+const onEditTimers = {};
 
-var onEditTimers = {};
-
-// calls func after afterMs milliseconds has passed since the input elem has been edited by user
+/**
+ * Register a throttled input handler.
+ * @param {string} editId
+ * @param {HTMLInputElement | HTMLTextAreaElement | null} elem
+ * @param {number} afterMs
+ * @param {() => void} func
+ * @returns {() => void}
+ */
 function onEdit(editId, elem, afterMs, func) {
     if (!elem) {
-        return function(){};
+        return () => {};
     }
-    var edited = function() {
-        var existingTimer = onEditTimers[editId];
-        if (existingTimer) clearTimeout(existingTimer);
-
-        onEditTimers[editId] = setTimeout(func, afterMs);
+    const edited = () => {
+        const existingTimer = onEditTimers[editId];
+        if (existingTimer) window.clearTimeout(existingTimer);
+        onEditTimers[editId] = window.setTimeout(func, afterMs);
     };
-
-    elem.addEventListener("input", edited);
-
+    elem.addEventListener('input', edited);
     return edited;
 }
+
+// expose globals for legacy hooks
+Object.assign(uiWindow, {
+    set_theme,
+    all_gallery_buttons,
+    selected_gallery_button,
+    selected_gallery_index,
+    gallery_container_buttons,
+    selected_gallery_index_id,
+    extract_image_from_gallery,
+    switch_to_txt2img,
+    switch_to_img2img,
+    switch_to_sketch,
+    switch_to_inpaint,
+    switch_to_inpaint_sketch,
+    switch_to_extras,
+    get_tab_index,
+    create_tab_index_args,
+    get_img2img_tab_index,
+    create_submit_args,
+    normalizeSubmitArgs,
+    setSubmitButtonsVisibility,
+    showSubmitButtons,
+    showSubmitInterruptingPlaceholder,
+    showRestoreProgressButton,
+    submit_extras,
+    modelmerger,
+    ask_for_style_name,
+    confirm_clear_prompt,
+    updateInput,
+    selectCheckpoint,
+    selectVAE,
+    currentImg2imgSourceResolution,
+    updateImg2imgResizeToTextAfterChangingImage,
+    setRandomSeed,
+    switchWidthHeight,
+    onEdit,
+});

@@ -1,215 +1,234 @@
-// code related to showing and updating progressbar shown as the image is being made
+"use strict";
+// @ts-check
+/*
+ DevNotes (2025-10-12)
+ - Purpose: Queue progress UI + optional live preview with safe wake-lock handling.
+ - Contract: requestProgress(id, container, gallery, atEnd, onProgress?, timeout?)
+ - Safety: Guards for missing nodes; wakeLock feature-detected; robust JSON parsing.
+*/
 
-function rememberGallerySelection() {
+/**
+ * @typedef {{
+ *   progress?: number;
+ *   eta?: number;
+ *   completed?: boolean;
+ *   textinfo?: string;
+ *   active?: boolean;
+ *   queued?: boolean;
+ *   id_live_preview?: string;
+ *   live_preview?: string;
+ * }} ProgressResponse
+ */
 
-}
+function rememberGallerySelection() {}
+function getGallerySelectedIndex() {}
 
-function getGallerySelectedIndex() {
-
-}
-
+/**
+ * @param {string} url
+ * @param {Record<string, unknown>} data
+ * @param {(response: any) => void} handler
+ * @param {() => void} errorHandler
+ */
 function request(url, data, handler, errorHandler) {
-    var xhr = new XMLHttpRequest();
-    xhr.open("POST", url, true);
-    xhr.setRequestHeader("Content-Type", "application/json");
-    xhr.onreadystatechange = function() {
-        if (xhr.readyState === 4) {
-            if (xhr.status === 200) {
-                try {
-                    var js = JSON.parse(xhr.responseText);
-                    handler(js);
-                } catch (error) {
-                    console.error(error);
-                    errorHandler();
-                }
-            } else {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url, true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onreadystatechange = function onReadyStateChange() {
+        if (xhr.readyState !== 4) return;
+        if (xhr.status === 200) {
+            try {
+                handler(JSON.parse(xhr.responseText));
+            } catch (error) {
+                console.error(error);
                 errorHandler();
             }
+        } else {
+            errorHandler();
         }
     };
-    var js = JSON.stringify(data);
-    xhr.send(js);
+    xhr.send(JSON.stringify(data));
 }
 
-function pad2(x) {
-    return x < 10 ? '0' + x : x;
+/** @param {number} value */
+function pad2(value) {
+    return value < 10 ? `0${value}` : String(value);
 }
 
-function formatTime(secs) {
-    if (secs > 3600) {
-        return pad2(Math.floor(secs / 60 / 60)) + ":" + pad2(Math.floor(secs / 60) % 60) + ":" + pad2(Math.floor(secs) % 60);
-    } else if (secs > 60) {
-        return pad2(Math.floor(secs / 60)) + ":" + pad2(Math.floor(secs) % 60);
-    } else {
-        return Math.floor(secs) + "s";
+/** @param {number} seconds */
+function formatTime(seconds) {
+    if (seconds > 3600) {
+        return `${pad2(Math.floor(seconds / 3600))}:${pad2(Math.floor(seconds / 60) % 60)}:${pad2(Math.floor(seconds) % 60)}`;
     }
+    if (seconds > 60) {
+        return `${pad2(Math.floor(seconds / 60))}:${pad2(Math.floor(seconds) % 60)}`;
+    }
+    return `${Math.floor(seconds)}s`;
 }
 
-
-var originalAppTitle = undefined;
-
-onUiLoaded(function() {
+/** @type {string} */
+let originalAppTitle = document.title;
+onUiLoaded(() => {
     originalAppTitle = document.title;
 });
 
+/**
+ * @param {string} progress
+ */
 function setTitle(progress) {
-    var title = originalAppTitle;
-
+    let title = originalAppTitle;
     if (opts.show_progress_in_title && progress) {
-        title = '[' + progress.trim() + '] ' + title;
+        title = `[${progress.trim()}] ${title}`;
     }
-
-    if (document.title != title) {
+    if (document.title !== title) {
         document.title = title;
     }
 }
 
-
 function randomId() {
-    return "task(" + Math.random().toString(36).slice(2, 7) + Math.random().toString(36).slice(2, 7) + Math.random().toString(36).slice(2, 7) + ")";
+    return `task(${Math.random().toString(36).slice(2, 7)}${Math.random().toString(36).slice(2, 7)}${Math.random().toString(36).slice(2, 7)})`;
 }
 
-// starts sending progress requests to "/internal/progress" uri, creating progressbar above progressbarContainer element and
-// preview inside gallery element. Cleans up all created stuff when the task is over and calls atEnd.
-// calls onProgress every time there is a progress update
-function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgress, inactivityTimeout = 40) {
-    var dateStart = new Date();
-    var wasEverActive = false;
-    var parentProgressbar = progressbarContainer.parentNode;
-    var wakeLock = null;
+/**
+ * @param {string} idTask
+ * @param {HTMLElement} progressbarContainer
+ * @param {HTMLElement | null} gallery
+ * @param {() => void} atEnd
+ * @param {(response: ProgressResponse) => void} [onProgress]
+ * @param {number} [inactivityTimeout]
+ */
+function requestProgress(idTask, progressbarContainer, gallery, atEnd, onProgress, inactivityTimeout = 40) {
+    const dateStart = new Date();
+    let wasEverActive = false;
+    const parentProgressbar = progressbarContainer.parentElement;
+    if (!parentProgressbar) return;
 
-    var requestWakeLock = async function() {
-        if (!opts.prevent_screen_sleep_during_generation || wakeLock) return;
+    /** @type {WakeLockSentinel | null} */
+    /** @type {WakeLockSentinel | null} */
+    let wakeLock = null;
+
+    const requestWakeLock = async () => {
+        if (!opts.prevent_screen_sleep_during_generation || wakeLock || !navigator.wakeLock) return;
         try {
             wakeLock = await navigator.wakeLock.request('screen');
-        } catch (err) {
-            console.error('Wake Lock is not supported.');
+        } catch (error) {
+            console.error('Wake Lock is not supported.', error);
         }
     };
 
-    var releaseWakeLock = async function() {
+    const releaseWakeLock = async () => {
         if (!opts.prevent_screen_sleep_during_generation || !wakeLock) return;
         try {
             await wakeLock.release();
-            wakeLock = null;
-        } catch (err) {
-            console.error('Wake Lock release failed', err);
+        } catch (error) {
+            console.error('Wake Lock release failed', error);
         }
+        wakeLock = null;
     };
 
-    var divProgress = document.createElement('div');
+    /** @type {HTMLDivElement | null} */
+    let divProgress = document.createElement('div');
     divProgress.className = 'progressDiv';
-    divProgress.style.display = opts.show_progressbar ? "block" : "none";
-    var divInner = document.createElement('div');
-    divInner.className = 'progress';
+    divProgress.style.display = opts.show_progressbar ? 'block' : 'none';
 
+    const divInner = document.createElement('div');
+    divInner.className = 'progress';
     divProgress.appendChild(divInner);
     parentProgressbar.insertBefore(divProgress, progressbarContainer);
 
-    var livePreview = null;
+    /** @type {HTMLElement | null} */
+    let livePreview = null;
 
-    var removeProgressBar = function() {
+    const removeProgressBar = () => {
         releaseWakeLock();
         if (!divProgress) return;
-
-        setTitle("");
+        setTitle('');
         parentProgressbar.removeChild(divProgress);
         if (gallery && livePreview) gallery.removeChild(livePreview);
         atEnd();
-
         divProgress = null;
     };
 
-    var funProgress = function(id_task) {
+    const refreshProgress = () => {
+        const refreshPeriod = Number(opts.live_preview_refresh_period ?? 500) || 500;
         requestWakeLock();
-        request("./internal/progress", {id_task: id_task, live_preview: false}, function(res) {
-            if (res.completed) {
-                removeProgressBar();
-                return;
-            }
+        if (!divProgress) return;
+        request(
+            './internal/progress',
+            { id_task: idTask, live_preview: false },
+            /** @param {ProgressResponse} res */ (res) => {
+                if (res.completed) {
+                    removeProgressBar();
+                    return;
+                }
 
-            let progressText = "";
+                let progressText = '';
 
-            divInner.style.width = ((res.progress || 0) * 100.0) + '%';
-            divInner.style.background = res.progress ? "" : "transparent";
+                const progressValue = res.progress ?? 0;
+                divInner.style.width = `${progressValue * 100.0}%`;
+                divInner.style.background = progressValue ? '' : 'transparent';
 
-            if (res.progress > 0) {
-                progressText = ((res.progress || 0) * 100.0).toFixed(0) + '%';
-            }
+                if (progressValue > 0) {
+                    progressText = `${(progressValue * 100.0).toFixed(0)}%`;
+                }
 
-            if (res.eta) {
-                progressText += " ETA: " + formatTime(res.eta);
-            }
+                if (res.eta) {
+                    progressText += ` ETA: ${formatTime(res.eta)}`;
+                }
 
-            setTitle(progressText);
+                setTitle(progressText);
 
-            if (res.textinfo && res.textinfo.indexOf("\n") == -1) {
-                progressText = res.textinfo + " " + progressText;
-            }
+                if (res.textinfo && !res.textinfo.includes('\n')) {
+                    progressText = `${res.textinfo} ${progressText}`;
+                }
 
-            divInner.textContent = progressText;
+                divInner.textContent = progressText;
 
-            var elapsedFromStart = (new Date() - dateStart) / 1000;
+                const elapsedFromStart = (Date.now() - dateStart.getTime()) / 1000;
+                if (res.active) wasEverActive = true;
 
-            if (res.active) wasEverActive = true;
+                if ((!res.active && wasEverActive) || (elapsedFromStart > inactivityTimeout && !res.queued && !res.active)) {
+                    removeProgressBar();
+                    return;
+                }
 
-            if (!res.active && wasEverActive) {
-                removeProgressBar();
-                return;
-            }
+                if (onProgress) onProgress(res);
 
-            if (elapsedFromStart > inactivityTimeout && !res.queued && !res.active) {
-                removeProgressBar();
-                return;
-            }
-
-            if (onProgress) {
-                onProgress(res);
-            }
-
-            setTimeout(() => {
-                funProgress(id_task, res.id_live_preview);
-            }, opts.live_preview_refresh_period || 500);
-        }, function() {
-            removeProgressBar();
-        });
+                window.setTimeout(refreshProgress, refreshPeriod);
+            },
+            removeProgressBar
+        );
     };
 
-    var funLivePreview = function(id_task, id_live_preview) {
-        request("./internal/progress", {id_task: id_task, id_live_preview: id_live_preview}, function(res) {
-            if (!divProgress) {
-                return;
-            }
-
-            if (res.live_preview && gallery) {
-                var img = new Image();
-                img.onload = function() {
-                    if (!livePreview) {
-                        livePreview = document.createElement('div');
-                        livePreview.className = 'livePreview';
-                        gallery.insertBefore(livePreview, gallery.firstElementChild);
-                    }
-
-                    livePreview.appendChild(img);
-                    if (livePreview.childElementCount > 2) {
-                        livePreview.removeChild(livePreview.firstElementChild);
-                    }
-                };
-                img.src = res.live_preview;
-            }
-
-            setTimeout(() => {
-                funLivePreview(id_task, res.id_live_preview);
-            }, opts.live_preview_refresh_period || 500);
-        }, function() {
-            removeProgressBar();
-        });
+    const refreshLivePreview = (liveId = 0) => {
+        const refreshPeriod = Number(opts.live_preview_refresh_period ?? 500) || 500;
+        request(
+            './internal/progress',
+            { id_task: idTask, id_live_preview: liveId },
+            /** @param {ProgressResponse} res */ (res) => {
+                if (!divProgress) return;
+                if (res.live_preview && gallery) {
+                    const img = new Image();
+                    img.onload = () => {
+                        if (!livePreview) {
+                            livePreview = document.createElement('div');
+                            livePreview.className = 'livePreview';
+                            gallery.insertBefore(livePreview, gallery.firstElementChild);
+                        }
+                        livePreview.appendChild(img);
+                        while (livePreview.childElementCount > 2) {
+                            const first = livePreview.firstElementChild;
+                            if (first) livePreview.removeChild(first);
+                        }
+                    };
+                    img.src = res.live_preview;
+                }
+                const nextLiveId = typeof res.id_live_preview === 'number' ? res.id_live_preview : Number(liveId) || 0;
+                window.setTimeout(() => refreshLivePreview(nextLiveId), refreshPeriod);
+            },
+            removeProgressBar
+        );
     };
 
-    funProgress(id_task, 0);
-
-    if (gallery) {
-        funLivePreview(id_task, 0);
-    }
-
+    refreshProgress();
+    if (gallery) refreshLivePreview();
 }

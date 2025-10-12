@@ -22,3 +22,26 @@ Do/Don’t
 - Do: expose tiny global functions only if needed by extensions.
 - Don’t: ship large framework code; keep plain TS/JS utilities.
 
+Module Map (Hooks → Helpers)
+- ui.js — hooks: window.submit, window.submit_txt2img_upscale, window.restoreProgress*; helpers: getAppElementById, submitWithProgress, normalizeSubmitArgs, updateInput, onEdit
+- progressbar.js — hooks: requestProgress; helpers: formatTime; wakeLock guarded
+- resizeHandle.js — hooks: onUiLoaded(setupAllResizeHandles); helpers: setLeftColGridTemplate; mouse/touch guards
+- imageviewer.js — hooks: onAfterUiUpdate, DOMContentLoaded(buildModal); helpers: getAppElementById, modalImageSwitch
+- imageviewerGamepad.js — events: gamepadconnected, wheel; helpers: sleepUntil, modalImageSwitch
+- imageMaskFix.js — hooks: onAfterUiUpdate, window.resize; helpers: guarded canvas/image lookups
+- localization.js — hooks: DOMContentLoaded, onUiUpdate; helpers: processNode, getTranslation
+- notification.js — hooks: onAfterUiUpdate; helpers: getAppElementById, localSet/has focus checks
+- profilerVisualization.js — hooks: showProfile (called from UI); helpers: createRow, addLevel
+- inputAccordion.js — hooks: onUiLoaded; helpers: setupAccordion, updateInput
+- generationParams.js — hooks: onAfterUiUpdate (MutationObserver), attachGalleryListeners; helpers: safe button resolution
+- edit-attention.js — events: keydown; helpers: selection math functions
+- edit-order.js — events: keydown; helpers: resolvePromptTextarea
+- hints.js — hooks: onUiUpdate/onUiLoaded; helpers: enqueueTooltipCheck, updateTooltip
+- ui_settings_hints.js — hooks: onOptionsChanged/onUiLoaded/onUiUpdate; helpers: requestGet, getAppElementById
+- extraNetworks.js — hooks: onUiLoaded; helpers: requestGet, filtering/sorting registry, popup
+- extensions.js — hooks: extensions_apply/check/install/toggle_all_extensions/toggle_extension; helpers: getExtensionCheckboxes
+- dragdrop.js — events: document dragover/drop/paste; helpers: isValidImageList, dropReplaceImage, isURL
+- settings.js — hooks: onUiLoaded/onUiUpdate/onOptionsChanged; helpers: getAppElementById, onEdit, settingsShowAllTabs
+- token-counters.js — hooks: onUiLoaded/onUiUpdate/onOptionsChanged; helpers: onEdit, update_token_counter
+- textualInversion.js — hooks: start_training_textual_inversion; helpers: requestProgress
+- localStorage.js — helpers: localSet/localGet/localRemove (wrapped access to window.localStorage)

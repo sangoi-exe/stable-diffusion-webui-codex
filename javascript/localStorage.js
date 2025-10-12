@@ -1,26 +1,47 @@
 
-function localSet(k, v) {
+"use strict";
+// @ts-check
+/*
+ DevNotes (2025-10-12)
+ - Purpose: Thin wrappers for localStorage with try/catch so failed quota or privacy modes don’t break flows.
+ - API: localSet(key, value), localGet(key, fallback?), localRemove(key).
+*/
+
+/**
+ * @param {string} key
+ * @param {string} value
+ */
+function localSet(key, value) {
     try {
-        localStorage.setItem(k, v);
+        localStorage.setItem(key, value);
     } catch (e) {
-        console.warn(`Failed to save ${k} to localStorage: ${e}`);
+        console.warn(`Failed to save ${key} to localStorage: ${e}`);
     }
 }
 
-function localGet(k, def) {
+/**
+ * @param {string} key
+ * @param {string | null} [fallback]
+ * @returns {string | null}
+ */
+function localGet(key, fallback = null) {
     try {
-        return localStorage.getItem(k);
+        const value = localStorage.getItem(key);
+        return value !== null ? value : fallback;
     } catch (e) {
-        console.warn(`Failed to load ${k} from localStorage: ${e}`);
+        console.warn(`Failed to load ${key} from localStorage: ${e}`);
     }
 
-    return def;
+    return fallback;
 }
 
-function localRemove(k) {
+/**
+ * @param {string} key
+ */
+function localRemove(key) {
     try {
-        return localStorage.removeItem(k);
+        localStorage.removeItem(key);
     } catch (e) {
-        console.warn(`Failed to remove ${k} from localStorage: ${e}`);
+        console.warn(`Failed to remove ${key} from localStorage: ${e}`);
     }
 }

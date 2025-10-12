@@ -41,6 +41,14 @@ News are moved to this link: [Click here to see the News section](https://github
 
 (Flux BNB NF4 / GGUF Q8_0/Q5_0/Q5_1/Q4_0/Q4_1 are all natively supported with GPU weight slider and Quene/Async Swap toggle and swap location toggle. All Flux BNB NF4 / GGUF Q8_0/Q5_0/Q4_0 have LoRA support.)
 
+# Developer Notes
+
+- Frontend JS type-safety:
+  - Strict checks: `npm run typecheck` (uses `tsconfig.json` with `allowJs` + `checkJs` + `noEmit`).
+  - Optional build: `npm run build:ts` (uses `tsconfig.build.json`).
+  - See: `codex/frontend-js-type-safety.md` for the migration rationale, helpers, and patterns.
+  - See: `codex/frontend-guidelines.md` for module→hook→helper mapping and integration tips.
+
 # Installing Forge
 
 **Just use this one-click installation package (with git and python included).**

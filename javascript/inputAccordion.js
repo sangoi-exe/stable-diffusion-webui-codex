@@ -1,73 +1,120 @@
-function inputAccordionChecked(id, checked) {
-    var accordion = gradioApp().getElementById(id);
-    accordion.visibleCheckbox.checked = checked;
-    accordion.onVisibleCheckboxChange();
+"use strict";
+/*
+ DevNotes (2025-10-12)
+ - Purpose: Checkbox mirrors accordion open/close state; supports legacy global hook.
+ - Safety: JSDoc contract for dynamic properties; idempotent attach on UI load.
+*/
+
+/**
+ * @typedef {HTMLElement & {
+ *   visibleCheckbox?: HTMLInputElement;
+ *   onVisibleCheckboxChange?: () => void;
+ *   onChecked?: (checked: boolean) => void;
+ * }} AccordionElement
+ */
+
+/**
+ * @param {string} id
+ * @returns {HTMLElement | null}
+ */
+function getAppElementById(id) {
+    const root = gradioApp();
+    if ('getElementById' in root && typeof root.getElementById === 'function') {
+        const element = root.getElementById(id);
+        if (element instanceof HTMLElement) return element;
+    }
+    const fallback = document.getElementById(id);
+    return fallback instanceof HTMLElement ? fallback : null;
 }
 
-function setupAccordion(accordion) {
-    var labelWrap = accordion.querySelector('.label-wrap');
-    var gradioCheckbox = gradioApp().querySelector('#' + accordion.id + "-checkbox input");
-    var extra = gradioApp().querySelector('#' + accordion.id + "-extra");
-    var span = labelWrap ? labelWrap.querySelector('span') : null;
-    if (!labelWrap || !span || !accordion) {
-        return; // Gradio 5 structure not present yet; skip safely
+/**
+ * Update the accordion visibility from external controls.
+ * @param {string} id
+ * @param {boolean} checked
+ */
+function inputAccordionChecked(id, checked) {
+    const accordion = /** @type {(AccordionElement | null)} */ (getAppElementById(id));
+    if (!accordion) return;
+
+    const visible = accordion.visibleCheckbox;
+    if (visible instanceof HTMLInputElement) {
+        visible.checked = checked;
+        if (typeof accordion.onVisibleCheckboxChange === 'function') {
+            accordion.onVisibleCheckboxChange();
+        }
     }
-    var linked = true;
+}
 
-    var isOpen = function() {
-        return labelWrap.classList.contains('open');
-    };
+/**
+ * Enhance a Gradio accordion with synced checkbox controls.
+ * @param {HTMLElement} element
+ */
+function setupAccordion(element) {
+    const root = gradioApp();
+    const accordion = /** @type {AccordionElement} */ (element);
+    const labelWrapCandidate = accordion.querySelector('.label-wrap');
+    if (!(labelWrapCandidate instanceof HTMLElement)) return;
+    const labelWrap = labelWrapCandidate;
+    const gradioCheckbox = root.querySelector(`#${accordion.id}-checkbox input`);
+    const gradioCheckboxClass = gradioCheckbox instanceof HTMLElement ? gradioCheckbox.className : '';
+    const extra = root.querySelector(`#${accordion.id}-extra`);
+    const spanCandidate = labelWrap.querySelector('span');
+    if (!(spanCandidate instanceof HTMLElement)) return;
+    const span = spanCandidate;
 
-    var observerAccordionOpen = new MutationObserver(function(mutations) {
-        mutations.forEach(function(mutationRecord) {
-            accordion.classList.toggle('input-accordion-open', isOpen());
+    const isOpen = () => labelWrap.classList.contains('open');
 
-            if (linked) {
-                accordion.visibleCheckbox.checked = isOpen();
-                accordion.onVisibleCheckboxChange();
-            }
-        });
+    const observerAccordionOpen = new MutationObserver(() => {
+        accordion.classList.toggle('input-accordion-open', isOpen());
+        const visible = accordion.visibleCheckbox;
+        if (visible instanceof HTMLInputElement && typeof accordion.onVisibleCheckboxChange === 'function') {
+            visible.checked = isOpen();
+            accordion.onVisibleCheckboxChange();
+        }
     });
-    observerAccordionOpen.observe(labelWrap, {attributes: true, attributeFilter: ['class']});
+    observerAccordionOpen.observe(labelWrap, { attributes: true, attributeFilter: ['class'] });
 
     if (extra) {
         labelWrap.insertBefore(extra, labelWrap.lastElementChild);
     }
 
-    accordion.onChecked = function(checked) {
-        if (isOpen() != checked) {
-            labelWrap.click();
-        }
+    accordion.onChecked = (checked) => {
+        if (isOpen() !== checked) labelWrap.click();
     };
 
-    var visibleCheckbox = document.createElement('INPUT');
+    const visibleCheckbox = document.createElement('input');
     visibleCheckbox.type = 'checkbox';
     visibleCheckbox.checked = isOpen();
-    visibleCheckbox.id = accordion.id + "-visible-checkbox";
-    visibleCheckbox.className = (gradioCheckbox ? gradioCheckbox.className : '') + " input-accordion-checkbox";
+    visibleCheckbox.id = `${accordion.id}-visible-checkbox`;
+    visibleCheckbox.className = `${gradioCheckboxClass} input-accordion-checkbox`.trim();
     span.insertBefore(visibleCheckbox, span.firstChild);
 
     accordion.visibleCheckbox = visibleCheckbox;
-    accordion.onVisibleCheckboxChange = function() {
-        if (linked && isOpen() != visibleCheckbox.checked) {
-            labelWrap.click();
-        }
-
-        if (gradioCheckbox) {
+    accordion.onVisibleCheckboxChange = () => {
+        if (isOpen() !== visibleCheckbox.checked) labelWrap.click();
+        if (gradioCheckbox instanceof HTMLInputElement) {
             gradioCheckbox.checked = visibleCheckbox.checked;
             updateInput(gradioCheckbox);
         }
     };
 
-    visibleCheckbox.addEventListener('click', function(event) {
-        linked = false;
+    visibleCheckbox.addEventListener('click', (event) => {
         event.stopPropagation();
     });
-    visibleCheckbox.addEventListener('input', accordion.onVisibleCheckboxChange);
+    visibleCheckbox.addEventListener('input', () => {
+        if (typeof accordion.onVisibleCheckboxChange === 'function') {
+            accordion.onVisibleCheckboxChange();
+        }
+    });
 }
 
-onUiLoaded(function() {
-    for (var accordion of gradioApp().querySelectorAll('.input-accordion')) {
-        setupAccordion(accordion);
-    }
+onUiLoaded(() => {
+    const root = gradioApp();
+    root.querySelectorAll('.input-accordion').forEach((el) => {
+        if (el instanceof HTMLElement) {
+            setupAccordion(el);
+        }
+    });
 });
+
+(/** @type {any} */ (window)).inputAccordionChecked = inputAccordionChecked;

@@ -1,137 +1,215 @@
-// allows drag-dropping files into gradio image elements, and also pasting images from clipboard
+"use strict";
+// @ts-check
+/*
+ DevNotes (2025-10-12)
+ - Purpose: Arrastar/soltar e colar imagens em prompts e campos de imagem.
+ - Safety: Checagem de tipos MIME, DataTransfer seguro, fetch → File com try/catch.
+*/
 
+/**
+ * Drag-and-drop and clipboard image handling for Gradio image widgets.
+ */
+
+const ACCEPTED_IMAGE_TYPES = new Set(['image/png', 'image/gif', 'image/jpeg']);
+
+/**
+ * @param {FileList | null | undefined} files
+ * @returns {files is FileList}
+ */
 function isValidImageList(files) {
-    return files && files?.length === 1 && ['image/png', 'image/gif', 'image/jpeg'].includes(files[0].type);
+    if (!files || files.length !== 1) return false;
+    const file = files.item(0);
+    return Boolean(file && ACCEPTED_IMAGE_TYPES.has(file.type));
 }
 
+/**
+ * Replace the image inside a Gradio image component with the provided file list.
+ * @param {HTMLElement} imgWrap
+ * @param {FileList} files
+ */
 function dropReplaceImage(imgWrap, files) {
     if (!isValidImageList(files)) {
         return;
     }
 
-    const tmpFile = files[0];
+    const tmpFile = files.item(0);
+    if (!tmpFile) return;
 
-    imgWrap.querySelector('.modify-upload button + button, .touch-none + div button + button')?.click();
+    const clearButton = imgWrap.querySelector('.modify-upload button + button, .touch-none + div button + button');
+    if (clearButton instanceof HTMLElement) {
+        clearButton.click();
+    }
+
     const callback = () => {
         const fileInput = imgWrap.querySelector('input[type="file"]');
-        if (fileInput) {
-            if (files.length === 0) {
-                files = new DataTransfer();
-                files.items.add(tmpFile);
-                fileInput.files = files.files;
-            } else {
-                fileInput.files = files;
-            }
-            fileInput.dispatchEvent(new Event('change'));
+        if (!(fileInput instanceof HTMLInputElement)) {
+            return;
         }
+
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(tmpFile);
+        fileInput.files = dataTransfer.files;
+        fileInput.dispatchEvent(new Event('change'));
     };
 
-    window.requestAnimationFrame(() => callback());
+    window.requestAnimationFrame(callback);
 }
 
-function eventHasFiles(e) {
-    if (!e.dataTransfer || !e.dataTransfer.files) return false;
-    if (e.dataTransfer.files.length > 0) return true;
-    if (e.dataTransfer.items.length > 0 && e.dataTransfer.items[0].kind == "file") return true;
-
-    return false;
+/**
+ * Determine whether a drag/drop event carries files.
+ * @param {DragEvent} event
+ */
+function eventHasFiles(event) {
+    const transfer = event.dataTransfer;
+    if (!transfer) return false;
+    if (transfer.files && transfer.files.length > 0) return true;
+    if (!transfer.items || transfer.items.length === 0) return false;
+    const item = transfer.items[0];
+    return Boolean(item && item.kind === 'file');
 }
 
+/**
+ * @param {string} url
+ */
 function isURL(url) {
     try {
         const _ = new URL(url);
+        void _;
         return true;
     } catch {
         return false;
     }
 }
 
+/**
+ * @param {Element | null} target
+ */
 function dragDropTargetIsPrompt(target) {
-    if (target?.placeholder && target?.placeholder.indexOf("Prompt") >= 0) return true;
-    if (target?.parentNode?.parentNode?.className?.indexOf("prompt") > 0) return true;
+    if (!target) return false;
+    if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.placeholder.includes('Prompt')) {
+        return true;
+    }
+    const parent = target.parentNode?.parentNode;
+    if (parent instanceof Element && typeof parent.className === 'string' && parent.className.includes('prompt')) {
+        return true;
+    }
     return false;
 }
 
-window.document.addEventListener('dragover', e => {
-    const target = e.composedPath()[0];
-    if (!eventHasFiles(e)) return;
+/**
+ * @param {Event} event
+ * @returns {Element | null}
+ */
+function getEventElement(event) {
+    const path = event.composedPath();
+    const candidate = path.length > 0 ? path[0] : null;
+    return candidate instanceof Element ? candidate : null;
+}
 
-    var targetImage = target.closest('[data-testid="image"]');
+window.document.addEventListener('dragover', (event) => {
+    if (!(event instanceof DragEvent)) return;
+    if (!eventHasFiles(event)) return;
+
+    const target = getEventElement(event);
+    if (!target) return;
+
+    const targetImage = target.closest('[data-testid="image"]');
     if (!dragDropTargetIsPrompt(target) && !targetImage) return;
 
-    e.stopPropagation();
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
+    event.stopPropagation();
+    event.preventDefault();
+    const transfer = event.dataTransfer;
+    if (transfer) {
+        transfer.dropEffect = 'copy';
+    }
 });
 
-window.document.addEventListener('drop', async e => {
-    const target = e.composedPath()[0];
-    const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
-    if (!eventHasFiles(e) && !isURL(url)) return;
+window.document.addEventListener('drop', async (event) => {
+    if (!(event instanceof DragEvent)) return;
+
+    const target = getEventElement(event);
+    const transfer = event.dataTransfer;
+    const url = transfer ? transfer.getData('text/uri-list') || transfer.getData('text/plain') : '';
+    if (!eventHasFiles(event) && !isURL(url || '')) return;
 
     if (dragDropTargetIsPrompt(target)) {
-        e.stopPropagation();
-        e.preventDefault();
+        event.stopPropagation();
+        event.preventDefault();
 
-        const isImg2img = get_tab_index('tabs') == 1;
-        let prompt_image_target = isImg2img ? "img2img_prompt_image" : "txt2img_prompt_image";
+        const isImg2img = get_tab_index('tabs') === 1;
+        const promptTargetId = isImg2img ? 'img2img_prompt_image' : 'txt2img_prompt_image';
 
-        const imgParent = gradioApp().getElementById(prompt_image_target);
-        const files = e.dataTransfer.files;
+        const imgParent = getAppElementById(promptTargetId);
+        if (!imgParent || !transfer) return;
+
         const fileInput = imgParent.querySelector('input[type="file"]');
-        if (eventHasFiles(e) && fileInput) {
-            fileInput.files = files;
+        if (!(fileInput instanceof HTMLInputElement)) return;
+
+        if (eventHasFiles(event)) {
+            fileInput.files = transfer.files;
             fileInput.dispatchEvent(new Event('change'));
         } else if (url) {
             try {
-                const request = await fetch(url);
-                if (!request.ok) {
-                    console.error('Error fetching URL:', url, request.status);
+                const response = await fetch(url);
+                if (!response.ok) {
+                    console.error('Error fetching URL:', url, response.status);
                     return;
                 }
-                const data = new DataTransfer();
-                data.items.add(new File([await request.blob()], 'image.png'));
-                fileInput.files = data.files;
+                const blob = await response.blob();
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(new File([blob], 'image.png'));
+                fileInput.files = dataTransfer.files;
                 fileInput.dispatchEvent(new Event('change'));
             } catch (error) {
                 console.error('Error fetching URL:', url, error);
-                return;
             }
         }
     }
 
-    var targetImage = target.closest('[data-testid="image"]');
-    if (targetImage) {
-        e.stopPropagation();
-        e.preventDefault();
-        const files = e.dataTransfer.files;
-        dropReplaceImage(targetImage, files);
-        return;
+    if (target instanceof Element) {
+        const targetImage = target.closest('[data-testid="image"]');
+        if (targetImage instanceof HTMLElement && transfer) {
+            event.stopPropagation();
+            event.preventDefault();
+            dropReplaceImage(targetImage, transfer.files);
+        }
     }
 });
 
-window.addEventListener('paste', e => {
-    const files = e.clipboardData.files;
+window.addEventListener('paste', (event) => {
+    if (!(event instanceof ClipboardEvent)) return;
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+
+    const files = clipboard.files;
     if (!isValidImageList(files)) {
         return;
     }
 
-    const visibleImageFields = [...gradioApp().querySelectorAll('[data-testid="image"]')]
-        .filter(el => uiElementIsVisible(el))
-        .sort((a, b) => uiElementInSight(b) - uiElementInSight(a));
-
+    const visibleImageFields = Array.from(gradioApp().querySelectorAll('[data-testid="image"]'))
+        .filter((el) => el instanceof HTMLElement && uiElementIsVisible(el))
+        .map((el) => /** @type {HTMLElement} */ (el))
+        .sort((a, b) => Number(uiElementInSight(b)) - Number(uiElementInSight(a)));
 
     if (!visibleImageFields.length) {
         return;
     }
 
-    const firstFreeImageField = visibleImageFields
-        .filter(el => !el.querySelector('img'))?.[0];
-
-    dropReplaceImage(
-        firstFreeImageField ?
-            firstFreeImageField :
-            visibleImageFields[visibleImageFields.length - 1]
-        , files
-    );
+    const firstFreeImageField = visibleImageFields.find((el) => !el.querySelector('img'));
+    const fallback = visibleImageFields[visibleImageFields.length - 1] || null;
+    if (!fallback) return;
+    const targetField = firstFreeImageField || fallback;
+    dropReplaceImage(targetField, files);
 });
+/**
+ * @param {string} id
+ */
+function getAppElementById(id) {
+    const root = gradioApp();
+    if ('getElementById' in root && typeof root.getElementById === 'function') {
+        const result = root.getElementById(id);
+        if (result instanceof HTMLElement) return result;
+    }
+    const fallback = document.getElementById(id);
+    return fallback instanceof HTMLElement ? fallback : null;
+}

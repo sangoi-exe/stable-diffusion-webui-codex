@@ -8,7 +8,8 @@
   "scripts": {
     "lint": "eslint .",
     "fix": "eslint --fix .",
-    "build:ts": "tsc -p tsconfig.json",
-    "watch:ts": "tsc -w -p tsconfig.json"
+    "build:ts": "tsc -p tsconfig.build.json",
+    "watch:ts": "tsc -w -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
   }
 }

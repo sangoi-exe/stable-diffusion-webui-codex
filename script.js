@@ -1,48 +1,72 @@
+/**
+ * @typedef {(mutations: MutationRecord[]) => void} UiMutationHandler
+ * @typedef {() => void} UiHandler
+ */
+
+/**
+ * Resolve the Gradio root element, supporting both classic DOM and shadow roots.
+ * @returns {Document | ShadowRoot | HTMLElement}
+ */
 function gradioApp() {
     const elems = document.getElementsByTagName('gradio-app');
-    const elem = elems.length == 0 ? document : elems[0];
-
-    if (elem !== document) {
-        elem.getElementById = function(id) {
-            return document.getElementById(id);
-        };
+    if (elems.length === 0) {
+        return document;
     }
+
+    const elem = /** @type {HTMLElement} */ (elems[0]);
+    const patched = /** @type {HTMLElement & { getElementById: typeof document.getElementById }} */ (elem);
+    patched.getElementById = function(id) {
+        return document.getElementById(id);
+    };
     return elem.shadowRoot ? elem.shadowRoot : elem;
 }
 
 /**
  * Get the currently selected top-level UI tab button (e.g. the button that says "Extras").
+ * @returns {HTMLElement | null}
  */
 function get_uiCurrentTab() {
-    return gradioApp().querySelector('#tabs > .tab-nav > button.selected');
+    return /** @type {HTMLElement | null} */ (gradioApp().querySelector('#tabs > .tab-nav > button.selected'));
 }
 
 /**
  * Get the first currently visible top-level UI tab content (e.g. the div hosting the "txt2img" UI).
+ * @returns {HTMLElement | null}
  */
 function get_uiCurrentTabContent() {
-    return gradioApp().querySelector('#tabs > .tabitem[id^=tab_]:not([style*="display: none"])');
+    return /** @type {HTMLElement | null} */ (gradioApp().querySelector('#tabs > .tabitem[id^=tab_]:not([style*="display: none"])'));
 }
 
-var uiUpdateCallbacks = [];
-var uiAfterUpdateCallbacks = [];
-var uiLoadedCallbacks = [];
-var uiTabChangeCallbacks = [];
-var optionsChangedCallbacks = [];
-var optionsAvailableCallbacks = [];
-var uiAfterUpdateTimeout = null;
-var uiCurrentTab = null;
+/** @type {UiMutationHandler[]} */
+const uiUpdateCallbacks = [];
+/** @type {UiHandler[]} */
+const uiAfterUpdateCallbacks = [];
+/** @type {UiHandler[]} */
+const uiLoadedCallbacks = [];
+/** @type {UiHandler[]} */
+const uiTabChangeCallbacks = [];
+/** @type {UiHandler[]} */
+const optionsChangedCallbacks = [];
+/** @type {UiHandler[]} */
+const optionsAvailableCallbacks = [];
+/** @type {ReturnType<typeof setTimeout> | null} */
+let uiAfterUpdateTimeout = null;
+/** @type {HTMLElement | null} */
+let uiCurrentTab = null;
 
 /**
  * Register callback to be called at each UI update.
  * The callback receives an array of MutationRecords as an argument.
+ */
+/**
+ * @param {unknown} callback
  */
 function onUiUpdate(callback) {
     if (typeof callback !== 'function') {
         console.warn('onUiUpdate: ignored non-function callback', callback);
         return;
     }
-    uiUpdateCallbacks.push(callback);
+    uiUpdateCallbacks.push(/** @type {UiMutationHandler} */ (callback));
 }
 
 /**
@@ -53,36 +77,45 @@ function onUiUpdate(callback) {
  * access to the MutationRecords, as your function will
  * not be called quite as often.
  */
+/**
+ * @param {unknown} callback
+ */
 function onAfterUiUpdate(callback) {
     if (typeof callback !== 'function') {
         console.warn('onAfterUiUpdate: ignored non-function callback', callback);
         return;
     }
-    uiAfterUpdateCallbacks.push(callback);
+    uiAfterUpdateCallbacks.push(/** @type {UiHandler} */ (callback));
 }
 
 /**
  * Register callback to be called when the UI is loaded.
  * The callback receives no arguments.
  */
+/**
+ * @param {unknown} callback
+ */
 function onUiLoaded(callback) {
     if (typeof callback !== 'function') {
         console.warn('onUiLoaded: ignored non-function callback', callback);
         return;
     }
-    uiLoadedCallbacks.push(callback);
+    uiLoadedCallbacks.push(/** @type {UiHandler} */ (callback));
 }
 
 /**
  * Register callback to be called when the UI tab is changed.
  * The callback receives no arguments.
  */
+/**
+ * @param {unknown} callback
+ */
 function onUiTabChange(callback) {
     if (typeof callback !== 'function') {
         console.warn('onUiTabChange: ignored non-function callback', callback);
         return;
     }
-    uiTabChangeCallbacks.push(callback);
+    uiTabChangeCallbacks.push(/** @type {UiHandler} */ (callback));
 }
 
 /**
@@ -90,12 +123,15 @@ function onUiTabChange(callback) {
  * The callback receives no arguments.
  * @param callback
  */
+/**
+ * @param {unknown} callback
+ */
 function onOptionsChanged(callback) {
     if (typeof callback !== 'function') {
         console.warn('onOptionsChanged: ignored non-function callback', callback);
         return;
     }
-    optionsChangedCallbacks.push(callback);
+    optionsChangedCallbacks.push(/** @type {UiHandler} */ (callback));
 }
 
 /**
@@ -103,19 +139,31 @@ function onOptionsChanged(callback) {
  * The callback receives no arguments.
  * If you register the callback after the options are available, it's just immediately called.
  */
+/**
+ * @param {unknown} callback
+ */
 function onOptionsAvailable(callback) {
     if (typeof callback !== 'function') {
         console.warn('onOptionsAvailable: ignored non-function callback', callback);
         return;
     }
     if (Object.keys(opts).length != 0) {
-        try { callback(); } catch (e) { console.error('error running callback in onOptionsAvailable:', e); }
+        try {
+            /** @type {UiHandler} */ (callback)();
+        } catch (e) {
+            console.error('error running callback in onOptionsAvailable:', e);
+        }
         return;
     }
 
-    optionsAvailableCallbacks.push(callback);
+    optionsAvailableCallbacks.push(/** @type {UiHandler} */ (callback));
 }
 
+/**
+ * @param {Function[]} queue
+ * @param {unknown} arg
+ * @param {string} context
+ */
 function executeCallbacks(queue, arg, context) {
     if (!Array.isArray(queue) || queue.length === 0) return;
     for (const cb of queue) {
@@ -138,8 +186,10 @@ function executeCallbacks(queue, arg, context) {
  * when there are multiple mutations observed.
  */
 function scheduleAfterUiUpdateCallbacks() {
-    clearTimeout(uiAfterUpdateTimeout);
-    uiAfterUpdateTimeout = setTimeout(function() {
+    if (uiAfterUpdateTimeout !== null) {
+        clearTimeout(uiAfterUpdateTimeout);
+    }
+    uiAfterUpdateTimeout = window.setTimeout(function() {
         executeCallbacks(uiAfterUpdateCallbacks, undefined, 'onAfterUiUpdate');
     }, 200);
 }
@@ -147,13 +197,14 @@ function scheduleAfterUiUpdateCallbacks() {
 var executedOnLoaded = false;
 
 document.addEventListener("DOMContentLoaded", function() {
-    var mutationObserver = new MutationObserver(function(m) {
+    /** @param {MutationRecord[]} mutations */
+    var mutationObserver = new MutationObserver(function(mutations) {
         if (!executedOnLoaded && gradioApp().querySelector('#txt2img_prompt')) {
             executedOnLoaded = true;
             executeCallbacks(uiLoadedCallbacks, undefined, 'onUiLoaded');
         }
 
-        executeCallbacks(uiUpdateCallbacks, m, 'onUiUpdate');
+        executeCallbacks(uiUpdateCallbacks, mutations, 'onUiUpdate');
         scheduleAfterUiUpdateCallbacks();
         const newTab = get_uiCurrentTab();
         if (newTab && (newTab !== uiCurrentTab)) {
@@ -170,19 +221,31 @@ document.addEventListener("DOMContentLoaded", function() {
  * Alt/Option+Enter to skip a generation
  * Esc to interrupt a generation
  */
+/** @param {KeyboardEvent} e */
 document.addEventListener('keydown', function(e) {
     const isEnter = e.key === 'Enter' || e.keyCode === 13;
     const isCtrlKey = e.metaKey || e.ctrlKey;
     const isAltKey = e.altKey;
     const isEsc = e.key === 'Escape';
 
-    const generateButton = get_uiCurrentTabContent().querySelector('button[id$=_generate]');
-    const interruptButton = get_uiCurrentTabContent().querySelector('button[id$=_interrupt]');
-    const skipButton = get_uiCurrentTabContent().querySelector('button[id$=_skip]');
+    const tabContent = get_uiCurrentTabContent();
+    if (!tabContent) {
+        return;
+    }
+
+    const generateButton = /** @type {HTMLButtonElement | null} */ (tabContent.querySelector('button[id$=_generate]'));
+    const interruptButton = /** @type {HTMLButtonElement | null} */ (tabContent.querySelector('button[id$=_interrupt]'));
+    const skipButton = /** @type {HTMLButtonElement | null} */ (tabContent.querySelector('button[id$=_skip]'));
+    if (!generateButton || !interruptButton || !skipButton) {
+        return;
+    }
 
     if (isCtrlKey && isEnter) {
         if (interruptButton.style.display === 'block') {
             interruptButton.click();
+            /**
+             * @param {MutationRecord[]} mutationList
+             */
             const callback = (mutationList) => {
                 for (const mutation of mutationList) {
                     if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
@@ -207,8 +270,8 @@ document.addEventListener('keydown', function(e) {
     }
 
     if (isEsc) {
-        const globalPopup = document.querySelector('.global-popup');
-        const lightboxModal = document.querySelector('#lightboxModal');
+        const globalPopup = /** @type {HTMLElement | null} */ (document.querySelector('.global-popup'));
+        const lightboxModal = /** @type {HTMLElement | null} */ (document.querySelector('#lightboxModal'));
         if (!globalPopup || globalPopup.style.display === 'none') {
             if (document.activeElement === lightboxModal) return;
             if (interruptButton.style.display === 'block') {
@@ -221,19 +284,43 @@ document.addEventListener('keydown', function(e) {
 
 /**
  * checks that a UI element is not in another hidden element or tab content
+ * @param {HTMLElement | Document | null} el
+ * @returns {boolean}
  */
 function uiElementIsVisible(el) {
+    if (!el) return false;
     if (el === document) {
         return true;
+    }
+    if (!(el instanceof HTMLElement)) {
+        const parentNode = el.parentNode;
+        let next = null;
+        if (parentNode instanceof HTMLElement || parentNode instanceof Document) {
+            next = parentNode;
+        } else if (parentNode instanceof ShadowRoot) {
+            next = parentNode.host;
+        }
+        return uiElementIsVisible(/** @type {HTMLElement | Document | null} */ (next));
     }
 
     const computedStyle = getComputedStyle(el);
     const isVisible = computedStyle.display !== 'none';
 
     if (!isVisible) return false;
-    return uiElementIsVisible(el.parentNode);
+    const parentNode = el.parentNode;
+    let next = null;
+    if (parentNode instanceof HTMLElement || parentNode instanceof Document) {
+        next = parentNode;
+    } else if (parentNode instanceof ShadowRoot) {
+        next = parentNode.host;
+    }
+    return uiElementIsVisible(/** @type {HTMLElement | Document | null} */ (next));
 }
 
+/**
+ * @param {HTMLElement} el
+ * @returns {boolean}
+ */
 function uiElementInSight(el) {
     const clRect = el.getBoundingClientRect();
     const windowHeight = window.innerHeight;
