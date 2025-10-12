@@ -45,41 +45,39 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
         if component_name.startswith('tokenizer'):
             cls = getattr(importlib.import_module(lib_name), cls_name)
             path = os.path.join(repo_path, component_name)
+            root = repo_path
 
-            # Prefer fast tokenizer via tokenizer.json when available
-            tokenizer_json_candidates = [
-                os.path.join(path, 'tokenizer.json'),
-                os.path.join(repo_path, 'tokenizer.json'),
-            ]
-            tokenizer_json = next((p for p in tokenizer_json_candidates if os.path.isfile(p)), None)
+            def _tokenizer_json_in(dirpath: str):
+                p = os.path.join(dirpath, 'tokenizer.json')
+                return p if os.path.isfile(p) else None
 
-            merges_candidates = [
-                os.path.join(path, 'merges.txt'),
-                os.path.join(path, 'bpe_merges.txt'),
-            ]
-            vocab_candidates = [
-                os.path.join(path, 'vocab.json'),
-                os.path.join(path, 'bpe_vocab.json'),
-            ]
-            merges_txt = next((p for p in merges_candidates if os.path.isfile(p)), None)
-            vocab_json = next((p for p in vocab_candidates if os.path.isfile(p)), None)
+            def _has_merges_vocab(dirpath: str):
+                merges = next((p for p in [os.path.join(dirpath, 'merges.txt'), os.path.join(dirpath, 'bpe_merges.txt')] if os.path.isfile(p)), None)
+                vocab = next((p for p in [os.path.join(dirpath, 'vocab.json'), os.path.join(dirpath, 'bpe_vocab.json')] if os.path.isfile(p)), None)
+                return merges is not None and vocab is not None
 
             try:
-                if tokenizer_json is not None:
+                # 1) Fast path: tokenizer.json in component dir or repo root
+                tok_json = _tokenizer_json_in(path) or _tokenizer_json_in(root)
+                if tok_json is not None:
                     try:
                         from transformers import CLIPTokenizerFast
-                        comp = CLIPTokenizerFast.from_pretrained(path, tokenizer_file=tokenizer_json)
+                        comp = CLIPTokenizerFast.from_pretrained(root, tokenizer_file=tok_json)
                     except Exception:
                         from transformers import AutoTokenizer
-                        comp = AutoTokenizer.from_pretrained(path, use_fast=True, tokenizer_file=tokenizer_json)
-                elif merges_txt is not None and vocab_json is not None:
+                        comp = AutoTokenizer.from_pretrained(root, use_fast=True, tokenizer_file=tok_json)
+                # 2) Classic CLIP BPE: merges+vocab either in component dir or repo root
+                elif _has_merges_vocab(path):
                     comp = cls.from_pretrained(path)
+                elif _has_merges_vocab(root):
+                    comp = cls.from_pretrained(root)
                 else:
-                    # Fallback to master behavior (directory-based); may still raise, but with clearer path
-                    comp = cls.from_pretrained(path)
+                    # 3) Let HF resolve relative paths from the repo root (matches upstream behavior)
+                    from transformers import AutoTokenizer
+                    comp = AutoTokenizer.from_pretrained(root, use_fast=True)
             except Exception as e:
                 raise RuntimeError(
-                    f"Tokenizer assets not found or incompatible under {path}. "
+                    f"Tokenizer assets not found or incompatible under {path} (root: {root}). "
                     f"Tried tokenizer.json (fast) and (vocab.json + merges.txt). Original error: {e}"
                 )
 
