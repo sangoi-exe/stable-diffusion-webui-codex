@@ -8,6 +8,7 @@ def register(options_templates, options_section, OptionInfo):
         "forge_additional_modules": OptionInfo([]),
     }))
     options_templates.update(options_section(('ui_alternatives', "UI alternatives", "ui"), {
+        "forge_canvas_enable": OptionInfo(False, "ForgeCanvas: enable custom canvas").needs_reload_ui(),
         "forge_canvas_plain": OptionInfo(False, "ForgeCanvas: use plain background").needs_reload_ui(),
         "forge_canvas_toolbar_always": OptionInfo(False, "ForgeCanvas: toolbar always visible").needs_reload_ui(),
     }))

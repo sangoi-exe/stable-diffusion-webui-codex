@@ -2,7 +2,7 @@ import gradio as gr
 from modules import scripts, shared, ui_common, postprocessing, call_queue, ui_toprow
 import modules.infotext_utils as parameters_copypaste
 from modules.ui_components import ResizeHandleRow
-from modules_forge.forge_canvas.canvas import ForgeCanvas
+# No direct dependency on ForgeCanvas; use standard Gradio components here
 
 
 def create_ui():

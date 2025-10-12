@@ -25,7 +25,7 @@ import modules.infotext_utils as parameters_copypaste
 import modules.shared as shared
 from modules import prompt_parser
 from modules.infotext_utils import image_from_url_text, PasteField
-from modules_forge.forge_canvas.canvas import ForgeCanvas, canvas_head
+from modules_forge.forge_canvas.adapter import ForgeCanvas, canvas_head
 from modules_forge import main_entry, forge_space
 import modules.processing_scripts.comments as comments
 
