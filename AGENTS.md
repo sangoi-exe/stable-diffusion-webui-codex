@@ -1,4 +1,4 @@
-Treat **THIS AGENTS.md** as the source of truth. Across branch switches, pulls, rebases, and resets (including hard resets), do not modify, replace, or delete this file. If a merge conflict involves AGENTS.md, resolve it by choosing **OURS** (keep the local version) for this file only. If preservation cannot be guaranteed, stop and notify me.
+AGENTS.md is maintained like any other documentation in this repo. It may be edited or replaced when processes evolve. In merges, resolve conflicts contextually (no special-casing “OURS” for this file).
 
 End-of-sprint documentation: log each sprint under `codex/sprint-logs/` using the provided template and follow `codex/sprint-guidelines.md`. Summarise user‑visible highlights in `NEWS.md`.
 
@@ -32,6 +32,7 @@ This repository powers **stable-diffusion-webui-codex** — a fork built on top 
 ## Engineering Principles
 - Pursue robustness before optimizations; never sacrifice existing functionality just to silence errors.
 - Keep changes cohesive. Avoid mixing refactors with unrelated feature work in a single commit.
+ - Parity policy during refactors: do not aim for bit‑exact parity. Maintain functional continuity (it keeps working) and prefer improvements. Public API contracts may evolve when it improves UX/perf; document in `NEWS.md` and migration notes.
  
 
 ## Collaboration Workflow
