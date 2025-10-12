@@ -61,7 +61,7 @@ def _http_download_tokenizer(repo_id: str, dst_root: str, allow_patterns: list[s
 
     # List files in repo
     api_url = f"https://huggingface.co/api/models/{repo_id}"
-    with httpx.Client(headers=headers, timeout=30.0) as client:
+    with httpx.Client(headers=headers, timeout=30.0, follow_redirects=True) as client:
         r = client.get(api_url)
         r.raise_for_status()
         data = r.json()
@@ -111,86 +111,8 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
             return cls.from_pretrained(os.path.join(repo_path, component_name))
         if component_name.startswith('tokenizer'):
             cls = getattr(importlib.import_module(lib_name), cls_name)
-            path = os.path.join(repo_path, component_name)
-            root = repo_path
-
-            def _tokenizer_json_in(dirpath: str):
-                p = os.path.join(dirpath, 'tokenizer.json')
-                return p if os.path.isfile(p) else None
-
-            def _has_merges_vocab(dirpath: str):
-                merges = next((p for p in [os.path.join(dirpath, 'merges.txt'), os.path.join(dirpath, 'bpe_merges.txt')] if os.path.isfile(p)), None)
-                vocab = next((p for p in [os.path.join(dirpath, 'vocab.json'), os.path.join(dirpath, 'bpe_vocab.json')] if os.path.isfile(p)), None)
-                return merges is not None and vocab is not None
-
-            # Resolve locally first; if missing and online fetch allowed, download tokenizer assets to repo_path.
-            tok_json_path = _tokenizer_json_in(path) or _tokenizer_json_in(root)
-            repo_hint = getattr(guess, 'huggingface_repo', None)
-            if tok_json_path is not None:
-                try:
-                    from transformers import CLIPTokenizerFast
-                    comp = CLIPTokenizerFast.from_pretrained(os.path.dirname(tok_json_path), tokenizer_file=tok_json_path, local_files_only=True)
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Found tokenizer.json at {tok_json_path} but failed to load with CLIPTokenizerFast: {e}.\n"
-                        f"Ensure the file is valid and compatible with CLIP fast tokenizer."
-                    )
-            elif _has_merges_vocab(path) or _has_merges_vocab(root):
-                merges_dir = path if _has_merges_vocab(path) else root
-                try:
-                    comp = cls.from_pretrained(merges_dir, local_files_only=True)
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Found merges/vocab under {merges_dir} but failed to load {cls_name}: {e}."
-                    )
-            else:
-                # Attempt online fetch if enabled and repo is known
-                if not backend.args.args.disable_online_tokenizer and repo_hint:
-                    try:
-                        from huggingface_hub import snapshot_download
-                        # Download only tokenizer-related files to cache
-                        allow = [
-                            'tokenizer/*', 'tokenizer_2/*',
-                            'tokenizer.json', 'tokenizer_config.json',
-                            'vocab.json', 'merges.txt', 'tokenizer.model'
-                        ]
-                        try:
-                            cached_dir = snapshot_download(repo_id=repo_hint, allow_patterns=allow, local_files_only=False)
-                            _copy_tree(cached_dir, repo_path, patterns=allow)
-                        except TypeError as te:
-                            # Handle patched/incompatible hub internals (unexpected 'etag' kwarg, etc.) via direct HTTP
-                            print(f"huggingface_hub snapshot_download incompatible ({te}); falling back to direct HTTP download for tokenizer files.")
-                            _http_download_tokenizer(repo_hint, repo_path, allow)
-                        except Exception as e:
-                            # Try direct HTTP as a second attempt for robustness
-                            print(f"huggingface_hub snapshot_download failed: {e}; attempting direct HTTP download for tokenizer files.")
-                            _http_download_tokenizer(repo_hint, repo_path, allow)
-
-                        # Re-resolve after fetch
-                        tok_json_path = _tokenizer_json_in(path) or _tokenizer_json_in(root)
-                        if tok_json_path is not None:
-                            from transformers import CLIPTokenizerFast
-                            comp = CLIPTokenizerFast.from_pretrained(os.path.dirname(tok_json_path), tokenizer_file=tok_json_path, local_files_only=True)
-                        elif _has_merges_vocab(path) or _has_merges_vocab(root):
-                            merges_dir = path if _has_merges_vocab(path) else root
-                            comp = cls.from_pretrained(merges_dir, local_files_only=True)
-                        else:
-                            raise RuntimeError(
-                                f"Online fetch attempted for repo '{repo_hint}', but tokenizer assets remain missing under {repo_path}."
-                            )
-                    except Exception as e:
-                        raise RuntimeError(
-                            "Tokenizer assets missing locally and online fetch requested, but download failed and direct HTTP not attempted: "
-                            f"{e}. Provide tokenizer files locally or set --disable-online-tokenizer."
-                        )
-                else:
-                    hint = (f" (hint: repo_id='{repo_hint}')" if repo_hint else "")
-                    raise RuntimeError(
-                        f"Tokenizer assets missing under {path} (root: {root}).\n"
-                        f"Expected tokenizer.json or (vocab.json + merges.txt).{hint}\n"
-                        f"For SDXL, ensure both 'tokenizer/' and 'tokenizer_2/' exist and contain their files, or enable online fetch."
-                    )
-
+            # Align with master: delegate to transformers/diffusers to resolve local or Hub
+            comp = cls.from_pretrained(os.path.join(repo_path, component_name))
             if hasattr(comp, "_eventual_warn_about_too_long_sequence"):
                 comp._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None
             return comp
