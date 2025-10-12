@@ -188,6 +188,12 @@ class UiSettings:
                         with gr.Column(scale=100):
                             pass
 
+                    # Live memory/VRAM diagnostics
+                    with gr.Row():
+                        mem_refresh = gr.Button(value='Refresh memory', elem_id="sysinfo_refresh_memory")
+                    with gr.Row():
+                        mem_json = gr.JSON(value={}, elem_id="sysinfo_memory_json")
+
                 with gr.TabItem("Actions", id="actions", elem_id="settings_tab_actions"):
                     request_notifications = gr.Button(value='Request browser notifications', elem_id="request_notifications")
                     download_localization = gr.Button(value='Download localization template', elem_id="download_localization")
@@ -277,6 +283,45 @@ class UiSettings:
                 inputs=[sysinfo_check_file],
                 outputs=[sysinfo_check_output],
             )
+
+            def get_internal_memory():
+                try:
+                    import os as _os
+                    import psutil as _ps
+                    _proc = _ps.Process(_os.getpid())
+                    _rss = _proc.memory_info().rss
+                    _pct = _proc.memory_percent()
+                    _ram_total = int(100 * _rss / _pct) if _pct > 0 else _ps.virtual_memory().total
+                    _ram = {"free": _ram_total - _rss, "used": _rss, "total": _ram_total}
+                except Exception as _e:
+                    _ram = {"error": str(_e)}
+
+                try:
+                    import torch as _torch
+                    if _torch.cuda.is_available():
+                        free_b, total_b = _torch.cuda.mem_get_info()
+                        _cuda = {"system": {"free": free_b, "used": total_b - free_b, "total": total_b}}
+                    else:
+                        _cuda = {"error": "unavailable"}
+                except Exception as _e:
+                    _cuda = {"error": str(_e)}
+
+                try:
+                    from backend import memory_management as _mm
+                    vram_state = getattr(_mm, 'vram_state', None)
+                    cpu_state = getattr(_mm, 'cpu_state', None)
+                    flags = {
+                        "vram_state": getattr(vram_state, 'name', str(vram_state)),
+                        "cpu_state": getattr(cpu_state, 'name', str(cpu_state)),
+                        "pin_shared_memory": getattr(_mm, 'PIN_SHARED_MEMORY', None),
+                        "always_offload_from_vram": getattr(_mm, 'ALWAYS_VRAM_OFFLOAD', None),
+                    }
+                except Exception:
+                    flags = {}
+
+                return {"ram": _ram, "cuda": _cuda, "flags": flags}
+
+            mem_refresh.click(fn=get_internal_memory, inputs=[], outputs=[mem_json], show_progress=False, queue=False)
 
             # Native settings search (Python-side) — avoids JS DOM filtering.
             # Returns visibility updates for each settings component.

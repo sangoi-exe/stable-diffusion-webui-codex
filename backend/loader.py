@@ -654,13 +654,31 @@ def forge_loader(sd, additional_state_dicts=None):
     print('Failed to recognize model type!')
     return None
 def _http_list_and_download(repo_id: str, dst_root: str, predicate):
-    import httpx
+    import httpx, time
     token = os.environ.get('HF_TOKEN')
     headers = {'Authorization': f'Bearer {token}'} if token else {}
     api_url = f"https://huggingface.co/api/models/{repo_id}"
-    with httpx.Client(headers=headers, timeout=30.0, follow_redirects=True) as client:
-        r = client.get(api_url)
-        r.raise_for_status()
+    max_attempts = 3
+
+    def _should_retry(exc):
+        try:
+            status = getattr(exc, 'response', None).status_code
+        except Exception:
+            status = None
+        return status in (429, 502, 503, 504)
+
+    with httpx.Client(headers=headers, timeout=15.0, follow_redirects=True) as client:
+        for attempt in range(max_attempts):
+            try:
+                r = client.get(api_url)
+                r.raise_for_status()
+                break
+            except httpx.HTTPStatusError as e:
+                if attempt + 1 < max_attempts and _should_retry(e):
+                    time.sleep(0.5 * (2 ** attempt))
+                    continue
+                raise
+
         siblings = (r.json() or {}).get('siblings') or []
         filepaths = [s.get('rfilename') for s in siblings if s.get('rfilename')]
         wanted = [p for p in filepaths if predicate(p)]
@@ -668,11 +686,19 @@ def _http_list_and_download(repo_id: str, dst_root: str, predicate):
             url = f"https://huggingface.co/{repo_id}/resolve/main/{rel}"
             out = os.path.join(dst_root, rel)
             os.makedirs(os.path.dirname(out), exist_ok=True)
-            with client.stream('GET', url) as resp:
-                resp.raise_for_status()
-                with open(out, 'wb') as f:
-                    for chunk in resp.iter_bytes():
-                        f.write(chunk)
+            for attempt in range(max_attempts):
+                try:
+                    with client.stream('GET', url) as resp:
+                        resp.raise_for_status()
+                        with open(out, 'wb') as f:
+                            for chunk in resp.iter_bytes():
+                                f.write(chunk)
+                    break
+                except httpx.HTTPStatusError as e:
+                    if attempt + 1 < max_attempts and _should_retry(e):
+                        time.sleep(0.5 * (2 ** attempt))
+                        continue
+                    raise
 
 
 def _ensure_repo_minimal_files(repo_id: str, local_path: str):
