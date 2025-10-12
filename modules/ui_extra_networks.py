@@ -962,6 +962,90 @@ def create_ui(interface: gr.Blocks, unrelated_tabs, tabname):
                     outputs=[prompt_comp, neg_prompt_comp]
                 )
 
+        # Optional: native Gallery for LoRA page under feature flag
+        if _dataset_mode and page.title.lower() == 'lora':
+            def _lora_filter_sort_items(pg, q: str, field: str, direction: str):
+                items = list(pg.items.values()) if getattr(pg, 'items', None) else []
+                q = (q or '').strip().lower()
+                if q:
+                    def match(it):
+                        name = str(it.get('name', '')).lower()
+                        desc = str(it.get('description', '') or '').lower()
+                        terms = [str(t).lower() for t in it.get('search_terms', [])]
+                        return (q in name) or (q in desc) or any(q in t for t in terms)
+                    items = [it for it in items if match(it)]
+                field = (field or 'default').strip().lower()
+                reverse = (str(direction or shared.opts.extra_networks_card_order).lower() == 'descending')
+                try:
+                    items.sort(key=lambda it: it.get('sort_keys', {}).get(field, it.get('sort_keys', {}).get('default', 0)), reverse=reverse)
+                except Exception:
+                    pass
+                return items
+
+            def _lora_gallery_samples(_search, _field, _dir, _pg=page):
+                _pg.create_html(tabname, empty=False)
+                items = _lora_filter_sort_items(_pg, _search, _field, _dir)
+                no_preview = '/file=html/card-no-preview.png'
+                samples = []
+                for it in items:
+                    img = it.get('preview') or no_preview
+                    cap = it.get('name') or ''
+                    samples.append([img, cap])
+                return samples
+
+            with gr.Row():
+                lora_target_prompt = gr.Radio(choices=["Positive", "Negative"], value="Positive", show_label=False, scale=0, elem_id=f"{tabname}_{page.extra_networks_tabname}_target")
+            lora_gallery = gr.Gallery(value=_lora_gallery_samples('', 'default', shared.opts.extra_networks_card_order), label=None, show_label=False, elem_id=f"{tabname}_{page.extra_networks_tabname}_gallery", columns=6, preview=True, visible=True)
+
+            def _lora_update_gallery(_s, _f, _d):
+                return gr.update(value=_lora_gallery_samples(_s, _f, _d))
+
+            for control in (search_box, sort_field, sort_dir):
+                control.change(fn=_lora_update_gallery, inputs=[search_box, sort_field, sort_dir], outputs=[lora_gallery], show_progress=False, queue=False)
+
+            try:
+                from modules_forge import main_entry
+                prompt_comp = main_entry.get_a1111_ui_component(tabname, 'Prompt')
+                neg_prompt_comp = main_entry.get_a1111_ui_component(tabname, 'Negative prompt')
+            except Exception:
+                prompt_comp = None
+                neg_prompt_comp = None
+
+            # Resolve alias/name and weight for token
+            def _lora_on_select(evt: gr.SelectData, _s, _f, _d, cur_prompt, cur_neg, _target):
+                items = _lora_filter_sort_items(page, _s, _f, _d)
+                idx = getattr(evt, 'index', None)
+                if idx is None or idx < 0 or idx >= len(items):
+                    return gr.update(), gr.update()
+                it = items[idx]
+                name = it.get('name') or ''
+                user_md = it.get('user_metadata', {}) or {}
+                # Determine alias vs filename per option
+                preferred = getattr(shared.opts, 'lora_preferred_name', 'Alias from file')
+                alias = user_md.get('alias') or name
+                token_name = alias if str(preferred).lower().startswith('alias') else name
+                # Determine weight
+                weight = user_md.get('preferred weight')
+                if weight in (None, '', 0, 0.0):
+                    weight = getattr(shared.opts, 'extra_networks_default_multiplier', 1.0)
+                # Build token and append
+                token = f"<lora:{token_name}:{weight}>"
+                pos_base = (cur_prompt or '').strip()
+                neg_base = (cur_neg or '').strip()
+                if str(_target).lower().startswith('neg'):
+                    new_neg = f"{neg_base} {token}".strip()
+                    return gr.update(), new_neg
+                else:
+                    new_pos = f"{pos_base} {token}".strip()
+                    return new_pos, gr.update()
+
+            if prompt_comp is not None and neg_prompt_comp is not None:
+                lora_gallery.select(
+                    fn=_lora_on_select,
+                    inputs=[search_box, sort_field, sort_dir, prompt_comp, neg_prompt_comp, lora_target_prompt],
+                    outputs=[prompt_comp, neg_prompt_comp]
+                )
+
     def create_html():
         ui.pages_contents = [pg.create_html(ui.tabname) for pg in ui.stored_extra_pages]
 
