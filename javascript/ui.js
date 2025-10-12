@@ -118,6 +118,27 @@ function create_submit_args(args) {
     return Array.from(args);
 }
 
+// Normalize potentially stringified numbers in submit payloads to avoid
+// Slider/Number preprocess type errors in Gradio (e.g., '512' vs 512).
+function normalizeSubmitArgs(tabname, res) {
+    try {
+        if (tabname === 'txt2img') {
+            // Index map must match modules/ui.py -> txt2img_inputs
+            const ints = [4, 5, 8, 9, 14, 15, 16];
+            const floats = [6, 7, 11, 12, 23, 24];
+            for (const i of ints) {
+                if (typeof res[i] === 'string' && res[i].trim() !== '' && !isNaN(res[i])) res[i] = parseInt(res[i], 10);
+            }
+            for (const i of floats) {
+                if (typeof res[i] === 'string' && res[i].trim() !== '' && !isNaN(res[i])) res[i] = parseFloat(res[i]);
+            }
+        }
+    } catch (e) {
+        console.warn('normalizeSubmitArgs failed:', e);
+    }
+    return res;
+}
+
 function setSubmitButtonsVisibility(tabname, showInterrupt, showSkip, showInterrupting) {
     gradioApp().getElementById(tabname + '_interrupt').style.display = showInterrupt ? "block" : "none";
     gradioApp().getElementById(tabname + '_skip').style.display = showSkip ? "block" : "none";
@@ -151,6 +172,7 @@ function submit() {
     });
 
     var res = create_submit_args(arguments);
+    res = normalizeSubmitArgs('txt2img', res);
 
     res[0] = id;
 
