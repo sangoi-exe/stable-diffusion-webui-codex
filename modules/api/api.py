@@ -29,10 +29,7 @@ from typing import Any, Union, get_origin, get_args
 ## removed: piexif used by legacy encode
 from contextlib import closing
 from modules.progress import create_task_id, current_task
-from backend.services.image_service import ImageService
-from backend.services.media_service import MediaService
-from backend.services.options_service import OptionsService
-from backend.services.sampler_service import SamplerService
+from backend.services import ImageService, MediaService, OptionsService, SamplerService, ProgressService
 
 # Back-compat shims for extensions importing helpers from modules.api.api
 _media_compat = MediaService()
@@ -156,6 +153,7 @@ class Api:
         self.media = MediaService()
         self.options = OptionsService()
         self.sampler = SamplerService()
+        self.progress = ProgressService(self.media)
         #api_middleware(self.app)  # FIXME: (legacy) this will have to be fixed
         self.add_api_route("/sdapi/v1/txt2img", self.text2imgapi, methods=["POST"], response_model=models.TextToImageResponse)
         self.add_api_route("/sdapi/v1/img2img", self.img2imgapi, methods=["POST"], response_model=models.ImageToImageResponse)
@@ -548,32 +546,15 @@ class Api:
         return models.PNGInfoResponse(info=geninfo, items=items, parameters=params)
 
     def progressapi(self, req: models.ProgressRequest = Depends()):
-        # copy from check_progress_call of ui.py
-
-        if shared.state.job_count == 0:
-            return models.ProgressResponse(progress=0, eta_relative=0, state=shared.state.dict(), textinfo=shared.state.textinfo)
-
-        # avoid dividing zero
-        progress = 0.01
-
-        if shared.state.job_count > 0:
-            progress += shared.state.job_no / shared.state.job_count
-        if shared.state.sampling_steps > 0:
-            progress += 1 / shared.state.job_count * shared.state.sampling_step / shared.state.sampling_steps
-
-        time_since_start = time.time() - shared.state.time_start
-        eta = (time_since_start/progress)
-        eta_relative = eta-time_since_start
-
-        progress = min(progress, 1)
-
-        shared.state.set_current_image()
-
-        current_image = None
-        if shared.state.current_image and not req.skip_current_image:
-            current_image = self.media.encode_image(shared.state.current_image)
-
-        return models.ProgressResponse(progress=progress, eta_relative=eta_relative, state=shared.state.dict(), current_image=current_image, textinfo=shared.state.textinfo, current_task=current_task)
+        data = self.progress.compute(skip_current_image=req.skip_current_image)
+        return models.ProgressResponse(
+            progress=data["progress"],
+            eta_relative=data["eta_relative"],
+            state=data["state"],
+            current_image=data["current_image"],
+            textinfo=data["textinfo"],
+            current_task=data["current_task"],
+        )
 
     def interrogateapi(self, interrogatereq: models.InterrogateRequest):
         image_b64 = interrogatereq.image
