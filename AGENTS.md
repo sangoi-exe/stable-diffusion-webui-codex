@@ -14,6 +14,7 @@ Whenever you propose or implement a solution, **DO NOT REINVENT THE WHEEL**.
 **DO NOT** remove, disable, or narrow existing functionality to make an error disappear; fixes must preserve functional parity and user-facing behavior.
 
 Prioritize error handling instead of fallbacks.
+Absolute rule: fallbacks are prohibited. If a precondition (asset, config, API contract) is missing or incompatible, raise a clear error and stop. Never mask, auto-correct, or silently continue.
 Avoid generic helpers and redundant, unnecessary validations.
 Be thorough with verbose output and debugging.
 In Python scripts, include progress bars when appropriate.

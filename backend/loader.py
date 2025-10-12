@@ -56,29 +56,28 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                 vocab = next((p for p in [os.path.join(dirpath, 'vocab.json'), os.path.join(dirpath, 'bpe_vocab.json')] if os.path.isfile(p)), None)
                 return merges is not None and vocab is not None
 
-            try:
-                # 1) Fast path: tokenizer.json in component dir or repo root
-                tok_json = _tokenizer_json_in(path) or _tokenizer_json_in(root)
-                if tok_json is not None:
-                    try:
-                        from transformers import CLIPTokenizerFast
-                        comp = CLIPTokenizerFast.from_pretrained(root, tokenizer_file=tok_json)
-                    except Exception:
-                        from transformers import AutoTokenizer
-                        comp = AutoTokenizer.from_pretrained(root, use_fast=True, tokenizer_file=tok_json)
-                # 2) Classic CLIP BPE: merges+vocab either in component dir or repo root
-                elif _has_merges_vocab(path):
-                    comp = cls.from_pretrained(path)
-                elif _has_merges_vocab(root):
-                    comp = cls.from_pretrained(root)
-                else:
-                    # 3) Let HF resolve relative paths from the repo root (matches upstream behavior)
-                    from transformers import AutoTokenizer
-                    comp = AutoTokenizer.from_pretrained(root, use_fast=True)
-            except Exception as e:
+            # Strict local-only resolution. No remote lookups, no implicit fallbacks.
+            tok_json_path = _tokenizer_json_in(path) or _tokenizer_json_in(root)
+            if tok_json_path is not None:
+                try:
+                    from transformers import CLIPTokenizerFast
+                    comp = CLIPTokenizerFast.from_pretrained(os.path.dirname(tok_json_path), tokenizer_file=tok_json_path, local_files_only=True)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Found tokenizer.json at {tok_json_path} but failed to load with CLIPTokenizerFast: {e}. "
+                        f"Ensure the file is valid and compatible with CLIP fast tokenizer."
+                    )
+            elif _has_merges_vocab(path) or _has_merges_vocab(root):
+                merges_dir = path if _has_merges_vocab(path) else root
+                try:
+                    comp = cls.from_pretrained(merges_dir, local_files_only=True)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Found merges/vocab under {merges_dir} but failed to load {cls_name}: {e}."
+                    )
+            else:
                 raise RuntimeError(
-                    f"Tokenizer assets not found or incompatible under {path} (root: {root}). "
-                    f"Tried tokenizer.json (fast) and (vocab.json + merges.txt). Original error: {e}"
+                    f"Tokenizer assets missing under {path} (root: {root}). Expected tokenizer.json or (vocab.json + merges.txt)."
                 )
 
             if hasattr(comp, "_eventual_warn_about_too_long_sequence"):
