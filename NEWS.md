@@ -1,5 +1,6 @@
 About Gradio 5: will try to upgrade to Gradio 5 at about 2025 March. If failed, then will try again on about 2025 June. relatively positive that we can have Gradio5 before next summer.
 
+2025 Oct 12: Restored mandatory frontend helpers (`settings.js`, `ui.js`) in the default injection path and fail fast when GRADIO_JS_* filters remove them, fixing the broken settings layout, empty inference dropdowns, and Gradio queue crashes.
 2025 Oct 11: Removed client-side `compat_gradio5.js` wrapper that suppressed UI callback errors. Errors will now surface in console for proper fixes; no behavior changes intended beyond eliminating silent failures.
 2025 Oct 11: Improved callback robustness in `script.js` — invalid (non-function) registrations are ignored with a warning and callback errors are logged with context, reducing confusing messages like "error running callback :" and aiding root-cause fixes.
 2025 Oct 11: Begin Gradio 5 migration per "Guia de Migração do Gradio 4.40 para 5" — set expected Gradio to 5.49.1 and use `concurrency_limit` in `.queue()`.

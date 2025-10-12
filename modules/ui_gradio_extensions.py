@@ -5,6 +5,15 @@ import posixpath
 from modules.paths import script_path, data_path
 
 
+# Scripts in javascript/ that remain critical until their Python counterparts
+# ship the same behaviour. Denying them produces broken layouts or queue
+# corruption (e.g. upload_id=undefined).
+ESSENTIAL_JS = {
+    "ui.js",
+    "settings.js",
+}
+
+
 def webpath(fn):
     return f'file={util.truncate_path(fn)}?{os.path.getmtime(fn)}'
 
@@ -28,6 +37,7 @@ def _parse_js_allowlist():
             "script.js",
             "ui.js",
             "progressbar.js",
+            "settings.js",
             "localization.js",
             "imageviewer.js",
             "resizeHandle.js",
@@ -53,11 +63,12 @@ def _parse_js_allowlist():
 def _parse_js_denylist():
     """Return a set of basenames to exclude from JS injection regardless of allowlist.
 
-    - Default (unset): deny a small set of fragile legacy scripts that are now replaced by Python logic.
+    - Default (unset): keep the denylist empty. Essential legacy helpers are still required.
     - Override with GRADIO_JS_DENYLIST to customize (comma-separated basenames). To disable defaults, set to "none".
     """
-    # Aggressively disable legacy JS by default; Python-side events replace these hooks
-    default_deny = {"settings.js", "gradio.js", "ui.js", "token-counters.js", "inputAccordion.js"}
+    # With Gradio 5 we still rely on several legacy helpers. Keep denylist empty
+    # by default until behaviour is replicated in Python.
+    default_deny = set()
     env = os.getenv("GRADIO_JS_DENYLIST")
     if env is None:
         return default_deny
@@ -86,6 +97,32 @@ def javascript_html():
 
     allow = _parse_js_allowlist()
     deny = _parse_js_denylist()
+
+    def _assert_essentials():
+        js_root = os.path.join(script_path, "javascript")
+        existing = set()
+        if os.path.isdir(js_root):
+            existing.update(fname for fname in os.listdir(js_root) if fname.endswith(".js"))
+        missing = {name for name in ESSENTIAL_JS if name not in existing}
+        if missing:
+            joined = ", ".join(sorted(missing))
+            raise RuntimeError(
+                f"Missing critical frontend assets: {joined}. "
+                "Ensure the javascript/ directory is intact."
+            )
+
+        if allow is None:
+            blocked = ESSENTIAL_JS & deny
+        else:
+            blocked = {name for name in ESSENTIAL_JS if name not in allow or name in deny}
+        if blocked:
+            joined = ", ".join(sorted(blocked))
+            raise RuntimeError(
+                f"Essential frontend scripts disabled via GRADIO_JS_* configuration: {joined}. "
+                "These files are required for the settings layout and request queue to work."
+            )
+
+    _assert_essentials()
 
     def _is_allowed(p: str) -> bool:
         if allow is None:
