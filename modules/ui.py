@@ -477,8 +477,9 @@ def create_ui():
                 concurrency_limit=1,
             )
 
-            toprow.prompt.submit(**txt2img_args)
-            toprow.submit.click(**txt2img_args)
+            # JS wrappers provide id_task + client-side progress (required for queue + heartbeat)
+            toprow.prompt.submit(_js="submit", **txt2img_args)
+            toprow.submit.click(_js="submit", **txt2img_args)
 
             # Sync visible checkbox with hidden InputAccordion and accordion open state
             def _sync_hr(v):
@@ -499,6 +500,7 @@ def create_ui():
                 outputs=txt2img_outputs,
                 show_progress='hidden',
                 concurrency_limit=1,
+                _js="submit_txt2img_upscale",
             ).then(fn=select_gallery_image, inputs=[output_panel.gallery_index], outputs=[output_panel.gallery])
 
             res_switch_btn.click(lambda w, h: (h, w), inputs=[width, height], outputs=[width, height], show_progress=False)
@@ -857,8 +859,9 @@ def create_ui():
                 outputs=[toprow.prompt, dummy_component],
             )
 
-            toprow.prompt.submit(**img2img_args)
-            toprow.submit.click(**img2img_args)
+            # JS wrappers provide id_task + client-side progress
+            toprow.prompt.submit(_js="submit_img2img", **img2img_args)
+            toprow.submit.click(_js="submit_img2img", **img2img_args)
 
             res_switch_btn.click(lambda w, h: (h, w), inputs=[width, height], outputs=[width, height], show_progress=False)
 
