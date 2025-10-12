@@ -327,7 +327,25 @@ class UiSettings:
                     show_progress=False,
                 )
 
-        # Removed external checkpoint manager wiring
+        # Wire Change checkpoint button to minimal checkpoint/vae selectors if present
+        try:
+            from modules_forge import main_entry
+
+            def button_set_checkpoint_change(model, vae, dummy):
+                if 'Built in' in vae:
+                    vae.remove('Built in')
+                model = sd_models.match_checkpoint_to_name(model)
+                return model, vae, opts.dumpjson()
+
+            button_set_checkpoint = gr.Button('Change checkpoint', elem_id='change_checkpoint', visible=False)
+            button_set_checkpoint.click(
+                fn=button_set_checkpoint_change,
+                js="function(c, v, n){ var ckpt = desiredCheckpointName; var vae = desiredVAEName; if (ckpt == null) ckpt = c; if (vae == 0) vae = v; desiredCheckpointName = null; desiredVAEName = 0; return [ckpt, vae, null]; }",
+                inputs=[main_entry.ui_checkpoint, main_entry.ui_vae, self.dummy_component],
+                outputs=[main_entry.ui_checkpoint, main_entry.ui_vae, self.text_settings],
+            )
+        except Exception:
+            pass
 
         component_keys = [k for k in opts.data_labels.keys() if k in self.component_dict]
 

@@ -8,8 +8,16 @@ def webpath(fn):
 
 
 def javascript_html():
+    # Bootstrap minimal stubs before any other script to avoid ReferenceErrors
+    bootstrap = (
+        "<script type=\"text/javascript\">(function(){\n"
+        "window.onUiUpdate=window.onUiUpdate||function(cb){(window._uiUpdQ=window._uiUpdQ||[]).push(cb)};\n"
+        "window.onAfterUiUpdate=window.onAfterUiUpdate||function(cb){(window._uiAfterQ=window._uiAfterQ||[]).push(cb)};\n"
+        "window.onUiLoaded=window.onUiLoaded||function(cb){(window._uiLoadQ=window._uiLoadQ||[]).push(cb)};\n"
+        "})();</script>\n"
+    )
     # Ensure localization is in `window` before scripts
-    head = f'<script type="text/javascript">{localization.localization_js(shared.opts.localization)}</script>\n'
+    head = bootstrap + f'<script type="text/javascript">{localization.localization_js(shared.opts.localization)}</script>\n'
 
     script_js = os.path.join(script_path, "script.js")
     head += f'<script type="text/javascript" src="{webpath(script_js)}"></script>\n'

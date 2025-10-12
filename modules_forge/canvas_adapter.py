@@ -42,12 +42,24 @@ class GradioCanvas:
                     elem_id=elem_id or "img_background",
                     elem_classes=elem_classes,
                 )
-                self.background = editor
+                # Hidden processed background (PIL) derived from editor's composite
+                processed_bg = gr.Image(
+                    visible=False, label="Background", type="pil", image_mode="RGBA"
+                )
+                # When user edits/applies, map EditorValue -> composite image
+                editor.change(lambda ev: (ev or {}).get('composite') if isinstance(ev, dict) else None,
+                              inputs=editor, outputs=processed_bg)
+                editor.input(lambda ev: (ev or {}).get('composite') if isinstance(ev, dict) else None,
+                             inputs=editor, outputs=processed_bg)
+                # Expose processed image as background for downstream pipeline
+                self.background = processed_bg
+                self.editor = editor
             except Exception:
                 self.background = gr.Image(
                     label=None, show_label=False, source="upload", interactive=True, type="pil", image_mode="RGBA",
                     elem_id=elem_id or "img_background", height=height, elem_classes=elem_classes
                 )
+                self.editor = self.background
 
             # Hidden placeholder to keep API parity with sites expecting a foreground image
             self.foreground = gr.Image(visible=False, label="Foreground", type="pil", image_mode="RGBA")
