@@ -60,3 +60,9 @@ coverage.xml
 *codex/*
 *tests/*
 snapshotLegacy.py
+
+# Local build caches and typecheck outputs
+/.tmp/
+/.npm-cache/
+/.typecheck.out
+/.ts-out/
