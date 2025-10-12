@@ -139,3 +139,56 @@ Seguindo esse plano, o código backend do **Stable Diffusion WebUI Forge** dever
 <a name="citations"></a>[\[1\]](https://github.com/lllyasviel/stable-diffusion-webui-forge/blob/dfdcbab685e57677014f05a3309b48cc87383167/modules/api/api.py#L479-L487) [\[2\]](https://github.com/lllyasviel/stable-diffusion-webui-forge/blob/dfdcbab685e57677014f05a3309b48cc87383167/modules/api/api.py#L549-L557) [\[3\]](https://github.com/lllyasviel/stable-diffusion-webui-forge/blob/dfdcbab685e57677014f05a3309b48cc87383167/modules/api/api.py#L19-L26) [\[4\]](https://github.com/lllyasviel/stable-diffusion-webui-forge/blob/dfdcbab685e57677014f05a3309b48cc87383167/modules/api/api.py#L76-L84) [\[5\]](https://github.com/lllyasviel/stable-diffusion-webui-forge/blob/dfdcbab685e57677014f05a3309b48cc87383167/modules/api/api.py#L102-L110) [\[6\]](https://github.com/lllyasviel/stable-diffusion-webui-forge/blob/dfdcbab685e57677014f05a3309b48cc87383167/modules/api/api.py#L150-L158) [\[7\]](https://github.com/lllyasviel/stable-diffusion-webui-forge/blob/dfdcbab685e57677014f05a3309b48cc87383167/modules/api/api.py#L10-L18) [\[8\]](https://github.com/lllyasviel/stable-diffusion-webui-forge/blob/dfdcbab685e57677014f05a3309b48cc87383167/modules/api/api.py#L19-L26) [\[9\]](https://github.com/lllyasviel/stable-diffusion-webui-forge/blob/dfdcbab685e57677014f05a3309b48cc87383167/modules/api/api.py#L1-L9) api.py
 
 <https://github.com/lllyasviel/stable-diffusion-webui-forge/blob/dfdcbab685e57677014f05a3309b48cc87383167/modules/api/api.py>
+
+---
+
+Apêndice A — Mapa do Backend (implementação atual)
+--------------------------------------------------
+
+- `backend/args.py`
+  - Flags de execução (precisão UNet/VAE/CLIP, atenção, VRAM modes, streaming CUDA/XPU, offline do tokenizer).
+  - Chaves úteis: `--cuda-stream`, `--always-*vram`, `--pin-shared-memory`, `--disable-online-tokenizer`.
+
+- `backend/memory_management.py`
+  - Detecta estado de VRAM/CPU (`VRAMState`, `CPUState`), escolhe dispositivos e dtypes, define políticas (low‑vram, shared, always offload).
+  - Calcula memória de inferência e offload; integra com `backend/stream.py` quando streaming está habilitado.
+
+- `backend/stream.py`
+  - Cria/valida streams CUDA/XPU opcionais (`--cuda-stream`), com detecção de suporte e fallback seguro.
+
+- `backend/loader.py`
+  - Carrega UNet/VAE/CLIP/Schedulers (diffusers/transformers) com dtypes corretos e `using_forge_operations()`.
+  - Resolve assets mínimos (config/tokenizers) localmente; modo normal tenta baixar apenas `*.json/*.txt` quando faltam.
+  - Modo estrito (entregue): `--disable-online-tokenizer` falha rápido com instruções claras, sem fallback online.
+
+- `backend/sampling/sampling_function.py`
+  - Estima memória necessária (UNet/ControlNet/LoRA) e aciona carregamento/offload; emite avisos de VRAM baixa.
+
+- `backend/patcher/*`, `backend/operations*.py`, `backend/nn/*`
+  - Patches LoRA; operações (bnb/gguf/torch) e módulos integrados de NN.
+
+- `backend/services/*`
+  - Serviços auxiliares (image/media/options/sampler) para reduzir acoplamento e centralizar utilidades.
+
+Apêndice B — Tarefas Concretas (derivadas da análise)
+----------------------------------------------------
+
+1) Unificar fluxo txt2img/img2img
+- Extrair utilitário `process_request(mode, args...)` na camada de serviço/API; remover duplicação, validar sampler/scheduler via `SamplerService` e delegar encode/decode à `MediaService`.
+
+2) Inventário de opções + DI leve
+- Documentar/centralizar opções em `OptionsService`; preferir parâmetros explícitos a leituras globais de `modules.shared` onde possível.
+
+3) Recursos/filas/telemetria
+- Criar `ProgressService` (tempo restante, velocidades) e endpoint `/internal/memory` com VRAM/RAM/flags de `memory_management`.
+
+4) Confiabilidade do loader
+- Já entregue: modo offline estrito com erro determinístico.
+- Próximo: retry/backoff para `*.json/*.txt` (HTTP 429/5xx), com timeouts curtos.
+
+5) Logging e erros estruturados
+- Promover avisos de VRAM baixa e OOM para retornos estruturados, sugerindo “actions” (reduzir GPU Weight, desativar streams, etc.).
+
+Validação recomendada
+- Smoke test cobrindo loader (offline/online), geração pequena/alta, LoRA, streams.
+- Exportar métricas (tempo por etapa; pico de VRAM) para regressões.
