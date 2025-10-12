@@ -67,6 +67,7 @@ This repository powers **stable-diffusion-webui-codex** — a fork built on top 
 - Maintain a clean working tree before concluding a session; ensure artifacts such as `outputs/`, caches, or `models/` remain untracked.
 - When adding new dependencies or configuration files, reflect the changes in `requirements_versions.txt` or `package.json` as appropriate and document the impact.
 - End of each delivery: make an atomic commit and push (no uncommitted leftovers). Document highlights in `NEWS.md` and add/update a sprint log in `codex/sprint-logs/`.
+ - Antes de finalizar uma entrega: faça commit atômico e push. Atualize o `NEWS.md` e registre o log do sprint em `codex/sprint-logs/`.
 
 ## Session Handoff
 - Summarise completed work, validations, and outstanding risks in your final message; point to the exact files touched.

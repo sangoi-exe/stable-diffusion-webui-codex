@@ -97,9 +97,11 @@ def make_checkpoint_manager_ui():
     ui_forge_preset = gr.Radio(label="UI", value=lambda: getattr(shared.opts, 'forge_preset', 'all'), choices=['sd', 'xl', 'flux', 'all'], elem_id="forge_ui_preset")
 
     ckpt_list, vae_list = refresh_models()
+    if not ckpt_list:
+        ckpt_list = ["(no checkpoints found)"]
 
     ui_checkpoint = gr.Dropdown(
-        value=lambda: shared.opts.sd_model_checkpoint,
+        value=lambda: shared.opts.sd_model_checkpoint or "(no checkpoints found)",
         label="Checkpoint",
         elem_classes=['model_selection'],
         choices=ckpt_list

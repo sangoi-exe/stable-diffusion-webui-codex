@@ -256,9 +256,15 @@ def ordered_ui_categories():
 
 
 def create_override_settings_dropdown(tabname, row):
-    # Gradio 5: Dropdown must have a valid default; keep it empty list when unused
+    # Populate with known options to avoid empty-choices errors during first generate
+    try:
+        override_candidates = sorted(list(opts.data_labels.keys()))
+    except Exception:
+        override_candidates = []
+
+    # Gradio 5: For multiselect dropdowns, keep value=[] as default (valid empty selection)
     dropdown = gr.Dropdown(
-        choices=[],
+        choices=override_candidates if override_candidates else ["(no options)"],
         value=[],
         label="Override settings",
         visible=False,

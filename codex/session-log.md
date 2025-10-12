@@ -40,3 +40,25 @@ Session Log
 - Logging: introduced Rich/Colorama pipeline with tqdm‑aware handler (fallback to std logging when unavailable).
 - Deps: added updater `tools/update_requirements.py`; refreshed pins, excluded torch family for local builds; resolved open‑clip/protobuf pin conflict.
 - Validation: agreed to prioritize UI manual tests; capture CLI remains available for deterministic artefacts.
+
+2025-10-12 – Tool outputs summary (prune‑safe)
+- Git/branches
+  - Local: `master` (default), `legacy` (ex‑master), `fix/extra-networks-bridge`, `rollback/logging`.
+  - Remote origin: `origin/master`, `origin/legacy`, `origin/stable`.
+  - Removidos: `origin/refactor`, `origin/main`, `origin/sangoi-exe-patch-1`, `origin/codex/*` (3 branches).
+  - `origin` atualizado para `sangoi-exe/stable-diffusion-webui-codex`; `upstream` removido localmente.
+- UI/SSR/JS
+  - SSR: padrão OFF; para ligar `GRADIO_SSR_MODE=1` (Node >= 20). Mensagem no console quando desativado.
+  - JS allowlist/denylist: allowlist via `GRADIO_JS_ALLOWLIST` (auto curada), denylist padrão ativa (`token-counters.js`, `settings.js`, `gradio.js`, `inputAccordion.js`). Override via `GRADIO_JS_DENYLIST` (usar `none` para desativar defaults).
+- Extra Networks (Dataset/Gallery opcional – `GRADIO_EXTRA_NETWORKS_DATASET=1`)
+  - Checkpoints: galeria com filtro/ordem server‑side; selecionar aplica checkpoint.
+  - Textual Inversion: galeria com alvo `Positive/Negative`; seleção insere token no prompt escolhido.
+  - LoRA: galeria com alvo `Positive/Negative`; insere `<lora:alias_or_name:weight>` (respeita `lora_preferred_name`; weight do metadata ou `extra_networks_default_multiplier`).
+  - Hypernetworks: galeria com alvo; insere `<hypernet:name:weight>`.
+- Backend/loader
+  - Modo estrito: `--disable-online-tokenizer` falha rápido se faltarem `config/tokenizer` (sem fallback online).
+  - Modo online: baixa apenas `*.json/*.txt` com retry/backoff (429/5xx) e timeout curto; não toca quando já existe local.
+- Diagnóstico
+  - Endpoint: `/internal/memory` (RAM/CUDA + flags); painel “Refresh memory” no Settings → Sysinfo renderiza JSON.
+- Services
+  - ImageService/MediaService/SamplerService em uso; ProgressService introduzido (APIs de progresso).

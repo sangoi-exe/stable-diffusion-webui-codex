@@ -56,7 +56,8 @@ def _parse_js_denylist():
     - Default (unset): deny a small set of fragile legacy scripts that are now replaced by Python logic.
     - Override with GRADIO_JS_DENYLIST to customize (comma-separated basenames). To disable defaults, set to "none".
     """
-    default_deny = {"token-counters.js", "settings.js", "gradio.js", "inputAccordion.js"}
+    # Be conservative: keep token-counters.js and inputAccordion.js enabled to preserve JS hooks
+    default_deny = {"settings.js", "gradio.js"}
     env = os.getenv("GRADIO_JS_DENYLIST")
     if env is None:
         return default_deny

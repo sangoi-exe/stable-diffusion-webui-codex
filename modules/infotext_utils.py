@@ -694,9 +694,14 @@ def connect_paste(button, paste_fields, input_comp, override_settings_component,
         outputs=[x[0] for x in paste_fields],
         show_progress=False,
     )
+    # Safely trigger client-side prompt token recalculation if the JS helper exists
     button.click(
         fn=None,
-        _js=f"recalculate_prompts_{tabname}",
+        _js=(
+            "function(){ try {"
+            f" if (typeof recalculate_prompts_{tabname} === 'function') recalculate_prompts_{tabname}();"
+            " } catch(e){} }"
+        ),
         inputs=[],
         outputs=[],
         show_progress=False,
