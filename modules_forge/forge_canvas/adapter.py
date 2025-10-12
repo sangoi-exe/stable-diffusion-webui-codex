@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-try:
-    from .canvas import ForgeCanvas as RealForgeCanvas, canvas_head as real_canvas_head
-except Exception:
-    RealForgeCanvas, real_canvas_head = None, ''
-
 import gradio as gr
-from modules.shared import opts
 
 
 class NullCanvas:
@@ -37,19 +31,5 @@ class NullCanvas:
         )
         # keep attribute for compatibility, but unused
         self.foreground = gr.Image(visible=False, label="Foreground", type="pil", image_mode="RGBA")
-
-
-def _enabled():
-    try:
-        return bool(getattr(opts, 'forge_canvas_enable', False)) and RealForgeCanvas is not None
-    except Exception:
-        return False
-
-
-if _enabled():
-    ForgeCanvas = RealForgeCanvas  # type: ignore
-    canvas_head = real_canvas_head
-else:
-    ForgeCanvas = NullCanvas  # type: ignore
-    canvas_head = ''
-
+ForgeCanvas = NullCanvas  # type: ignore
+canvas_head = ''

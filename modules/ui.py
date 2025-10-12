@@ -26,7 +26,6 @@ import modules.shared as shared
 from modules import prompt_parser
 from modules.infotext_utils import image_from_url_text, PasteField
 from modules_forge.forge_canvas.adapter import ForgeCanvas, canvas_head
-from modules_forge import main_entry, forge_space
 import modules.processing_scripts.comments as comments
 
 
@@ -273,7 +272,7 @@ def create_ui():
     import modules.txt2img
 
     # Compose global head includes (Forge canvas + CSS/JS from extensions)
-    global_head = f"{canvas_head}{ui_head.head_includes()}"
+    global_head = f"{ui_head.head_includes()}"
 
     parameters_copypaste.reset()
 
@@ -283,7 +282,7 @@ def create_ui():
     scripts.scripts_current = scripts.scripts_txt2img
     scripts.scripts_txt2img.initialize_scripts(is_img2img=False)
 
-    with gr.Blocks(analytics_enabled=False, head=canvas_head) as txt2img_interface:
+    with gr.Blocks(analytics_enabled=False) as txt2img_interface:
         toprow = ui_toprow.Toprow(is_img2img=False, is_compact=shared.opts.compact_prompt_box)
 
         dummy_component = gr.Textbox(visible=False)
@@ -354,13 +353,7 @@ def create_ui():
                                     hr_checkpoint_refresh = ToolButton(value=refresh_symbol)
 
                                     def get_additional_modules():
-                                        modules_list = ['Use same choices']
-                                        if main_entry.module_list == {}:
-                                            _, modules = main_entry.refresh_models()
-                                            modules_list += list(modules)
-                                        else:
-                                            modules_list += list(main_entry.module_list.keys())
-                                        return modules_list
+                                        return ['Use same choices']
 
                                     modules_list = get_additional_modules()
 
@@ -551,7 +544,7 @@ def create_ui():
     scripts.scripts_current = scripts.scripts_img2img
     scripts.scripts_img2img.initialize_scripts(is_img2img=True)
 
-    with gr.Blocks(analytics_enabled=False, head=canvas_head) as img2img_interface:
+    with gr.Blocks(analytics_enabled=False) as img2img_interface:
         toprow = ui_toprow.Toprow(is_img2img=True, is_compact=shared.opts.compact_prompt_box)
 
         extra_tabs = gr.Tabs(elem_id="img2img_extra_tabs", elem_classes=["extra-networks"])
@@ -919,9 +912,6 @@ def create_ui():
 
         extra_tabs.__exit__()
 
-    with gr.Blocks(analytics_enabled=False, head=canvas_head) as space_interface:
-        forge_space.main_entry()
-
     scripts.scripts_current = None
 
     with gr.Blocks(analytics_enabled=False) as extras_interface:
@@ -960,7 +950,6 @@ def create_ui():
     interfaces = [
         (txt2img_interface, "Txt2img", "txt2img"),
         (img2img_interface, "Img2img", "img2img"),
-        (space_interface, "Spaces", "space"),
         (extras_interface, "Extras", "extras"),
         (pnginfo_interface, "PNG Info", "pnginfo"),
         (modelmerger_ui.blocks, "Checkpoint Merger", "modelmerger"),
