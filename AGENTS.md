@@ -31,14 +31,9 @@ This repository powers **stable-diffusion-webui-codex** — a fork built on top 
 
 ## Engineering Principles
 - Pursue robustness before optimizations; never sacrifice existing functionality just to silence errors.
-- Prefer proven, minimal solutions over custom abstractions. Fix root causes instead of applying quick hacks.
-- Preserve descriptive naming. Only rename identifiers when it is strictly necessary for clarity or correctness.
-- In Python, include explicit progress reporting (e.g., progress bars) when long-running operations are introduced or reworked.
-- Embrace thorough error handling instead of permissive fallbacks. Do not hide or ignore exceptions.
 - Keep changes cohesive. Avoid mixing refactors with unrelated feature work in a single commit.
 
 ## Collaboration Workflow
-- Mirror user-facing behaviour in refactors; ensure feature parity after changes.
 - Update or add documentation when behaviour or configuration surfaces change.
 - Prefer deterministic, automated checks before merging. Document any manual validation that substitutes automated testing.
 - When touching performance-sensitive code (sampling, loaders, memory management), profile before and after when feasible.
@@ -46,9 +41,8 @@ This repository powers **stable-diffusion-webui-codex** — a fork built on top 
 ## Coding Style
 - Follow the surrounding style of each file. Align imports, spacing, and logging conventions with existing patterns.
 - Do not wrap imports in try/except blocks. Handle optional dependencies explicitly near their usage sites.
-- Default to descriptive logging over silent failures. When adding logs, keep them actionable and concise.
 
-When in doubt, slow down—quality and maintainability take precedence over speed.
+
 
 ## Onboarding Checklist
 - Read `README.md` for the project overview and supported installers, then review `codex/architecture-overview.md`, `codex/backend.md`, `codex/backend-analysis.md`, `codex/extensions-and-integrations.md`, `codex/frontend.md`, `codex/refactor-roadmap.md`, and `codex/testing-and-tooling.md`.
@@ -61,7 +55,6 @@ When in doubt, slow down—quality and maintainability take precedence over spee
 - Prefer `rg` for searches, `fd` for file discovery, and the scripts under `scripts/` for repeatable workflows; avoid interactive utilities (`fzf`, editors) inside the CLI.
 - Document behaviour changes by updating the relevant guides in `codex/` as well as user-facing files (e.g., `README.md`, `NEWS.md`) when public experience shifts.
 - Make assumptions explicit in responses, note risks, and describe the validation executed; do not defer essential checks.
-- Progress bars or verbose progress reporting are mandatory for new or modified long-running Python routines.
 - Match delivery effort to the requested scope: when the user asks for a refactor or systemic improvement, return substantial, multi-file work (or a justified plan if blocked). Superficial “touch-up” diffs in response to broad tasks are unacceptable—escalate uncertainty instead of shipping token edits.
 - Generic prompts such as “prossiga com o refactor” or “continue o refactor” do **not** excuse token edits. When you get one, immediately consult the current roadmap, handoff logs, and upstream comparison docs to determine the next logical milestone, articulate the plan, and execute that step end-to-end (or report the precise blocker). No minimal diffs; progress the refactor meaningfully.
 
@@ -70,7 +63,6 @@ When in doubt, slow down—quality and maintainability take precedence over spee
 - Standard setup: `python -m venv .venv && source .venv/bin/activate` (`Activate.ps1` on Windows), `pip install -r requirements_versions.txt`, then `pip install -e .` if you need editable installs.
 - Node tooling (for custom JS/CSS) lives in `package.json`; run `npm install` when touching frontend lint rules or build scripts.
 - GPU profiling helpers: enable `--backend-log-memory` and reuse the profiling hooks documented in `codex/testing-and-tooling.md`; prefer deterministic benchmarks from `scripts/` instead of ad-hoc timers.
-- Always leverage `gh` for remote Git operations; local Git commands must avoid destructive options (`git clean`, `git revert`, `git reset --hard`).
 
 ## Validation Before Handoff
 - Run smoke startup: `python launch.py --skip-install --exit` (confirms dependencies without launching UI).
@@ -102,6 +94,5 @@ When in doubt, slow down—quality and maintainability take precedence over spee
 ## Coding Practices (Augmented)
 - Preserve import ordering conventions already present in each file; group standard library, third-party, and local imports without introducing catch-all helpers.
 - Logging must remain actionable: include identifiers (job id, sampler, model hash) and avoid flooding outputs; ensure log levels (`info`, `warning`, `error`) match severity.
-- Long-running inference or preprocessing loops must expose `tqdm`-style progress bars or equivalent logging so users can gauge progress.
 - Guard optional dependencies explicitly at the usage site; fail fast with clear messages instead of silent fallbacks.
 - When interacting with third-party extensions, validate compatibility and avoid API-breaking changes—provide migration notes if compatibility adjustments are required.
