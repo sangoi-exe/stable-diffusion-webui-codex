@@ -25,7 +25,7 @@ import modules.infotext_utils as parameters_copypaste
 import modules.shared as shared
 from modules import prompt_parser
 from modules.infotext_utils import image_from_url_text, PasteField
-from modules_forge.forge_canvas.adapter import ForgeCanvas, canvas_head
+from modules_forge.canvas_adapter import ForgeCanvas, canvas_head
 import modules.processing_scripts.comments as comments
 
 
@@ -1029,9 +1029,8 @@ def create_ui():
         settings.text_settings.change(fn=update_image_cfg_scale_visibility, inputs=[], outputs=[image_cfg_scale])
         demo.load(fn=update_image_cfg_scale_visibility, inputs=[], outputs=[image_cfg_scale])
 
-        modelmerger_ui.setup_ui(dummy_component=dummy_component, sd_model_checkpoint_component=main_entry.ui_checkpoint)
-
-        main_entry.forge_main_entry()
+        # No external Forge main entry; wire modelmerger without checkpoint UI refresh
+        modelmerger_ui.setup_ui(dummy_component=dummy_component, sd_model_checkpoint_component=dummy_component)
 
     if ui_settings_from_file != loadsave.ui_settings:
         loadsave.dump_defaults()
