@@ -104,7 +104,12 @@ def webui_worker():
             elif shared.opts.auto_launch_browser == "Local":
                 auto_launch_browser = not cmd_opts.webui_is_non_local
 
-        ssr_mode_env = os.getenv('GRADIO_SSR_MODE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+        # Enable SSR by default; allow explicit opt-out via GRADIO_SSR_MODE
+        _ssr_env = os.getenv('GRADIO_SSR_MODE')
+        if _ssr_env is None:
+            ssr_mode_env = True
+        else:
+            ssr_mode_env = _ssr_env.strip().lower() in ('1', 'true', 'yes', 'on')
         app, local_url, share_url = shared.demo.launch(
             share=False,                             # antes: share=cmd_opts.share
             server_name="0.0.0.0",                   # antes: initialize_util.gradio_server_name()

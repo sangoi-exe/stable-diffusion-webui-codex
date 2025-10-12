@@ -8,6 +8,7 @@ from typing import Optional, Union
 from dataclasses import dataclass
 
 from modules import shared, ui_extra_networks_user_metadata, errors, extra_networks, util
+import os
 from modules.images import read_info_from_image, save_image_with_geninfo
 import gradio as gr
 import json
@@ -20,6 +21,9 @@ from modules.infotext_utils import image_from_url_text
 extra_pages = []
 allowed_dirs = set()
 default_allowed_preview_extensions = ["png", "jpg", "jpeg", "webp", "gif"]
+
+# Feature flag: enable native Gradio Gallery for specific Extra Networks pages
+_dataset_mode = os.getenv('GRADIO_EXTRA_NETWORKS_DATASET', '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 @functools.cache
 def allowed_preview_extensions_with_extra(extra_extensions=None):
@@ -564,7 +568,7 @@ class ExtraNetworksPage:
 
         return subdirs_html
 
-    def create_card_view_html(self, tabname: str, *, none_message) -> str:
+    def create_card_view_html(self, tabname: str, *, none_message, search: str | None = None, sort_field: str | None = None, sort_dir: str | None = None) -> str:
         """Generates HTML for the network Card View section for a tab.
 
         This HTML goes into the `extra-networks-pane.html` <div> with
@@ -577,9 +581,26 @@ class ExtraNetworksPage:
         Returns:
             HTML formatted string.
         """
-        res = []
-        for item in self.items.values():
-            res.append(self.create_item_html(tabname, item, self.card_tpl))
+        # Optional server-side filter/sort for Gradio 5 (reduces fragile DOM ops)
+        items = list(self.items.values())
+
+        q = (search or "").strip().lower()
+        if q:
+            def _match(it: dict) -> bool:
+                name = str(it.get("name", "")).lower()
+                desc = str(it.get("description", "") or "").lower()
+                terms = [str(t).lower() for t in it.get("search_terms", [])]
+                return (q in name) or (q in desc) or any(q in t for t in terms)
+            items = [it for it in items if _match(it)]
+
+        field = (sort_field or "default").strip().lower()
+        reverse = (str(sort_dir or shared.opts.extra_networks_card_order).lower() == 'descending')
+        try:
+            items.sort(key=lambda it: it.get('sort_keys', {}).get(field, it.get('sort_keys', {}).get('default', 0)), reverse=reverse)
+        except Exception:
+            pass
+
+        res = [self.create_item_html(tabname, it, self.card_tpl) for it in items]
 
         if not res:
             dirs = "".join([f"<li>{x}</li>" for x in self.allowed_directories_for_previews()])
@@ -587,7 +608,7 @@ class ExtraNetworksPage:
 
         return "".join(res)
 
-    def create_html(self, tabname, *, empty=False):
+    def create_html(self, tabname, *, empty=False, search: str | None = None, sort_field: str | None = None, sort_dir: str | None = None):
         """Generates an HTML string for the current pane.
 
         The generated HTML uses `extra-networks-pane.html` as a template.
@@ -625,7 +646,7 @@ class ExtraNetworksPage:
             "sort_date_created_active": ' extra-network-control--enabled' if shared.opts.extra_networks_card_order_field == 'Date Created' else '',
             "sort_date_modified_active": ' extra-network-control--enabled' if shared.opts.extra_networks_card_order_field == 'Date Modified' else '',
             "tree_view_btn_extra_class": "extra-network-control--enabled" if show_tree else "",
-            "items_html": self.create_card_view_html(tabname, none_message="Loading..." if empty else None),
+            "items_html": self.create_card_view_html(tabname, none_message="Loading..." if empty else None, search=search, sort_field=sort_field, sort_dir=sort_dir),
             "extra_networks_tree_view_default_width": shared.opts.extra_networks_tree_view_default_width,
             "tree_view_div_default_display_class": "" if show_tree else "extra-network-dirs-hidden",
         }
@@ -757,13 +778,17 @@ def create_ui(interface: gr.Blocks, unrelated_tabs, tabname):
 
     related_tabs = []
 
-    for page in ui.stored_extra_pages:
+    for idx, page in enumerate(ui.stored_extra_pages):
         with gr.Tab(page.title, elem_id=f"{tabname}_{page.extra_networks_tabname}", elem_classes=["extra-page"]) as tab:
             with gr.Column(elem_id=f"{tabname}_{page.extra_networks_tabname}_prompts", elem_classes=["extra-page-prompts"]):
-                pass
+                # Server-side filter/sort controls (optional). Keep minimal to avoid DOM-heavy JS.
+                with gr.Row():
+                    search_box = gr.Textbox(value="", placeholder="Filter…", show_label=False, scale=3, elem_id=f"{tabname}_{page.extra_networks_tabname}_filter")
+                    sort_field = gr.Dropdown(choices=["default", "name", "path", "date_created", "date_modified"], value="default", show_label=False, scale=1, elem_id=f"{tabname}_{page.extra_networks_tabname}_sort_field")
+                    sort_dir = gr.Dropdown(choices=["Ascending", "Descending"], value=shared.opts.extra_networks_card_order, show_label=False, scale=1, elem_id=f"{tabname}_{page.extra_networks_tabname}_sort_dir")
 
             elem_id = f"{tabname}_{page.extra_networks_tabname}_cards_html"
-            page_elem = gr.HTML(page.create_html(tabname, empty=True), elem_id=elem_id)
+            page_elem = gr.HTML(page.create_html(tabname, empty=True), elem_id=elem_id, visible=not _dataset_mode or page.title.lower() != 'checkpoints')
             ui.pages.append(page_elem)
 
             editor = page.create_user_metadata_editor(ui, tabname)
@@ -795,6 +820,135 @@ def create_ui(interface: gr.Blocks, unrelated_tabs, tabname):
 
         button_refresh = gr.Button("Refresh", elem_id=f"{tabname}_{page.extra_networks_tabname}_extra_refresh_internal", visible=False)
         button_refresh.click(fn=refresh, inputs=[], outputs=ui.pages).then(fn=lambda: None, _js="function(){ " + f"applyExtraNetworkFilter('{tabname}_{page.extra_networks_tabname}');" + " }").then(fn=lambda: None, _js='setupAllResizeHandles')
+
+        # Hook filter/sort controls to server-side rendering for this page only
+        def _render_page(_search, _field, _dir, _idx=idx):
+            pg = ui.stored_extra_pages[_idx]
+            # Ensure items populated
+            pg.create_html(tabname, empty=False)
+            return pg.create_html(tabname, empty=False, search=_search, sort_field=_field, sort_dir=_dir)
+
+        for control in (search_box, sort_field, sort_dir):
+            control.change(fn=_render_page, inputs=[search_box, sort_field, sort_dir], outputs=[page_elem], show_progress=False, queue=False)
+
+        # Optional: native Gallery for Checkpoints page under feature flag
+        if _dataset_mode and page.title.lower() == 'checkpoints':
+            # Prepare initial gallery samples
+            def _filter_sort_items(pg, q: str, field: str, direction: str):
+                items = list(pg.items.values()) if getattr(pg, 'items', None) else []
+                q = (q or '').strip().lower()
+                if q:
+                    def match(it):
+                        name = str(it.get('name', '')).lower()
+                        desc = str(it.get('description', '') or '').lower()
+                        terms = [str(t).lower() for t in it.get('search_terms', [])]
+                        return (q in name) or (q in desc) or any(q in t for t in terms)
+                    items = [it for it in items if match(it)]
+                field = (field or 'default').strip().lower()
+                reverse = (str(direction or shared.opts.extra_networks_card_order).lower() == 'descending')
+                try:
+                    items.sort(key=lambda it: it.get('sort_keys', {}).get(field, it.get('sort_keys', {}).get('default', 0)), reverse=reverse)
+                except Exception:
+                    pass
+                return items
+
+            def _gallery_samples(_search, _field, _dir, _pg=page):
+                # Ensure items are built
+                _pg.create_html(tabname, empty=False)
+                items = _filter_sort_items(_pg, _search, _field, _dir)
+                no_preview = '/file=html/card-no-preview.png'
+                samples = []
+                for it in items:
+                    img = it.get('preview') or no_preview
+                    cap = it.get('name') or ''
+                    samples.append([img, cap])
+                return samples
+
+            gallery = gr.Gallery(value=_gallery_samples('', 'default', shared.opts.extra_networks_card_order), label=None, show_label=False, elem_id=f"{tabname}_{page.extra_networks_tabname}_gallery", columns=6, preview=True, visible=True)
+
+            def _update_gallery(_s, _f, _d):
+                return gr.update(value=_gallery_samples(_s, _f, _d))
+
+            for control in (search_box, sort_field, sort_dir):
+                control.change(fn=_update_gallery, inputs=[search_box, sort_field, sort_dir], outputs=[gallery], show_progress=False, queue=False)
+
+            # Selection handler: update checkpoint via main_entry.checkpoint_change and reflect in dropdown
+            def _on_select(evt: gr.SelectData, _s, _f, _d):
+                try:
+                    from modules_forge import main_entry
+                    items = _filter_sort_items(page, _s, _f, _d)
+                    idx = getattr(evt, 'index', None)
+                    if idx is None or idx < 0 or idx >= len(items):
+                        return gr.update()
+                    name = items[idx].get('name')
+                    if not name:
+                        return gr.update()
+                    main_entry.checkpoint_change(name, save=True, refresh=True)
+                    return gr.update(value=name)
+                except Exception:
+                    return gr.update()
+
+            gallery.select(fn=_on_select, inputs=[search_box, sort_field, sort_dir], outputs=[])
+
+        # Optional: native Gallery for Textual Inversion page under feature flag
+        if _dataset_mode and page.title.lower() == 'textual inversion':
+            def _ti_filter_sort_items(pg, q: str, field: str, direction: str):
+                items = list(pg.items.values()) if getattr(pg, 'items', None) else []
+                q = (q or '').strip().lower()
+                if q:
+                    def match(it):
+                        name = str(it.get('name', '')).lower()
+                        desc = str(it.get('description', '') or '').lower()
+                        terms = [str(t).lower() for t in it.get('search_terms', [])]
+                        return (q in name) or (q in desc) or any(q in t for t in terms)
+                    items = [it for it in items if match(it)]
+                field = (field or 'default').strip().lower()
+                reverse = (str(direction or shared.opts.extra_networks_card_order).lower() == 'descending')
+                try:
+                    items.sort(key=lambda it: it.get('sort_keys', {}).get(field, it.get('sort_keys', {}).get('default', 0)), reverse=reverse)
+                except Exception:
+                    pass
+                return items
+
+            def _ti_gallery_samples(_search, _field, _dir, _pg=page):
+                _pg.create_html(tabname, empty=False)
+                items = _ti_filter_sort_items(_pg, _search, _field, _dir)
+                no_preview = '/file=html/card-no-preview.png'
+                samples = []
+                for it in items:
+                    img = it.get('preview') or no_preview
+                    cap = it.get('name') or ''
+                    samples.append([img, cap])
+                return samples
+
+            ti_gallery = gr.Gallery(value=_ti_gallery_samples('', 'default', shared.opts.extra_networks_card_order), label=None, show_label=False, elem_id=f"{tabname}_{page.extra_networks_tabname}_gallery", columns=6, preview=True, visible=True)
+
+            def _ti_update_gallery(_s, _f, _d):
+                return gr.update(value=_ti_gallery_samples(_s, _f, _d))
+
+            for control in (search_box, sort_field, sort_dir):
+                control.change(fn=_ti_update_gallery, inputs=[search_box, sort_field, sort_dir], outputs=[ti_gallery], show_progress=False, queue=False)
+
+            # Selection handler: append token to the active tab's positive prompt
+            try:
+                from modules_forge import main_entry
+                prompt_comp = main_entry.get_a1111_ui_component(tabname, 'Prompt')
+            except Exception:
+                prompt_comp = None
+
+            def _ti_on_select(evt: gr.SelectData, _s, _f, _d, cur_prompt):
+                items = _ti_filter_sort_items(page, _s, _f, _d)
+                idx = getattr(evt, 'index', None)
+                if idx is None or idx < 0 or idx >= len(items):
+                    return gr.update()
+                token = items[idx].get('name') or ''
+                base = cur_prompt or ''
+                base = base.strip()
+                new_val = f"{base}, {token}" if base else token
+                return new_val
+
+            if prompt_comp is not None:
+                ti_gallery.select(fn=_ti_on_select, inputs=[search_box, sort_field, sort_dir, prompt_comp], outputs=[prompt_comp])
 
     def create_html():
         ui.pages_contents = [pg.create_html(ui.tabname) for pg in ui.stored_extra_pages]

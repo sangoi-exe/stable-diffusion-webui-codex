@@ -1,4 +1,6 @@
-Treat **THIS AGENTS.md** as the source of truth. Across branch switches, pulls, rebases, and resets (including hard resets), do not modify, replace, or delete this file. If a merge conflict involves AGENTS.md, resolve it by choosing **OURS** (keep the local version) for this file only. If preservation cannot be guaranteed, stop and notify me.
+AGENTS.md is maintained like any other documentation in this repo. It may be edited or replaced when processes evolve. In merges, resolve conflicts contextually (no special-casing “OURS” for this file).
+
+End-of-sprint documentation: log each sprint under `codex/sprint-logs/` using the provided template and follow `codex/sprint-guidelines.md`. Summarise user‑visible highlights in `NEWS.md`.
 
 IMPORTANT: **THINK** carefully and analyze all points of view.
 
@@ -63,6 +65,7 @@ This repository powers **stable-diffusion-webui-codex** — a fork built on top 
 - Keep commits small, cohesive, and formatted as `type: summary` (e.g., `fix: guard queue shutdown`); include rationale in commit bodies.
 - Maintain a clean working tree before concluding a session; ensure artifacts such as `outputs/`, caches, or `models/` remain untracked.
 - When adding new dependencies or configuration files, reflect the changes in `requirements_versions.txt` or `package.json` as appropriate and document the impact.
+- End of each delivery: make an atomic commit and push (no uncommitted leftovers). Document highlights in `NEWS.md` and add/update a sprint log in `codex/sprint-logs/`.
 
 ## Session Handoff
 - Summarise completed work, validations, and outstanding risks in your final message; point to the exact files touched.

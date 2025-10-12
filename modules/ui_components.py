@@ -100,9 +100,11 @@ class DropdownEditable(gr.Dropdown, FormComponent):
 
 
 class InputAccordionImpl(gr.Checkbox):
-    """A gr.Accordion that can be used as an input - returns True if open, False if closed.
+    """An input-driven Accordion that returns True if open, False if closed.
 
-    Actually just a hidden checkbox, but creates an accordion that follows and is followed by the state of the checkbox.
+    Implementation notes for Gradio 5:
+    - Avoid any DOM-coupled JS. We bind the hidden Checkbox directly to the Accordion's `open` via Python updates.
+    - Keeps the same public surface: `.accordion` attribute and `.extra()` helper.
     """
 
     webui_do_not_create_gradio_pyi_thank_you = True
@@ -120,15 +122,16 @@ class InputAccordionImpl(gr.Checkbox):
             self.accordion_id = f"input-accordion-{InputAccordionImpl.global_index}"
             InputAccordionImpl.global_index += 1
 
+        # Build hidden checkbox first (input carrier)
         kwargs_checkbox = {
             **kwargs,
             "elem_id": f"{self.accordion_id}-checkbox",
             "visible": False,
+            "label": None,
         }
         super().__init__(value=value, **kwargs_checkbox)
 
-        self.change(fn=None, _js='function(checked){ inputAccordionChecked("' + self.accordion_id + '", checked); }', inputs=[self])
-
+        # Build the visible accordion
         kwargs_accordion = {
             **kwargs,
             "elem_id": self.accordion_id,
@@ -136,23 +139,20 @@ class InputAccordionImpl(gr.Checkbox):
             "elem_classes": ['input-accordion'],
             "open": value,
         }
-
         self.accordion = gr.Accordion(**kwargs_accordion)
 
+        # Keep accordion open state in sync with checkbox value
+        # Pure-Python update; no JS dependency.
+        self.change(
+            fn=lambda checked: gr.Accordion.update(open=bool(checked)),
+            inputs=[self],
+            outputs=[self.accordion],
+            show_progress=False,
+            queue=False,
+        )
+
     def extra(self):
-        """Allows you to put something into the label of the accordion.
-
-        Use it like this:
-
-        ```
-        with InputAccordion(False, label="Accordion") as acc:
-            with acc.extra():
-                FormHTML(value="hello", min_width=0)
-
-            ...
-        ```
-        """
-
+        """Place content into the label area of the accordion."""
         return gr.Column(elem_id=self.accordion_id + '-extra', elem_classes='input-accordion-extra', min_width=0)
 
     def __enter__(self):

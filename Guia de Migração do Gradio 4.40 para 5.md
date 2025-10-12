@@ -184,3 +184,19 @@ Por fim, aproveite as melhorias: o app deve carregar mais rápido, com interface
 [\[57\]](https://www.gradio.app/guides/custom-CSS-and-JS#:~:text=There%20are%203%20ways%20to,code%20to%20your%20Gradio%20demo) [\[58\]](https://www.gradio.app/guides/custom-CSS-and-JS#:~:text=2.%20When%20using%20,look%20at%20the%20code%20below) [\[59\]](https://www.gradio.app/guides/custom-CSS-and-JS#:~:text=btn.click%28sentence_maker%2C%20,x%20%2B%20%27%20foo) [\[60\]](https://www.gradio.app/guides/custom-CSS-and-JS#:~:text=3,to%20your%20demo%20like%20so) [\[61\]](https://www.gradio.app/guides/custom-CSS-and-JS#:~:text=%3C%2Fscript%3E%20) [\[65\]](https://www.gradio.app/guides/custom-CSS-and-JS#:~:text=demo) [\[66\]](https://www.gradio.app/guides/custom-CSS-and-JS#:~:text=Note%20that%20injecting%20custom%20JS,component) [\[67\]](https://www.gradio.app/guides/custom-CSS-and-JS#:~:text=Custom%20Components) [\[68\]](https://www.gradio.app/guides/custom-CSS-and-JS#:~:text=For%20additional%20styling%20ability%2C%20you,kwarg) [\[69\]](https://www.gradio.app/guides/custom-CSS-and-JS#:~:text=using%20the%20,kwarg) Custom CSS And JS
 
 <https://www.gradio.app/guides/custom-CSS-and-JS>
+
+## Operação (nesta fork)
+
+- SSR (Server-Side Rendering): habilitado por padrão.
+  - Desligar: `GRADIO_SSR_MODE=0`.
+  - Ligar/forçar: `GRADIO_SSR_MODE=1|true|yes|on`.
+- Injeção de JS via head (allow/deny list por ENV):
+  - `GRADIO_JS_ALLOWLIST`
+    - Não setado: injeta todos os `.js/.mjs` sob `javascript/` (comportamento legado).
+    - `auto`/`true`/`on`/`1`/``: allowlist curada (exclui `token-counters.js` e `settings.js`).
+    - Outra string: lista de basenames separados por vírgula.
+  - `GRADIO_JS_DENYLIST`: basenames sempre excluídos (aplicado junto com a allowlist).
+- Extra Networks: filtro/ordem no servidor (fase 1)
+  - Cada aba possui `Filter…`, `Sort field`, `Sort dir`.
+  - Renderização no servidor evita reordenar/filtrar via DOM.
+  - Próxima fase: migrar para `gr.Dataset`/`gr.Gallery` nativos.

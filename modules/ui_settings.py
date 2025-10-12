@@ -278,6 +278,17 @@ class UiSettings:
                 outputs=[sysinfo_check_output],
             )
 
+            # Native settings search (Python-side) — avoids JS DOM filtering.
+            # Returns visibility updates for each settings component.
+            if self.components:
+                self.search_input.change(
+                    fn=self.search,
+                    inputs=[self.search_input],
+                    outputs=self.components,
+                    show_progress=False,
+                    queue=False,
+                )
+
             def calculate_all_checkpoint_hash_fn(max_thread):
                 checkpoints_list = sd_models.checkpoints_list.values()
                 with ThreadPoolExecutor(max_workers=max_thread) as executor:

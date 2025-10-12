@@ -1,10 +1,64 @@
 import os
 from modules import localization, shared, scripts, util
+import os
+import posixpath
 from modules.paths import script_path, data_path
 
 
 def webpath(fn):
     return f'file={util.truncate_path(fn)}?{os.path.getmtime(fn)}'
+
+
+def _parse_js_allowlist():
+    """Return a set of basenames allowed for JS injection.
+
+    Controls:
+    - GRADIO_JS_ALLOWLIST unset: None (disabled; inject all as before)
+    - GRADIO_JS_ALLOWLIST in ("", "1", "true", "yes", "on", "auto"): curated default allowlist
+    - otherwise: comma-separated basenames
+    """
+    env = os.getenv("GRADIO_JS_ALLOWLIST")
+    if env is None:
+        return None  # keep legacy behavior
+
+    truthy = {"", "1", "true", "yes", "on", "auto"}
+    if env.strip().lower() in truthy:
+        # Curated default: keep core behavior; exclude fragile or replaced scripts.
+        return set([
+            "script.js",
+            "ui.js",
+            "progressbar.js",
+            "localization.js",
+            "imageviewer.js",
+            "resizeHandle.js",
+            "hints.js",
+            "contextMenus.js",
+            "extraNetworks.js",
+            "imageMaskFix.js",
+            "dragdrop.js",
+            "notification.js",
+            "edit-attention.js",
+            "edit-order.js",
+            "generationParams.js",
+            "aspectRatioOverlay.js",
+            "imageviewerGamepad.js",
+            "profilerVisualization.js",
+            "textualInversion.js",
+        ])
+
+    # Custom list
+    return set(x.strip() for x in env.split(",") if x.strip())
+
+
+def _parse_js_denylist():
+    """Return a set of basenames to exclude from JS injection regardless of allowlist.
+
+    Controlled by GRADIO_JS_DENYLIST (comma-separated basenames). Empty/unset means disabled.
+    """
+    env = os.getenv("GRADIO_JS_DENYLIST")
+    if not env:
+        return set()
+    return set(x.strip() for x in env.split(",") if x.strip())
 
 
 def javascript_html():
@@ -22,11 +76,23 @@ def javascript_html():
     script_js = os.path.join(script_path, "script.js")
     head += f'<script type="text/javascript" src="{webpath(script_js)}"></script>\n'
 
+    allow = _parse_js_allowlist()
+    deny = _parse_js_denylist()
+
+    def _is_allowed(p: str) -> bool:
+        if allow is None:
+            base = posixpath.basename(p.replace("\\", "/"))
+            return base not in deny
+        base = posixpath.basename(p.replace("\\", "/"))
+        return base in allow and base not in deny
+
     for script in scripts.list_scripts("javascript", ".js"):
-        head += f'<script type="text/javascript" src="{webpath(script.path)}"></script>\n'
+        if _is_allowed(script.path):
+            head += f'<script type="text/javascript" src="{webpath(script.path)}"></script>\n'
 
     for script in scripts.list_scripts("javascript", ".mjs"):
-        head += f'<script type="module" src="{webpath(script.path)}"></script>\n'
+        if _is_allowed(script.path):
+            head += f'<script type="module" src="{webpath(script.path)}"></script>\n'
 
     if shared.cmd_opts.theme:
         head += f'<script type="text/javascript">set_theme(\"{shared.cmd_opts.theme}\");</script>\n'
