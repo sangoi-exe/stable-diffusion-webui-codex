@@ -216,15 +216,67 @@ class Options:
         if isinstance(self.data.get('ui_reorder'), str) and self.data.get('ui_reorder') and "ui_reorder_list" not in self.data:
             self.data['ui_reorder_list'] = [i.strip() for i in self.data.get('ui_reorder').split(',')]
 
-        bad_settings = 0
-        for k, v in self.data.items():
-            info = self.data_labels.get(k, None)
-            if info is not None and not self.same_type(info.default, v):
-                print(f"Warning: bad setting value: {k}: {v} ({type(v).__name__}; expected {type(info.default).__name__})", file=sys.stderr)
-                bad_settings += 1
+        # Sanitize settings: coerce simple type mismatches instead of only warning
+        def _coerce(expected_default, value):
+            t = type(expected_default)
+            try:
+                if t is bool:
+                    if isinstance(value, bool):
+                        return True, value
+                    if isinstance(value, (int, float)):
+                        return True, bool(value)
+                    if isinstance(value, str):
+                        s = value.strip().lower()
+                        if s in {"true", "1", "yes", "on"}:
+                            return True, True
+                        if s in {"false", "0", "no", "off"}:
+                            return True, False
+                    return False, expected_default
+                if t is int:
+                    if isinstance(value, bool):
+                        return True, int(value)
+                    if isinstance(value, (int, float)):
+                        return True, int(value)
+                    if isinstance(value, str):
+                        return True, int(float(value))
+                if t is float:
+                    if isinstance(value, bool):
+                        return True, float(int(value))
+                    if isinstance(value, (int, float)):
+                        return True, float(value)
+                    if isinstance(value, str):
+                        return True, float(value.replace(',', '.'))
+                if t is str:
+                    # Always stringify scalars
+                    return True, str(value)
+            except Exception:
+                return False, expected_default
+            return False, expected_default
 
-        if bad_settings > 0:
-            print(f"The program is likely to not work with bad settings.\nSettings file: {filename}\nEither fix the file, or delete it and restart.", file=sys.stderr)
+        sanitized = 0
+        reset_to_default = 0
+        for k, v in list(self.data.items()):
+            info = self.data_labels.get(k, None)
+            if info is None:
+                continue
+            if not self.same_type(info.default, v):
+                ok, new_v = _coerce(info.default, v)
+                if ok and self.same_type(info.default, new_v):
+                    self.data[k] = new_v
+                    sanitized += 1
+                else:
+                    # Hard reset to default if cannot coerce safely
+                    self.data[k] = info.default
+                    reset_to_default += 1
+
+        if (sanitized or reset_to_default) and not cmd_opts.freeze_settings:
+            try:
+                with open(filename, "w", encoding="utf8") as file:
+                    json.dump(self.data, file, indent=4, ensure_ascii=False)
+                print(f"Sanitized settings: coerced {sanitized}, reset {reset_to_default}.", file=sys.stderr)
+            except Exception:
+                # Fallback to warning if writing fails
+                print(f"Sanitized settings (not saved): coerced {sanitized}, reset {reset_to_default}.", file=sys.stderr)
 
     def onchange(self, key, func, call=True):
         item = self.data_labels.get(key)
