@@ -17,6 +17,7 @@ __pycache__
 /SwinIR/*
 /repositories
 /venv
+/venv1
 /tmp
 /output
 /model.ckpt
