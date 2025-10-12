@@ -1029,8 +1029,13 @@ def create_ui():
         settings.text_settings.change(fn=update_image_cfg_scale_visibility, inputs=[], outputs=[image_cfg_scale])
         demo.load(fn=update_image_cfg_scale_visibility, inputs=[], outputs=[image_cfg_scale])
 
-        # No external Forge main entry; wire modelmerger without checkpoint UI refresh
-        modelmerger_ui.setup_ui(dummy_component=dummy_component, sd_model_checkpoint_component=dummy_component)
+        # Wire modelmerger with checkpoint dropdown if available
+        try:
+            from modules_forge import main_entry
+            modelmerger_ui.setup_ui(dummy_component=dummy_component, sd_model_checkpoint_component=main_entry.ui_checkpoint)
+            main_entry.forge_main_entry()
+        except Exception:
+            modelmerger_ui.setup_ui(dummy_component=dummy_component, sd_model_checkpoint_component=dummy_component)
 
     if ui_settings_from_file != loadsave.ui_settings:
         loadsave.dump_defaults()
