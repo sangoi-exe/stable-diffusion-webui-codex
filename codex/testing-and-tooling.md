@@ -16,6 +16,9 @@ Baseline Capture (manual)
 - Use a WebUI preset e seeds fixos para gerar PNGs e salvar infotext/metadata.
 - Guarde os artefatos de referência em `tests/backend/fixtures/txt2img/` quando necessário.
 
+Legacy Reference
+- Quando um refactor quebrar a pipeline ou o comportamento divergir, consulte o código em `legacy/` (snapshot do Forge main) para entender o fluxo funcional esperado antes de corrigir.
+
 Manual UI Validation (preferred)
 - Cover these flows when validating refactors:
   - LoRA activation (with/without Disable extra networks)

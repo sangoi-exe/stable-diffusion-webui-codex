@@ -1,6 +1,11 @@
 Backend Services Overview
 =========================
 
+Project Identity
+- This repository is `stable-diffusion-webui-codex`, a fork built on top of Forge (itself a fork of AUTOMATIC1111’s WebUI). The goal is to preserve the A1111 legacy while modernising the backend.
+- Maintenance uses OpenAI “codex” as a coding assistant in the development workflow; there is no LLM integrated into the runtime.
+- The `legacy/` folder contains a snapshot of Forge’s `main` to serve as a functional pipeline reference during refactors.
+
 Purpose
 - Reduce duplication and decouple FastAPI routes from generation internals.
 - Create a thin service layer that centralizes common flows and helpers.

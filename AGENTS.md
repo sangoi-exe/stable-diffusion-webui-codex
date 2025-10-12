@@ -27,7 +27,7 @@ Do **NOT** use commands that are destructive, overwrite, or completely reset con
 
 # Guidance for Contributors
 
-This repository powers **Stable Diffusion WebUI Forge**. Please follow these principles while working anywhere in this repo:
+This repository powers **stable-diffusion-webui-codex** — a fork built on top of Stable Diffusion WebUI Forge (itself derived from AUTOMATIC1111’s WebUI) to preserve the A1111 legacy. Please follow these principles while working anywhere in this repo:
 
 ## Engineering Principles
 - Pursue robustness before optimizations; never sacrifice existing functionality just to silence errors.

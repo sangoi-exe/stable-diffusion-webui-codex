@@ -1,4 +1,11 @@
-# Stable Diffusion WebUI Forge
+# stable-diffusion-webui-codex
+
+Fork notice
+- This repository is a maintained fork created on top of Stable Diffusion WebUI Forge (which itself is a fork of AUTOMATIC1111’s WebUI) to preserve the A1111 legacy after upstreams slowed or stopped updates.
+- Maintenance approach: developed primarily with help from OpenAI “codex” as a coding assistant in the workflow. There is no LLM integrated into the runtime/UI.
+- Legacy baseline: the folder `legacy/` contains a snapshot of Forge’s `main` branch used as a functional reference pipeline during refactors. When behaviour breaks, consult `legacy/` to understand expected flow and restore parity.
+
+The sections below are largely inherited from Forge and may reference upstream resources where appropriate.
 
 Stable Diffusion WebUI Forge is a platform on top of [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui) (based on [Gradio](https://www.gradio.app/) <a href='https://github.com/gradio-app/gradio'><img src='https://img.shields.io/github/stars/gradio-app/gradio'></a>) to make development easier, optimize resource management, speed up inference, and study experimental features.
 

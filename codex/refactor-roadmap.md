@@ -1,7 +1,12 @@
 Refactor Roadmap
 ================
 
-Purpose: make the Forge backend simpler, more robust, and easier to debug while keeping user‑visible behaviour intact. When behaviour must change, document it and ship safe defaults.
+Purpose: make the stable-diffusion-webui-codex backend simpler, more robust, and easier to debug while keeping user‑visible behaviour intact. When behaviour must change, document it and ship safe defaults.
+
+Project Identity and Baseline
+- `stable-diffusion-webui-codex` is a fork built on top of Forge (itself a fork of AUTOMATIC1111’s WebUI) to preserve the A1111 legacy.
+- Development leverages OpenAI “codex” as a coding assistant; no LLM is embedded in runtime.
+- Use `legacy/` (snapshot of Forge main) as the functional reference pipeline when refactors break behaviour; restore parity before evolving design.
 
 Guiding Rules
 - Preserve functional parity; fix root causes, not symptoms.
