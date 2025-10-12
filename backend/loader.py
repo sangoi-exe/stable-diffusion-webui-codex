@@ -58,13 +58,14 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
 
             # Strict local-only resolution. No remote lookups, no implicit fallbacks.
             tok_json_path = _tokenizer_json_in(path) or _tokenizer_json_in(root)
+            repo_hint = getattr(guess, 'huggingface_repo', None)
             if tok_json_path is not None:
                 try:
                     from transformers import CLIPTokenizerFast
                     comp = CLIPTokenizerFast.from_pretrained(os.path.dirname(tok_json_path), tokenizer_file=tok_json_path, local_files_only=True)
                 except Exception as e:
                     raise RuntimeError(
-                        f"Found tokenizer.json at {tok_json_path} but failed to load with CLIPTokenizerFast: {e}. "
+                        f"Found tokenizer.json at {tok_json_path} but failed to load with CLIPTokenizerFast: {e}.\n"
                         f"Ensure the file is valid and compatible with CLIP fast tokenizer."
                     )
             elif _has_merges_vocab(path) or _has_merges_vocab(root):
@@ -76,8 +77,11 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                         f"Found merges/vocab under {merges_dir} but failed to load {cls_name}: {e}."
                     )
             else:
+                hint = (f" (hint: repo_id='{repo_hint}')" if repo_hint else "")
                 raise RuntimeError(
-                    f"Tokenizer assets missing under {path} (root: {root}). Expected tokenizer.json or (vocab.json + merges.txt)."
+                    f"Tokenizer assets missing under {path} (root: {root}).\n"
+                    f"Expected tokenizer.json or (vocab.json + merges.txt).{hint}\n"
+                    f"For SDXL, ensure both 'tokenizer/' and 'tokenizer_2/' exist and contain their files."
                 )
 
             if hasattr(comp, "_eventual_warn_about_too_long_sequence"):

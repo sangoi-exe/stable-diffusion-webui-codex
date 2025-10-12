@@ -256,7 +256,16 @@ def ordered_ui_categories():
 
 
 def create_override_settings_dropdown(tabname, row):
-    dropdown = gr.Dropdown([], label="Override settings", visible=False, elem_id=f"{tabname}_override_settings", multiselect=True)
+    # Gradio 5: Dropdown must have a valid default; keep it empty list when unused
+    dropdown = gr.Dropdown(
+        choices=[],
+        value=[],
+        label="Override settings",
+        visible=False,
+        elem_id=f"{tabname}_override_settings",
+        multiselect=True,
+        allow_custom_value=True,
+    )
 
     dropdown.change(
         fn=lambda x: gr.Dropdown.update(visible=bool(x)),
