@@ -584,6 +584,11 @@ def forge_loader(sd, additional_state_dicts=None):
     repo_name = estimated_config.huggingface_repo
 
     local_path = os.path.join(dir_path, 'huggingface', repo_name)
+    # Ensure minimal config/tokenizer files exist, like legacy installer script
+    try:
+        _ensure_repo_minimal_files(repo_name, local_path)
+    except Exception as e:
+        print(f"Warning: failed to ensure minimal HF files for {repo_name}: {e}")
     config: dict = DiffusionPipeline.load_config(local_path)
     huggingface_components = {}
     for component_name, v in config.items():
@@ -643,3 +648,74 @@ def forge_loader(sd, additional_state_dicts=None):
 
     print('Failed to recognize model type!')
     return None
+def _http_list_and_download(repo_id: str, dst_root: str, predicate):
+    import httpx
+    token = os.environ.get('HF_TOKEN')
+    headers = {'Authorization': f'Bearer {token}'} if token else {}
+    api_url = f"https://huggingface.co/api/models/{repo_id}"
+    with httpx.Client(headers=headers, timeout=30.0, follow_redirects=True) as client:
+        r = client.get(api_url)
+        r.raise_for_status()
+        siblings = (r.json() or {}).get('siblings') or []
+        filepaths = [s.get('rfilename') for s in siblings if s.get('rfilename')]
+        wanted = [p for p in filepaths if predicate(p)]
+        for rel in wanted:
+            url = f"https://huggingface.co/{repo_id}/resolve/main/{rel}"
+            out = os.path.join(dst_root, rel)
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            with client.stream('GET', url) as resp:
+                resp.raise_for_status()
+                with open(out, 'wb') as f:
+                    for chunk in resp.iter_bytes():
+                        f.write(chunk)
+
+
+def _ensure_repo_minimal_files(repo_id: str, local_path: str):
+    """Ensure minimal JSON/TXT assets (configs, tokenizer merges/vocab) exist under local_path.
+
+    Mirrors legacy/download_supported_configs.py behavior so loaders can run without manual setup.
+    """
+    need = []
+    if not os.path.isfile(os.path.join(local_path, 'model_index.json')) and not os.path.isfile(os.path.join(local_path, 'config.json')):
+        need.append('config')
+    # tokenizers
+    def has_tok(dirn):
+        d = os.path.join(local_path, dirn)
+        return os.path.isfile(os.path.join(d, 'tokenizer.json')) or (
+            os.path.isfile(os.path.join(d, 'vocab.json')) and os.path.isfile(os.path.join(d, 'merges.txt'))
+        )
+    if not (has_tok('tokenizer') and has_tok('tokenizer_2')):
+        need.append('tokenizer')
+    if not need:
+        return
+
+    # Try huggingface_hub snapshot_download of only small files
+    try:
+        from huggingface_hub import snapshot_download
+        os.makedirs(local_path, exist_ok=True)
+        cached_dir = snapshot_download(
+            repo_id=repo_id,
+            local_dir=local_path,
+            allow_patterns=['*.json', '*.txt'],
+            local_files_only=False,
+            force_download=False,
+        )
+        # Best-effort cleanup of hub cache dir that may appear inside local_dir
+        cache_dir = os.path.join(local_path, '.cache')
+        if os.path.isdir(cache_dir):
+            try:
+                shutil.rmtree(cache_dir)
+            except Exception:
+                pass
+    except TypeError:
+        # Patched hub; fall back to direct HTTP listing of *.json/*.txt
+        def pred(p):
+            p = p.lower()
+            return p.endswith('.json') or p.endswith('.txt')
+        _http_list_and_download(repo_id, local_path, pred)
+    except Exception as e:
+        # Try HTTP once
+        def pred(p):
+            p = p.lower()
+            return p.endswith('.json') or p.endswith('.txt')
+        _http_list_and_download(repo_id, local_path, pred)
