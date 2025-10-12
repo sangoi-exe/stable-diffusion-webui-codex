@@ -90,10 +90,14 @@ def load_networks(names, te_multipliers=None, unet_multipliers=None, dyn_dims=No
         networks_on_disk = [available_networks.get(name, None) if name.lower() in forbidden_network_aliases else available_network_aliases.get(name, None) for name in names]
 
     for i, (network_on_disk, name) in enumerate(zip(networks_on_disk, names)):
+        if network_on_disk is None:
+            errors.report(f"LoRA '{name}' not found in {shared.cmd_opts.lora_dir}")
+            continue
         try:
             net = load_network(name, network_on_disk)
         except Exception as e:
-            errors.display(e, f"loading network {network_on_disk.filename}")
+            msg_name = getattr(network_on_disk, 'filename', name)
+            errors.display(e, f"loading network {msg_name}")
             continue
         net.mentioned_name = name
         network_on_disk.read_hash()
@@ -105,7 +109,8 @@ def load_networks(names, te_multipliers=None, unet_multipliers=None, dyn_dims=No
         online_mode = False
 
     compiled_lora_targets = []
-    for a, b, c in zip(networks_on_disk, unet_multipliers, te_multipliers):
+    valid_triplets = [(a, b, c) for a, b, c in zip(networks_on_disk, unet_multipliers, te_multipliers) if a is not None]
+    for a, b, c in valid_triplets:
         compiled_lora_targets.append([a.filename, b, c, online_mode])
 
     compiled_lora_targets_hash = str(compiled_lora_targets)
