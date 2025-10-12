@@ -57,9 +57,14 @@ trace.json
 /test/results.xml
 coverage.xml
 **/tests/**/expectations
-*codex/*
+# Keep codex/ docs under version control, but still ignore heavy reports.
+# (Replace previous blanket ignore.)
+!codex/
+!codex/**
+codex/reports/pyright/
 *tests/*
 snapshotLegacy.py
+codex/reports/pyright/
 
 # Local build caches and typecheck outputs
 /.tmp/
