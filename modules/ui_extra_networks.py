@@ -1046,6 +1046,80 @@ def create_ui(interface: gr.Blocks, unrelated_tabs, tabname):
                     outputs=[prompt_comp, neg_prompt_comp]
                 )
 
+        # Optional: native Gallery for Hypernetworks page under feature flag
+        if _dataset_mode and page.title.lower() == 'hypernetworks':
+            def _hn_filter_sort_items(pg, q: str, field: str, direction: str):
+                items = list(pg.items.values()) if getattr(pg, 'items', None) else []
+                q = (q or '').strip().lower()
+                if q:
+                    def match(it):
+                        name = str(it.get('name', '')).lower()
+                        desc = str(it.get('description', '') or '').lower()
+                        terms = [str(t).lower() for t in it.get('search_terms', [])]
+                        return (q in name) or (q in desc) or any(q in t for t in terms)
+                    items = [it for it in items if match(it)]
+                field = (field or 'default').strip().lower()
+                reverse = (str(direction or shared.opts.extra_networks_card_order).lower() == 'descending')
+                try:
+                    items.sort(key=lambda it: it.get('sort_keys', {}).get(field, it.get('sort_keys', {}).get('default', 0)), reverse=reverse)
+                except Exception:
+                    pass
+                return items
+
+            def _hn_gallery_samples(_search, _field, _dir, _pg=page):
+                _pg.create_html(tabname, empty=False)
+                items = _hn_filter_sort_items(_pg, _search, _field, _dir)
+                no_preview = '/file=html/card-no-preview.png'
+                samples = []
+                for it in items:
+                    img = it.get('preview') or no_preview
+                    cap = it.get('name') or ''
+                    samples.append([img, cap])
+                return samples
+
+            with gr.Row():
+                hn_target_prompt = gr.Radio(choices=["Positive", "Negative"], value="Positive", show_label=False, scale=0, elem_id=f"{tabname}_{page.extra_networks_tabname}_target")
+            hn_gallery = gr.Gallery(value=_hn_gallery_samples('', 'default', shared.opts.extra_networks_card_order), label=None, show_label=False, elem_id=f"{tabname}_{page.extra_networks_tabname}_gallery", columns=6, preview=True, visible=True)
+
+            def _hn_update_gallery(_s, _f, _d):
+                return gr.update(value=_hn_gallery_samples(_s, _f, _d))
+
+            for control in (search_box, sort_field, sort_dir):
+                control.change(fn=_hn_update_gallery, inputs=[search_box, sort_field, sort_dir], outputs=[hn_gallery], show_progress=False, queue=False)
+
+            try:
+                from modules_forge import main_entry
+                prompt_comp = main_entry.get_a1111_ui_component(tabname, 'Prompt')
+                neg_prompt_comp = main_entry.get_a1111_ui_component(tabname, 'Negative prompt')
+            except Exception:
+                prompt_comp = None
+                neg_prompt_comp = None
+
+            def _hn_on_select(evt: gr.SelectData, _s, _f, _d, cur_prompt, cur_neg, _target):
+                items = _hn_filter_sort_items(page, _s, _f, _d)
+                idx = getattr(evt, 'index', None)
+                if idx is None or idx < 0 or idx >= len(items):
+                    return gr.update(), gr.update()
+                it = items[idx]
+                name = it.get('name') or ''
+                weight = getattr(shared.opts, 'extra_networks_default_multiplier', 1.0)
+                token = f"<hypernet:{name}:{weight}>"
+                pos_base = (cur_prompt or '').strip()
+                neg_base = (cur_neg or '').strip()
+                if str(_target).lower().startswith('neg'):
+                    new_neg = f"{neg_base} {token}".strip()
+                    return gr.update(), new_neg
+                else:
+                    new_pos = f"{pos_base} {token}".strip()
+                    return new_pos, gr.update()
+
+            if prompt_comp is not None and neg_prompt_comp is not None:
+                hn_gallery.select(
+                    fn=_hn_on_select,
+                    inputs=[search_box, sort_field, sort_dir, prompt_comp, neg_prompt_comp, hn_target_prompt],
+                    outputs=[prompt_comp, neg_prompt_comp]
+                )
+
     def create_html():
         ui.pages_contents = [pg.create_html(ui.tabname) for pg in ui.stored_extra_pages]
 
