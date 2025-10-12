@@ -12,6 +12,7 @@ from diffusers import DiffusionPipeline
 from transformers import modeling_utils
 
 from backend import memory_management
+from backend.args import args
 from backend.utils import read_arbitrary_config, load_torch_file, beautiful_print_gguf_state_dict_statics
 from backend.state_dict import try_filter_state_dict, load_state_dict
 from backend.operations import using_forge_operations
@@ -585,10 +586,14 @@ def forge_loader(sd, additional_state_dicts=None):
 
     local_path = os.path.join(dir_path, 'huggingface', repo_name)
     # Ensure minimal config/tokenizer files exist, like legacy installer script
-    try:
+    if args.disable_online_tokenizer:
+        # Strict offline: do not attempt network resolution; require local assets
         _ensure_repo_minimal_files(repo_name, local_path)
-    except Exception as e:
-        print(f"Warning: failed to ensure minimal HF files for {repo_name}: {e}")
+    else:
+        try:
+            _ensure_repo_minimal_files(repo_name, local_path)
+        except Exception as e:
+            print(f"Warning: failed to ensure minimal HF files for {repo_name}: {e}")
     config: dict = DiffusionPipeline.load_config(local_path)
     huggingface_components = {}
     for component_name, v in config.items():
@@ -688,6 +693,20 @@ def _ensure_repo_minimal_files(repo_id: str, local_path: str):
         need.append('tokenizer')
     if not need:
         return
+
+    # If strict offline is requested, fail fast with clear instructions.
+    if args.disable_online_tokenizer:
+        missing = ", ".join(need)
+        raise RuntimeError(
+            (
+                f"Missing required assets ({missing}) for repo '{repo_id}' in '{local_path}'.\n"
+                "Strict offline mode is enabled (--disable-online-tokenizer): no online downloads will be attempted.\n"
+                "Populate the directory with minimal files before retrying. Expected examples:\n"
+                "- model_index.json or config.json at the repo root\n"
+                "- tokenizer/tokenizer.json or tokenizer/{vocab.json,merges.txt}\n"
+                "- tokenizer_2/tokenizer.json or tokenizer_2/{vocab.json,merges.txt}\n"
+            )
+        )
 
     # Try huggingface_hub snapshot_download of only small files
     try:
