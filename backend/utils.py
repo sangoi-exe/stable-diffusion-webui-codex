@@ -3,6 +3,8 @@ import os
 
 import gguf
 import safetensors.torch
+from safetensors.torch import safe_open
+from collections.abc import MutableMapping
 import torch
 
 import backend.misc.checkpoint_pickle
@@ -31,7 +33,7 @@ def load_torch_file(ckpt, safe_load=False, device=None):
     suffix = os.path.splitext(checkpoint_path)[1].lower()
 
     if suffix == ".safetensors":
-        return safetensors.torch.load_file(checkpoint_path, device=device.type)
+        return LazySafetensorsDict(checkpoint_path, device=device.type)
     if suffix == ".gguf":
         return _load_gguf_state_dict(checkpoint_path)
 
@@ -51,6 +53,76 @@ def _load_gguf_state_dict(path):
     for tensor in reader.tensors:
         state_dict[str(tensor.name)] = ParameterGGUF(tensor)
     return state_dict
+
+
+class LazySafetensorsDict(MutableMapping):
+    """Lazy, mutable mapping backed by a .safetensors file.
+
+    - Keys come from the file; values are loaded on demand with safe_open.get_tensor.
+    - Supports overlay writes and deletions without touching the underlying file.
+    - Device: only CPU tensors are produced (parity with previous loader).
+    """
+
+    def __init__(self, filepath: str, device: str = "cpu"):
+        self.filepath = filepath
+        self.device = device or "cpu"
+        self._overlay = {}          # in-memory writes/overrides
+        self._deleted = set()       # keys logically removed
+        self._keys_cache = None     # cached set of underlying keys
+
+    def _base_keys(self):
+        if self._keys_cache is None:
+            with safe_open(self.filepath, framework="pt", device="cpu") as f:
+                self._keys_cache = set(f.keys())
+        return self._keys_cache
+
+    # Mapping protocol
+    def __getitem__(self, key):
+        if key in self._overlay:
+            return self._overlay[key]
+        if key in self._deleted:
+            raise KeyError(key)
+        if key not in self._base_keys():
+            raise KeyError(key)
+        with safe_open(self.filepath, framework="pt", device="cpu") as f:
+            t = f.get_tensor(key)
+        return t
+
+    def __setitem__(self, key, value):
+        self._overlay[key] = value
+        if self._keys_cache is None and key not in self._deleted:
+            # do not expand base key set; overlay keys are separate
+            pass
+        if key in self._deleted:
+            self._deleted.remove(key)
+
+    def __delitem__(self, key):
+        if key in self._overlay:
+            del self._overlay[key]
+        else:
+            # mark as deleted logically
+            self._deleted.add(key)
+
+    def __iter__(self):
+        base = (k for k in self._base_keys() if k not in self._deleted)
+        # overlay can shadow base
+        for k in base:
+            if k not in self._overlay:
+                yield k
+        for k in self._overlay.keys():
+            yield k
+
+    def __len__(self):
+        return len([k for k in self._base_keys() if k not in self._deleted and k not in self._overlay]) + len(self._overlay)
+
+    # Convenience helpers
+    def keys(self):
+        return list(iter(self))
+
+    def items(self):
+        for k in self:
+            yield k, self[k]
+
 
 
 def _load_pickled_checkpoint(path, device, safe_load):

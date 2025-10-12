@@ -51,7 +51,7 @@ This repository powers **Stable Diffusion WebUI Forge**. Please follow these pri
 When in doubt, slow down—quality and maintainability take precedence over speed.
 
 ## Onboarding Checklist
-- Read `README.md` for the project overview and supported installers, then review `codex/architecture-overview.md`, `codex/backend.md`, `codex/extensions-and-integrations.md`, `codex/frontend.md`, `codex/refactor-roadmap.md`, and `codex/testing-and-tooling.md`.
+- Read `README.md` for the project overview and supported installers, then review `codex/architecture-overview.md`, `codex/backend.md`, `codex/backend-analysis.md`, `codex/extensions-and-integrations.md`, `codex/frontend.md`, `codex/refactor-roadmap.md`, and `codex/testing-and-tooling.md`.
 - Inspect the top entry of any handoff or session logs under `codex/` (create one if absent) before making changes.
 - Create an isolated environment with `python -m venv .venv && source .venv/bin/activate` (PowerShell: `.\.venv\Scripts\Activate.ps1`), then install `pip install -r requirements_versions.txt`.
 - Launch once in smoke-test mode (`python launch.py --skip-install --exit`) to ensure dependencies resolve before deeper edits.
