@@ -105,24 +105,11 @@ def webui_worker():
                 auto_launch_browser = not cmd_opts.webui_is_non_local
 
         # Smart SSR: enable only when Node >= 20 is available or explicitly forced.
-        def _has_node20():
-            import shutil, subprocess
-            node_path = os.getenv('GRADIO_NODE_PATH') or shutil.which('node') or shutil.which('nodejs')
-            if not node_path:
-                return False
-            try:
-                out = subprocess.check_output([node_path, '--version'], stderr=subprocess.STDOUT, timeout=3)
-                ver = out.decode('utf-8', errors='ignore').strip().lstrip('v')
-                major = int(ver.split('.', 1)[0])
-                return major >= 20
-            except Exception:
-                return False
-
         _ssr_env = os.getenv('GRADIO_SSR_MODE')
         if _ssr_env is None:
-            ssr_mode_env = _has_node20()
-            if not ssr_mode_env:
-                print("[UI] SSR disabled: Node >= 20 not detected. Set GRADIO_SSR_MODE=1 and GRADIO_NODE_PATH to force.")
+            # Default: SSR disabled to avoid Node dependency and slow startup.
+            ssr_mode_env = False
+            print("[UI] SSR disabled by default. To enable, set GRADIO_SSR_MODE=1 (requires Node >= 20).")
         else:
             ssr_mode_env = _ssr_env.strip().lower() in ('1', 'true', 'yes', 'on', 'force')
         app, local_url, share_url = shared.demo.launch(
