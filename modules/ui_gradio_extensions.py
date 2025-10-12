@@ -53,11 +53,18 @@ def _parse_js_allowlist():
 def _parse_js_denylist():
     """Return a set of basenames to exclude from JS injection regardless of allowlist.
 
-    Controlled by GRADIO_JS_DENYLIST (comma-separated basenames). Empty/unset means disabled.
+    - Default (unset): deny a small set of fragile legacy scripts that are now replaced by Python logic.
+    - Override with GRADIO_JS_DENYLIST to customize (comma-separated basenames). To disable defaults, set to "none".
     """
+    default_deny = {"token-counters.js", "settings.js", "gradio.js", "inputAccordion.js"}
     env = os.getenv("GRADIO_JS_DENYLIST")
-    if not env:
+    if env is None:
+        return default_deny
+    env = env.strip()
+    if env.lower() == "none":
         return set()
+    if not env:
+        return default_deny
     return set(x.strip() for x in env.split(",") if x.strip())
 
 

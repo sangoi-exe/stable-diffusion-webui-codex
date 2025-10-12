@@ -6,6 +6,7 @@ About Gradio 5: will try to upgrade to Gradio 5 at about 2025 March. If failed, 
 2025 Oct 11: JS → Python: img2img copy buttons now switch tabs via server updates (no DOM clicks). Added optional SSR gating with `GRADIO_SSR_MODE` (off by default).
 2025 Oct 11: Switched asset injection to Gradio 5-friendly Blocks(head=...) (no more TemplateResponse monkeypatch). Kept existing reload button behavior; `reload_javascript()` remains a no-op.
 2025 Oct 12: Default SSR enabled (can disable with GRADIO_SSR_MODE=0). Added env-driven JS allowlist (GRADIO_JS_ALLOWLIST). When allowlist is active (''/auto/true), token-counters.js and settings.js are not injected by default.
+2025 Oct 12: Default JS denylist enabled (can override with GRADIO_JS_DENYLIST). By default, removes token-counters.js, settings.js, gradio.js and inputAccordion.js (replaced by Python pathways).
 2025 Oct 12: Extra Networks (Checkpoints) – added optional native Gallery (enable with GRADIO_EXTRA_NETWORKS_DATASET=1). Server-side filter/sort retained; selection applies checkpoint immediately.
 2025 Oct 12: Extra Networks (Textual Inversion) – optional native Gallery under same flag; selector to choose Positive/Negative prompt target; selecting a card appends the token to the chosen prompt.
 2025 Oct 12: Extra Networks (LoRA) – optional native Gallery under same flag; selector Positive/Negative; selecting a card inserts `<lora:alias_or_name:weight>` in the chosen prompt, weight defaults to preferred weight or `extra_networks_default_multiplier`.
