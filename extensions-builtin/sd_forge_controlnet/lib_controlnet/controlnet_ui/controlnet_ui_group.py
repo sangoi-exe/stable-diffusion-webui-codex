@@ -21,7 +21,7 @@ from modules_forge.utils import HWC3
 from lib_controlnet.external_code import UiControlNetUnit
 from modules.ui_components import ToolButton
 from gradio_rangeslider import RangeSlider
-from modules_forge.forge_canvas.canvas import ForgeCanvas
+from modules_forge.canvas_adapter import ForgeCanvas
 
 
 @dataclass
