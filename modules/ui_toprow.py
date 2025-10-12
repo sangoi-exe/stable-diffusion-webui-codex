@@ -132,11 +132,13 @@ class Toprow:
             self.negative_token_counter = gr.HTML(value="<span>0/75</span>", elem_id=f"{self.id_part}_negative_token_counter", elem_classes=["token-counter"], visible=False)
             self.negative_token_button = gr.Button(visible=False, elem_id=f"{self.id_part}_negative_token_button")
 
+            def _clear_prompts(pos, neg):
+                return "", ""
             self.clear_prompt_button.click(
-                fn=lambda *x: x,
-                _js="confirm_clear_prompt",
+                fn=_clear_prompts,
                 inputs=[self.prompt, self.negative_prompt],
                 outputs=[self.prompt, self.negative_prompt],
+                show_progress=False,
             )
 
     def create_styles_ui(self):

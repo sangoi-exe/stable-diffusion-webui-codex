@@ -695,14 +695,4 @@ def connect_paste(button, paste_fields, input_comp, override_settings_component,
         show_progress=False,
     )
     # Safely trigger client-side prompt token recalculation if the JS helper exists
-    button.click(
-        fn=None,
-        _js=(
-            "function(){ try {"
-            f" if (typeof recalculate_prompts_{tabname} === 'function') recalculate_prompts_{tabname}();"
-            " } catch(e){} }"
-        ),
-        inputs=[],
-        outputs=[],
-        show_progress=False,
-    )
+    # No client-side JS required; counters are updated via Python events
