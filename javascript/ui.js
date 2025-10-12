@@ -122,15 +122,18 @@ function create_submit_args(args) {
 // Slider/Number preprocess type errors in Gradio (e.g., '512' vs 512).
 function normalizeSubmitArgs(tabname, res) {
     try {
-        if (tabname === 'txt2img') {
-            // Index map must match modules/ui.py -> txt2img_inputs
-            const ints = [4, 5, 8, 9, 14, 15, 16];
-            const floats = [6, 7, 11, 12, 23, 24];
-            for (const i of ints) {
-                if (typeof res[i] === 'string' && res[i].trim() !== '' && !isNaN(res[i])) res[i] = parseInt(res[i], 10);
-            }
-            for (const i of floats) {
-                if (typeof res[i] === 'string' && res[i].trim() !== '' && !isNaN(res[i])) res[i] = parseFloat(res[i]);
+        // Generic coercion: convert purely numeric strings to numbers
+        for (let i = 0; i < res.length; i++) {
+            const v = res[i];
+            if (typeof v === 'string') {
+                const s = v.trim();
+                if (/^-?\d+$/.test(s)) {
+                    const n = parseInt(s, 10);
+                    if (!Number.isNaN(n)) res[i] = n;
+                } else if (/^-?\d*\.\d+$/.test(s)) {
+                    const f = parseFloat(s);
+                    if (!Number.isNaN(f)) res[i] = f;
+                }
             }
         }
     } catch (e) {
@@ -200,6 +203,7 @@ function submit_img2img() {
     });
 
     var res = create_submit_args(arguments);
+    res = normalizeSubmitArgs('img2img', res);
 
     res[0] = id;
 
