@@ -1,5 +1,6 @@
 import os
 import shutil
+import json
 import torch
 import logging
 import importlib
@@ -44,7 +45,58 @@ def _copy_tree(src_root: str, dst_root: str, patterns: list[str] | None = None):
                 continue
             dst = os.path.join(dst_root, relpath)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copy2(src, dst)
+    shutil.copy2(src, dst)
+
+
+def _http_download_tokenizer(repo_id: str, dst_root: str, allow_patterns: list[str]):
+    """Download tokenizer artifacts via direct HTTP from Hugging Face API.
+
+    This bypasses huggingface_hub internals (useful when patched/unsupported).
+    Only files matching allow_patterns are copied into dst_root.
+    """
+    import httpx
+
+    token = os.environ.get('HF_TOKEN')
+    headers = {'Authorization': f'Bearer {token}'} if token else {}
+
+    # List files in repo
+    api_url = f"https://huggingface.co/api/models/{repo_id}"
+    with httpx.Client(headers=headers, timeout=30.0) as client:
+        r = client.get(api_url)
+        r.raise_for_status()
+        data = r.json()
+        siblings = data.get('siblings') or []
+        filepaths = [s.get('rfilename') for s in siblings if s.get('rfilename')]
+
+        def _match(p: str) -> bool:
+            p = p.replace('\\', '/')
+            for patt in allow_patterns:
+                patt = patt.replace('\\', '/')
+                if patt.endswith('/*'):
+                    if p.startswith(patt[:-1]):
+                        return True
+                elif patt.endswith('*'):
+                    if p.startswith(patt[:-1]):
+                        return True
+                else:
+                    if p == patt:
+                        return True
+            return False
+
+        wanted = [p for p in filepaths if _match(p)]
+        if not wanted:
+            raise RuntimeError(f"No tokenizer files matched in repo '{repo_id}' for patterns {allow_patterns}.")
+
+        # Resolve from main (default). We avoid complex revision logic to stay robust.
+        for rel in wanted:
+            url = f"https://huggingface.co/{repo_id}/resolve/main/{rel}"
+            out = os.path.join(dst_root, rel)
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            with client.stream('GET', url) as resp:
+                resp.raise_for_status()
+                with open(out, 'wb') as f:
+                    for chunk in resp.iter_bytes():
+                        f.write(chunk)
 
 
 def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_path, state_dict):
@@ -96,34 +148,40 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                 if not backend.args.args.disable_online_tokenizer and repo_hint:
                     try:
                         from huggingface_hub import snapshot_download
+                        # Download only tokenizer-related files to cache
+                        allow = [
+                            'tokenizer/*', 'tokenizer_2/*',
+                            'tokenizer.json', 'tokenizer_config.json',
+                            'vocab.json', 'merges.txt', 'tokenizer.model'
+                        ]
+                        try:
+                            cached_dir = snapshot_download(repo_id=repo_hint, allow_patterns=allow, local_files_only=False)
+                            _copy_tree(cached_dir, repo_path, patterns=allow)
+                        except TypeError as te:
+                            # Handle patched/incompatible hub internals (unexpected 'etag' kwarg, etc.) via direct HTTP
+                            print(f"huggingface_hub snapshot_download incompatible ({te}); falling back to direct HTTP download for tokenizer files.")
+                            _http_download_tokenizer(repo_hint, repo_path, allow)
+                        except Exception as e:
+                            # Try direct HTTP as a second attempt for robustness
+                            print(f"huggingface_hub snapshot_download failed: {e}; attempting direct HTTP download for tokenizer files.")
+                            _http_download_tokenizer(repo_hint, repo_path, allow)
+
+                        # Re-resolve after fetch
+                        tok_json_path = _tokenizer_json_in(path) or _tokenizer_json_in(root)
+                        if tok_json_path is not None:
+                            from transformers import CLIPTokenizerFast
+                            comp = CLIPTokenizerFast.from_pretrained(os.path.dirname(tok_json_path), tokenizer_file=tok_json_path, local_files_only=True)
+                        elif _has_merges_vocab(path) or _has_merges_vocab(root):
+                            merges_dir = path if _has_merges_vocab(path) else root
+                            comp = cls.from_pretrained(merges_dir, local_files_only=True)
+                        else:
+                            raise RuntimeError(
+                                f"Online fetch attempted for repo '{repo_hint}', but tokenizer assets remain missing under {repo_path}."
+                            )
                     except Exception as e:
                         raise RuntimeError(
-                            "Tokenizer assets missing locally and online fetch requested, but huggingface_hub is not available: "
-                            f"{e}. Please install huggingface_hub or provide tokenizer files locally."
-                        )
-
-                    # Download only tokenizer-related files to cache
-                    allow = [
-                        'tokenizer/*', 'tokenizer_2/*',
-                        'tokenizer.json', 'tokenizer_config.json',
-                        'vocab.json', 'merges.txt', 'tokenizer.model'
-                    ]
-                    cached_dir = snapshot_download(repo_id=repo_hint, allow_patterns=allow, local_files_only=False)
-
-                    # Copy relevant files into repo_path (preserve tokenizer/ subfolders)
-                    _copy_tree(cached_dir, repo_path, patterns=allow)
-
-                    # Re-resolve after fetch
-                    tok_json_path = _tokenizer_json_in(path) or _tokenizer_json_in(root)
-                    if tok_json_path is not None:
-                        from transformers import CLIPTokenizerFast
-                        comp = CLIPTokenizerFast.from_pretrained(os.path.dirname(tok_json_path), tokenizer_file=tok_json_path, local_files_only=True)
-                    elif _has_merges_vocab(path) or _has_merges_vocab(root):
-                        merges_dir = path if _has_merges_vocab(path) else root
-                        comp = cls.from_pretrained(merges_dir, local_files_only=True)
-                    else:
-                        raise RuntimeError(
-                            f"Online fetch attempted for repo '{repo_hint}', but tokenizer assets remain missing under {repo_path}."
+                            "Tokenizer assets missing locally and online fetch requested, but download failed and direct HTTP not attempted: "
+                            f"{e}. Provide tokenizer files locally or set --disable-online-tokenizer."
                         )
                 else:
                     hint = (f" (hint: repo_id='{repo_hint}')" if repo_hint else "")
