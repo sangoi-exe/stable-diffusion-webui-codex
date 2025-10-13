@@ -516,6 +516,15 @@ def create_ui():
                                                     suffix_map.setdefault(suffix, []).append(j)
                                         except Exception:
                                             pass
+                                    # Start from component.value when available to remove dependency on order
+                                    for j, c in enumerate(components):
+                                        try:
+                                            val = getattr(c, 'value', None)
+                                            # Use component value when it exists; keep existing otherwise
+                                            if val is not None:
+                                                out[j] = val
+                                        except Exception:
+                                            pass
                                     for k, v in named.items():
                                         idx = None
                                         if isinstance(k, str) and k in elem_map:
@@ -618,8 +627,8 @@ def create_ui():
             )
 
             # JS wrappers provide id_task + client-side progress (required for queue + heartbeat)
-            toprow.prompt.submit(_js="submit", **txt2img_args)
-            toprow.submit.click(_js="submit", **txt2img_args)
+            toprow.prompt.submit(_js="submit_named", **txt2img_args)
+            toprow.submit.click(_js="submit_named", **txt2img_args)
 
             # Sync visible checkbox with hidden InputAccordion and accordion open state
             def _sync_hr(v):
@@ -1006,8 +1015,8 @@ def create_ui():
             )
 
             # JS wrappers provide id_task + client-side progress
-            toprow.prompt.submit(_js="submit_img2img", **img2img_args)
-            toprow.submit.click(_js="submit_img2img", **img2img_args)
+            toprow.prompt.submit(_js="submit_img2img_named", **img2img_args)
+            toprow.submit.click(_js="submit_img2img_named", **img2img_args)
 
             res_switch_btn.click(lambda w, h: (h, w), inputs=[width, height], outputs=[width, height], show_progress=False)
 

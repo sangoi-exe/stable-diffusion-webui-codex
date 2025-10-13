@@ -301,6 +301,40 @@ function submit() {
     return submitWithProgress(arguments, 'txt2img_gallery_container', 'txt2img_gallery');
 }
 
+/** @param {IArguments} args */
+function buildNamedTxt2img(args) {
+    const a = Array.from(args);
+    /** @type {Record<string, unknown>} */
+    const named = {};
+    // Map core indices to elem_ids; best-effort, server normalizer covers the rest
+    /** @type {Record<number, string>} */
+    const map = {
+        1: 'txt2img_prompt',
+        2: 'txt2img_neg_prompt',
+        4: 'txt2img_batch_count',
+        5: 'txt2img_batch_size',
+        6: 'txt2img_cfg_scale',
+        7: 'txt2img_distilled_cfg_scale',
+        8: 'txt2img_height',
+        9: 'txt2img_width'
+    };
+    Object.keys(map).forEach((k) => {
+        const i = Number(k);
+        const key = map[/** @type {number} */(i)];
+        if (i < a.length && typeof key === 'string') named[key] = a[i];
+    });
+    return named;
+}
+
+function submit_named() {
+    const res = submitWithProgress(arguments, 'txt2img_gallery_container', 'txt2img_gallery');
+    // Put named override into the last argument slot (hidden JSON)
+    if (Array.isArray(res) && res.length > 0) {
+        res[res.length - 1] = buildNamedTxt2img(arguments);
+    }
+    return res;
+}
+
 function submit_txt2img_upscale() {
     const res = submit(...arguments);
     res[2] = selected_gallery_index();
@@ -309,6 +343,36 @@ function submit_txt2img_upscale() {
 
 function submit_img2img() {
     return submitWithProgress(arguments, 'img2img_gallery_container', 'img2img_gallery');
+}
+
+/** @param {IArguments} args */
+function buildNamedImg2img(args) {
+    const a = Array.from(args);
+    /** @type {Record<string, unknown>} */
+    const named = {};
+    /** @type {Record<number, string>} */
+    const map = {
+        2: 'img2img_prompt',
+        3: 'img2img_neg_prompt',
+        20: 'img2img_cfg_scale',
+        21: 'img2img_distilled_cfg_scale',
+        24: 'img2img_height',
+        25: 'img2img_width'
+    };
+    Object.keys(map).forEach((k) => {
+        const i = Number(k);
+        const key = map[/** @type {number} */(i)];
+        if (i < a.length && typeof key === 'string') named[key] = a[i];
+    });
+    return named;
+}
+
+function submit_img2img_named() {
+    const res = submitWithProgress(arguments, 'img2img_gallery_container', 'img2img_gallery');
+    if (Array.isArray(res) && res.length > 0) {
+        res[res.length - 1] = buildNamedImg2img(arguments);
+    }
+    return res;
 }
 
 function submit_extras() {

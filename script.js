@@ -238,6 +238,7 @@ document.addEventListener("DOMContentLoaded", function() {
     }
 
     // Best-effort: enrich request with a named view using gradio_config when available
+    /** @param {any} obj */
     function buildNamedPayload(obj) {
         try {
             const fnIndex = typeof obj.fn_index === 'number' ? obj.fn_index : null;
@@ -251,14 +252,14 @@ document.addEventListener("DOMContentLoaded", function() {
                 const elem = c && c.props && typeof c.props.elem_id === 'string' ? c.props.elem_id : null;
                 if (id != null && elem) idToElem[id] = elem;
             }
-            const deps = cfg.dependencies || cfg.deps || [];
+            const deps = /** @type {any[]} */ (cfg.dependencies || cfg.deps || []);
             /** @type {number[]|null} */
             let inputs = null;
             for (const d of deps) {
                 const cand = d?.fn_index ?? d?.backend_fn ?? d?.id ?? d?.function_index ?? null;
                 if (cand === fnIndex) {
                     // Try common properties that could hold input ids
-                    const candidates = [d?.inputs, d?.input_ids, d?.input_component_ids];
+                    const candidates = /** @type {any[]} */ ([d?.inputs, d?.input_ids, d?.input_component_ids]);
                     for (const arr of candidates) {
                         if (Array.isArray(arr) && arr.every((x) => typeof x === 'number')) {
                             inputs = arr;
@@ -273,7 +274,8 @@ document.addEventListener("DOMContentLoaded", function() {
             const named = {};
             const L = Math.min(data.length, inputs.length);
             for (let i = 0; i < L; i++) {
-                const key = idToElem[inputs[i]] || String(inputs[i]);
+                const keyId = /** @type {number} */ (inputs[i] ?? -1);
+                const key = idToElem[keyId] || String(keyId);
                 named[key] = data[i];
             }
             return named;
