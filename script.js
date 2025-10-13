@@ -215,6 +215,50 @@ document.addEventListener("DOMContentLoaded", function() {
     mutationObserver.observe(gradioApp(), {childList: true, subtree: true});
 });
 
+// Normalize outgoing Gradio payloads so numeric strings become numbers.
+// This prevents server-side Slider/Number preprocess errors like
+// TypeError: '<' not supported between instances of 'str' and 'int'.
+(() => {
+    const origFetch = window.fetch;
+    /** @param {unknown} x */
+    function coerceNumeric(x) {
+        if (typeof x === 'string') {
+            const t = x.trim();
+            if (/^-?\d+$/.test(t)) {
+                const n = Number.parseInt(t, 10);
+                if (!Number.isNaN(n)) return n;
+            } else if (/^-?\d*\.\d+$/.test(t)) {
+                const f = Number.parseFloat(t);
+                if (!Number.isNaN(f)) return f;
+            }
+        }
+        return x;
+    }
+
+    window.fetch = function(input, init) {
+        try {
+            const url = typeof input === 'string' ? input : (input && 'url' in input ? input.url : '');
+            const method = init?.method || (typeof input !== 'string' && input ? input.method : 'GET') || 'GET';
+            if (method.toUpperCase() === 'POST' && init && typeof init.body === 'string') {
+                if (/(\/queue|\/predict|\/internal\/queue)/.test(String(url))) {
+                    try {
+                        const body = JSON.parse(init.body);
+                        if (Array.isArray(body?.data)) {
+                            body.data = body.data.map(coerceNumeric);
+                            init.body = JSON.stringify(body);
+                        }
+                    } catch (e) {
+                        // ignore malformed JSON; fall through to original fetch
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('fetch-normalize failed:', e);
+        }
+        return origFetch.apply(this, arguments);
+    };
+})();
+
 /**
  * Add keyboard shortcuts:
  * Ctrl+Enter to start/restart a generation
