@@ -494,6 +494,14 @@ def create_ui():
             def _normalize_args(components, values):
                 out = list(values)
                 try:
+                    # Build elem_id index and some targeted fix-ups (steps/sampler/scheduler)
+                    elem_ids = []
+                    for comp in components:
+                        try:
+                            elem_ids.append(getattr(comp, 'elem_id', None))
+                        except Exception:
+                            elem_ids.append(None)
+
                     for i, comp in enumerate(components):
                         if i >= len(out):
                             break
@@ -524,6 +532,39 @@ def create_ui():
                                 elif choices and v not in choices:
                                     v = comp.value if (isinstance(comp.value, str) and comp.value in choices) else choices[0]
                             out[i] = v
+                    # Targeted swap: steps <-> sampler when inverted
+                    def _try_swap(a_idx, b_idx, cond):
+                        if a_idx is None or b_idx is None:
+                            return
+                        try:
+                            if cond(out[a_idx], out[b_idx]):
+                                out[a_idx], out[b_idx] = out[b_idx], out[a_idx]
+                        except Exception:
+                            pass
+                    try:
+                        steps_idx = next((i for i,e in enumerate(elem_ids) if isinstance(components[i], gr.Slider) and isinstance(e, str) and e.endswith('_steps')), None)
+                        sampler_idx = next((i for i,e in enumerate(elem_ids) if isinstance(components[i], gr.Dropdown) and isinstance(e, str) and e.endswith('_sampling')), None)
+                        sched_idx = next((i for i,e in enumerate(elem_ids) if isinstance(components[i], gr.Dropdown) and isinstance(e, str) and e.endswith('_scheduler')), None)
+                        # swap numeric from sampler into steps
+                        _try_swap(steps_idx, sampler_idx, lambda a,b: not isinstance(a,(int,float)) and isinstance(b,(int,float)))
+                        # ensure sampler is in its choices
+                        if sampler_idx is not None:
+                            comp = components[sampler_idx]
+                            if isinstance(comp, gr.Dropdown):
+                                choices = list(comp.choices or [])
+                                v = out[sampler_idx]
+                                if isinstance(v, str) and choices and v not in choices:
+                                    out[sampler_idx] = comp.value if (isinstance(comp.value,str) and comp.value in choices) else choices[0]
+                        # ensure scheduler is in its choices
+                        if sched_idx is not None:
+                            comp = components[sched_idx]
+                            if isinstance(comp, gr.Dropdown):
+                                choices = list(comp.choices or [])
+                                v = out[sched_idx]
+                                if isinstance(v, str) and choices and v not in choices:
+                                    out[sched_idx] = comp.value if (isinstance(comp.value,str) and comp.value in choices) else choices[0]
+                    except Exception:
+                        pass
                     return tuple(out)
                 except Exception:
                     return values
