@@ -247,51 +247,56 @@ def _install_gradio_type_guards():
         _drop_orig = Dropdown.preprocess
 
         def drop_wrapped(self, payload):
-            # If invalid value (e.g., numeric 32) is given, try to coerce to a valid choice or fallback
             try:
-                choices = list(getattr(self, "choices", []) or [])
+                raw_choices = list(getattr(self, "choices", []) or [])
             except Exception:
-                choices = []
+                raw_choices = []
 
-            v = payload
-            # tuple/list like ('None','None') -> first item
-            if isinstance(v, (tuple, list)) and v:
-                v = v[0]
-            if isinstance(v, (int, float)):
-                # Interpret as index if reasonable
-                idx = int(v)
-                if 0 <= idx < len(choices):
-                    v = choices[idx]
-            elif isinstance(v, str) and v.strip().lower() in ("none", "null"):
-                # Fall back to component's current value or first choice
-                cur = getattr(self, "value", None)
-                if isinstance(cur, str) and cur in choices:
-                    v = cur
-                elif choices:
-                    v = choices[0]
-            # Final guard: if still invalid, pick first choice to avoid crash (with error context below)
-            if isinstance(v, str) and choices and v not in choices:
-                v = choices[0]
-            # Else leave as-is (valid strings will pass)
+            def _choice_value(item):
+                if hasattr(item, "value"):
+                    return item.value
+                if isinstance(item, (tuple, list)):
+                    if len(item) >= 2:
+                        return _choice_value(item[1])
+                    if len(item) == 1:
+                        return _choice_value(item[0])
+                    return None
+                return item
+
+            def _normalize(value):
+                if hasattr(value, "value"):
+                    return value.value
+                if isinstance(value, (tuple, list)):
+                    return _choice_value(value)
+                return value
+
+            choice_values = [_choice_value(c) for c in raw_choices]
+            normalized_payload = _normalize(payload)
+
+            label = getattr(self, "label", None) or "<no-label>"
+            elem_id = getattr(self, "elem_id", None) or "<no-elem_id>"
+
+            if not choice_values:
+                raise ValueError(
+                    f"Dropdown preprocess failed for {label} (elem_id={elem_id}): "
+                    f"choices are empty, received payload={payload!r}"
+                )
+
+            if normalized_payload not in choice_values:
+                raise ValueError(
+                    f"Dropdown preprocess failed for {label} (elem_id={elem_id}): "
+                    f"payload={payload!r} normalized={normalized_payload!r} "
+                    f"is not one of choices={choice_values!r}"
+                )
+
             try:
-                return _drop_orig(self, v)
+                return _drop_orig(self, normalized_payload)
             except Exception as e:
-                # Fallback without crashing: pick a valid choice deterministically
-                try:
-                    cur = getattr(self, "value", None)
-                    if isinstance(cur, str) and cur in choices:
-                        return _drop_orig(self, cur)
-                    if choices:
-                        return _drop_orig(self, choices[0])
-                except Exception:
-                    pass
-                # As last resort, do not raise — return original payload to let upstream handle gracefully
-                # But emit a warning for diagnostics
-                try:
-                    print(f"[ui] Dropdown guard fallback for {getattr(self,'label',None)} elem_id={getattr(self,'elem_id',None)} payload={payload!r} choices={choices!r}")
-                except Exception:
-                    pass
-                return v
+                raise type(e)(
+                    f"Dropdown preprocess failed for {label} (elem_id={elem_id}): "
+                    f"payload={payload!r} normalized={normalized_payload!r} "
+                    f"choices={choice_values!r} -> {e}"
+                ) from e
 
         drop_wrapped._sdw_guarded = True  # type: ignore[attr-defined]
         Dropdown.preprocess = drop_wrapped  # type: ignore[assignment]
