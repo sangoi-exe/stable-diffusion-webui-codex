@@ -238,7 +238,12 @@ document.addEventListener("DOMContentLoaded", function() {
     window.fetch = function(input, init) {
         try {
             const url = typeof input === 'string' ? input : (input && 'url' in input ? input.url : '');
-            const method = init?.method || (typeof input !== 'string' && input ? input.method : 'GET') || 'GET';
+            let method = (init && init.method) || 'GET';
+            try {
+                if (method === 'GET' && typeof Request !== 'undefined' && input instanceof Request) {
+                    method = input.method || 'GET';
+                }
+            } catch (_) { /* ignore */ }
             if (method.toUpperCase() === 'POST' && init && typeof init.body === 'string') {
                 if (/(\/queue|\/predict|\/internal\/queue)/.test(String(url))) {
                     try {
@@ -255,7 +260,7 @@ document.addEventListener("DOMContentLoaded", function() {
         } catch (e) {
             console.warn('fetch-normalize failed:', e);
         }
-        return origFetch.apply(this, arguments);
+        return origFetch.call(this, input, init);
     };
 })();
 
@@ -278,6 +283,7 @@ document.addEventListener("DOMContentLoaded", function() {
         }
         return x;
     }
+    /** @this {WebSocket} @param {any} data */
     WS.prototype.send = function(data) {
         try {
             if (typeof data === 'string') {
