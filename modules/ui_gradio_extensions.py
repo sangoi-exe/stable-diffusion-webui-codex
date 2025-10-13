@@ -254,6 +254,9 @@ def _install_gradio_type_guards():
                 choices = []
 
             v = payload
+            # tuple/list like ('None','None') -> first item
+            if isinstance(v, (tuple, list)) and v:
+                v = v[0]
             if isinstance(v, (int, float)):
                 # Interpret as index if reasonable
                 idx = int(v)
@@ -266,6 +269,9 @@ def _install_gradio_type_guards():
                     v = cur
                 elif choices:
                     v = choices[0]
+            # Final guard: if still invalid, pick first choice to avoid crash (with error context below)
+            if isinstance(v, str) and choices and v not in choices:
+                v = choices[0]
             # Else leave as-is (valid strings will pass)
             try:
                 return _drop_orig(self, v)
