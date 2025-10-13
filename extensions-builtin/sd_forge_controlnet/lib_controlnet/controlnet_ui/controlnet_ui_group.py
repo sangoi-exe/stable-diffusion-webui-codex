@@ -1,6 +1,7 @@
 import json
 import gradio as gr
 import functools
+import numbers
 from copy import copy
 from typing import List, Optional, Union, Callable, Dict, Tuple, Literal
 from dataclasses import dataclass
@@ -485,34 +486,59 @@ class ControlNetUiGroup(object):
             outputs=[self.guidance_start, self.guidance_end]
         )
 
+        base_preprocessor = global_state.get_preprocessor(self.default_unit.module)
+        if base_preprocessor is None:
+            base_preprocessor = global_state.get_preprocessor("None")
+
+        def build_advanced_slider_kwargs(param, *, label: str, default_value, fallback: Dict[str, object]):
+            kwargs = fallback.copy()
+            if param is not None:
+                kwargs.update(param.gradio_update_kwargs)
+            kwargs["label"] = label
+            kwargs["visible"] = False
+            kwargs["interactive"] = True
+
+            if isinstance(default_value, numbers.Real):
+                min_v = kwargs.get("minimum")
+                max_v = kwargs.get("maximum")
+                if (
+                    (min_v is None or default_value >= min_v)
+                    and (max_v is None or default_value <= max_v)
+                ):
+                    kwargs["value"] = default_value
+            return kwargs
+
         # advanced options
         with gr.Column(visible=False) as self.advanced:
-            self.processor_res = gr.Slider(
+            processor_kwargs = build_advanced_slider_kwargs(
+                getattr(base_preprocessor, "slider_resolution", None),
                 label="Preprocessor resolution",
-                value=self.default_unit.processor_res,
-                minimum=64,
-                maximum=2048,
-                visible=False,
-                interactive=True,
+                default_value=self.default_unit.processor_res,
+                fallback={"minimum": 64, "maximum": 2048, "step": 8, "value": 512},
+            )
+            self.processor_res = gr.Slider(
                 elem_id=f"{elem_id_tabname}_{tabname}_controlnet_preprocessor_resolution_slider",
+                **processor_kwargs,
+            )
+            threshold_a_kwargs = build_advanced_slider_kwargs(
+                getattr(base_preprocessor, "slider_1", None),
+                label="Threshold A",
+                default_value=self.default_unit.threshold_a,
+                fallback={"minimum": 64, "maximum": 1024, "step": 1, "value": 64},
             )
             self.threshold_a = gr.Slider(
-                label="Threshold A",
-                value=self.default_unit.threshold_a,
-                minimum=64,
-                maximum=1024,
-                visible=False,
-                interactive=True,
                 elem_id=f"{elem_id_tabname}_{tabname}_controlnet_threshold_A_slider",
+                **threshold_a_kwargs,
+            )
+            threshold_b_kwargs = build_advanced_slider_kwargs(
+                getattr(base_preprocessor, "slider_2", None),
+                label="Threshold B",
+                default_value=self.default_unit.threshold_b,
+                fallback={"minimum": 64, "maximum": 1024, "step": 1, "value": 64},
             )
             self.threshold_b = gr.Slider(
-                label="Threshold B",
-                value=self.default_unit.threshold_b,
-                minimum=64,
-                maximum=1024,
-                visible=False,
-                interactive=True,
                 elem_id=f"{elem_id_tabname}_{tabname}_controlnet_threshold_B_slider",
+                **threshold_b_kwargs,
             )
 
         self.control_mode = gr.Radio(
