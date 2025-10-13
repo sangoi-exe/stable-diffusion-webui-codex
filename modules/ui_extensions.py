@@ -74,6 +74,9 @@ def save_config_state(name):
 
 
 def restore_config_state(confirmed, config_state_name, restore_type):
+    # Coerce Dropdown tuple/list payloads
+    if isinstance(config_state_name, (tuple, list)) and config_state_name:
+        config_state_name = config_state_name[0]
     if config_state_name == "Current":
         return "<span>Select a config to restore from.</span>"
     if not confirmed:
@@ -81,7 +84,9 @@ def restore_config_state(confirmed, config_state_name, restore_type):
 
     check_access()
 
-    config_state = config_states.all_config_states[config_state_name]
+    config_state = config_states.all_config_states.get(config_state_name) or config_states.all_config_states.get(str(config_state_name))
+    if config_state is None:
+        return f"<span>Unknown config state: {config_state_name!r}</span>"
 
     print(f"*** Restoring webui state from backup: {restore_type} ***")
 
@@ -192,10 +197,18 @@ def extension_table():
 
 
 def update_config_states_table(state_name):
+    # Coerce Dropdown payloads like ('Current','Current') to the value string
+    if isinstance(state_name, (tuple, list)) and state_name:
+        state_name = state_name[0]
     if state_name == "Current":
         config_state = config_states.get_config()
     else:
-        config_state = config_states.all_config_states[state_name]
+        # Try direct, then by str()
+        config_state = config_states.all_config_states.get(state_name) or config_states.all_config_states.get(str(state_name))
+        if config_state is None:
+            # Refresh and retry once
+            config_states.list_config_states()
+            config_state = config_states.all_config_states.get(state_name) or config_states.all_config_states.get(str(state_name)) or {}
 
     config_name = config_state.get("name", "Config")
     created_date = datetime.fromtimestamp(config_state["created_at"]).strftime('%Y-%m-%d %H:%M:%S')
