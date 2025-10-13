@@ -1,3 +1,4 @@
+from __future__ import annotations
 import datetime
 import mimetypes
 import os
@@ -10,6 +11,7 @@ import gradio as gr
 import gradio.utils
 from gradio.components.image_editor import Brush
 from PIL import Image, PngImagePlugin  # noqa: F401
+from typing import Any, Callable, Iterator, Sequence, Optional
 from modules.call_queue import wrap_gradio_gpu_call, wrap_queued_call, wrap_gradio_call, wrap_gradio_call_no_job # noqa: F401
 
 from modules import gradio_extensions, sd_schedulers  # noqa: F401
@@ -58,7 +60,7 @@ if cmd_opts.ngrok is not None:
         )
 
 
-def gr_show(visible=True):
+def gr_show(visible: bool = True) -> dict[str, Any]:
     return {"visible": visible, "__type__": "update"}
 
 
@@ -83,13 +85,13 @@ detect_image_size_symbol = '\U0001F4D0'  # 📐
 plaintext_to_html = ui_common.plaintext_to_html
 
 
-def send_gradio_gallery_to_image(x):
+def send_gradio_gallery_to_image(x: Sequence[Any]) -> Optional[Image.Image]:
     if len(x) == 0:
         return None
     return image_from_url_text(x[0])
 
 
-def calc_resolution_hires(enable, width, height, hr_scale, hr_resize_x, hr_resize_y):
+def calc_resolution_hires(enable: bool, width: int, height: int, hr_scale: float, hr_resize_x: int, hr_resize_y: int) -> str:
     if not enable:
         return ""
 
@@ -105,7 +107,7 @@ def calc_resolution_hires(enable, width, height, hr_scale, hr_resize_x, hr_resiz
     return f"from <span class='resolution'>{p.width}x{p.height}</span> to <span class='resolution'>{new_width}x{new_height}</span>"
 
 
-def resize_from_to_html(width, height, scale_by):
+def resize_from_to_html(width: float | int | str, height: float | int | str, scale_by: float) -> str:
     target_width = int(float(width) * scale_by)
     target_height = int(float(height) * scale_by)
 
@@ -118,7 +120,13 @@ def resize_from_to_html(width, height, scale_by):
     return f"resize: from <span class='resolution'>{width}x{height}</span> to <span class='resolution'>{target_width}x{target_height}</span>"
 
 
-def process_interrogate(interrogation_function, mode, ii_input_dir, ii_output_dir, *ii_singles):
+def process_interrogate(
+    interrogation_function: Callable[[Any], str],
+    mode: int,
+    ii_input_dir: str,
+    ii_output_dir: str,
+    *ii_singles: Any,
+) -> list[Any | None]:
     mode = int(mode)
     if mode in (0, 1, 3, 4):
         return [interrogation_function(ii_singles[mode]), None]
@@ -142,17 +150,17 @@ def process_interrogate(interrogation_function, mode, ii_input_dir, ii_output_di
         return [gr.update(), None]
 
 
-def interrogate(image):
+def interrogate(image: Image.Image) -> Any | str:
     prompt = shared.interrogator.interrogate(image.convert("RGB"))
     return gr.update() if prompt is None else prompt
 
 
-def interrogate_deepbooru(image):
+def interrogate_deepbooru(image: Image.Image) -> Any | str:
     prompt = deepbooru.model.tag(image)
     return gr.update() if prompt is None else prompt
 
 
-def connect_clear_prompt(button):
+def connect_clear_prompt(button: gr.components.Button) -> None:
     """Given clear button, prompt, and token_counter objects, setup clear prompt button click event"""
     button.click(
         _js="clear_prompt",
@@ -162,7 +170,7 @@ def connect_clear_prompt(button):
     )
 
 
-def update_token_counter(text, steps, styles, *, is_positive=True):
+def update_token_counter(text: str, steps: int, styles: list[str], *, is_positive: bool = True) -> str:
     params = script_callbacks.BeforeTokenCounterParams(text, steps, styles, is_positive=is_positive)
     script_callbacks.before_token_counter_callback(params)
     text = params.prompt
@@ -198,20 +206,20 @@ def update_token_counter(text, steps, styles, *, is_positive=True):
         return f"<span class='gr-box gr-text-input'>?/?</span>"
 
     flat_prompts = reduce(lambda list1, list2: list1+list2, prompt_schedules)
-    prompts = [prompt_text for step, prompt_text in flat_prompts]
+    prompts = [prompt_text for _, prompt_text in flat_prompts]
     token_count, max_length = max([get_prompt_lengths_on_ui(prompt) for prompt in prompts], key=lambda args: args[0])
     return f"<span class='gr-box gr-text-input'>{token_count}/{max_length}</span>"
 
 
-def update_negative_prompt_token_counter(*args):
+def update_negative_prompt_token_counter(*args: Any) -> str:
     return update_token_counter(*args, is_positive=False)
 
 
-def setup_progressbar(*args, **kwargs):
+def setup_progressbar(*args: Any, **kwargs: Any) -> None:
     pass
 
 
-def apply_setting(key, value):
+def apply_setting(key: str, value: Any) -> Any:
     if value is None:
         return gr.update()
 
@@ -244,18 +252,18 @@ def apply_setting(key, value):
     return getattr(opts, key)
 
 
-def create_output_panel(tabname, outdir, toprow=None):
+def create_output_panel(tabname: str, outdir: str, toprow: Any | None = None) -> Any:
     return ui_common.create_output_panel(tabname, outdir, toprow)
 
 
-def ordered_ui_categories():
+def ordered_ui_categories() -> Iterator[str]:
     user_order = {x.strip(): i * 2 + 1 for i, x in enumerate(shared.opts.ui_reorder_list)}
 
     for _, category in sorted(enumerate(shared_items.ui_reorder_categories()), key=lambda x: user_order.get(x[1], x[0] * 2 + 0)):
         yield category
 
 
-def create_override_settings_dropdown(tabname, row):
+def create_override_settings_dropdown(tabname: str, row: gr.components.Row) -> tuple[gr.components.Dropdown, gr.State]:
     # Populate with known options to avoid empty-choices errors during first generate
     try:
         override_candidates = sorted(list(opts.data_labels.keys()))

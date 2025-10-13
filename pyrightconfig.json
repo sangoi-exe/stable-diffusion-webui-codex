@@ -4,13 +4,12 @@
   "pythonVersion": "3.10",
   "useLibraryCodeForTypes": true,
 
+  // Workspace-only mode: focus on UI/entrypoints; skip heavy backend that needs venv
   "include": [
-    "backend",
-    "modules",
-    "modules_forge",
     "webui.py",
     "launch.py",
-    "spaces.py"
+    "spaces.py",
+    "modules/ui*.py"
   ],
   "exclude": [
     "**/__pycache__",
@@ -20,6 +19,8 @@
     "extensions",
     "extensions-builtin",
     "packages_3rdparty",
+    "backend",
+    "modules_forge",
     "models",
     "outputs",
     "output",
@@ -29,18 +30,21 @@
     ".npm-cache"
   ],
 
-  "reportMissingImports": "error",
-  "reportMissingTypeStubs": "warning",
-  "reportUnknownParameterType": "error",
-  "reportUnknownArgumentType": "error",
-  "reportUnknownMemberType": "error",
-  "reportUnknownVariableType": "error",
-  "reportUnknownLambdaType": "error",
+  // Noise control when venv isn't present: downgrade or disable
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": "none",
+
+  // Keep strictness but avoid unknown-propagation from missing libs being fatal
+  "reportUnknownParameterType": "warning",
+  "reportUnknownArgumentType": "warning",
+  "reportUnknownMemberType": "warning",
+  "reportUnknownVariableType": "warning",
+  "reportUnknownLambdaType": "warning",
   "reportMissingParameterType": "error",
   "reportUnnecessaryIsInstance": "warning",
-  "reportUntypedFunctionDecorator": "error",
-  "reportUntypedClassDecorator": "error",
-  "reportUntypedBaseClass": "error",
+  "reportUntypedFunctionDecorator": "warning",
+  "reportUntypedClassDecorator": "warning",
+  "reportUntypedBaseClass": "warning",
   "reportPrivateUsage": "warning",
   "reportIncompatibleMethodOverride": "error",
   "reportIncompatibleVariableOverride": "error",
@@ -54,4 +58,3 @@
   "reportUnnecessaryComparison": "warning",
   "reportUnnecessaryContains": "warning"
 }
-

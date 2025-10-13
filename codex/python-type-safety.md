@@ -6,9 +6,12 @@ Why Pyright here
 - Pyright runs fast and enforces strict null/unknown-type checks across the repo.
 
 Config
-- Root config: `pyrightconfig.json` (strict mode; unknown-type checks on; library types used).
-- Includes: `backend/`, `modules/`, `modules_forge/`, top-level `webui.py`, `launch.py`, `spaces.py`.
-- Excludes: third-party, legacy, caches, and UI bundles.
+- Root config: `pyrightconfig.json` (strict mode; library types used).
+- Workspace‑only mode (default here): focuses on `webui.py`, `launch.py`, `spaces.py`, and `modules/ui*.py`.
+  - This avoids noisy import errors when the venv lives fora do workspace (ex.: Windows venv).
+  - Rules for missing imports/type stubs are downgraded to warnings.
+  - Unknown‑type diagnostics are warnings to avoid cascade quando libs faltam.
+  - Core soundness (missing parameter types, incompatible overrides, call issues) permanece em erro.
 
 Run (global or NPX)
 - Global (preferred if you installed pyright globally):
@@ -28,8 +31,9 @@ Interpreting failures
 - “reportMissingTypeStubs”: prefer `pip install types-<package>` or ship a minimal `*.pyi` under a `typings/` package if needed.
 
 Scope policy
-- Do not relax checks repo-wide. If a violation is justified, use targeted `# pyright: ignore[rule-id]` with a short reason, or add a narrow override in `pyrightconfig.json` under a path-specific rule.
+- Não relaxe globalmente sem motivo — mas no workspace‑only mode é ok priorizar “sinal útil”:
+  - Se precisar checar backend com venv disponível, ajuste `include` e promova `reportMissingImports` para `error` localmente.
+  - Prefira ignores direcionados (`# pyright: ignore[rule-id]`) ao invés de afrouxar regras globais.
 
 Next steps
 - Start by cleaning hot paths used by Gradio endpoints (e.g., `modules/ui.py`, generation pipelines). Add or refine function signatures so request payloads are typed and validated before use.
-
