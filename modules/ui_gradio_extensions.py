@@ -1,5 +1,6 @@
 import os
 from modules import localization, shared, scripts, util
+import re
 import os
 import posixpath
 from modules.paths import script_path, data_path
@@ -171,6 +172,12 @@ def head_includes():
 
     Used by Blocks(head=...) to avoid TemplateResponse monkeypatching (Gradio 5-friendly).
     """
+    # Install server-side type guards for Slider/Number to produce clearer errors
+    try:
+        _install_gradio_type_guards()
+    except Exception:
+        # Do not break head rendering if guards fail to install
+        pass
     return css_html() + javascript_html() + '<meta name="referrer" content="no-referrer"/>'
 
 
@@ -180,3 +187,46 @@ def reload_javascript():
     Previously monkeypatched TemplateResponse. With Gradio 5 we inject via Blocks(head=...).
     """
     return None
+
+
+def _install_gradio_type_guards():
+    """Patch Gradio Slider/Number preprocess to coerce numeric strings and raise clear errors.
+
+    This does not change behaviour for valid payloads; it only attempts to parse strings like
+    "512" or "0.5" into numbers and, if parsing fails, raises a descriptive error that includes
+    the component label/elem_id to aid debugging miswired inputs.
+    """
+    try:
+        from gradio.components.slider import Slider
+    except Exception:
+        return
+
+    if getattr(Slider.preprocess, "_sdw_guarded", False):
+        return
+
+    numeric_re = re.compile(r"^-?\d+(?:\.\d+)?$")
+
+    orig = Slider.preprocess
+
+    def _coerce_numeric(payload):
+        if isinstance(payload, str):
+            t = payload.strip()
+            if numeric_re.match(t):
+                try:
+                    return float(t) if "." in t else int(t)
+                except Exception:
+                    pass
+        return payload
+
+    def wrapped(self, payload):
+        p = _coerce_numeric(payload)
+        try:
+            return orig(self, p)
+        except TypeError as e:
+            # Add context for easier debugging
+            label = getattr(self, "label", None) or "<no-label>"
+            elem_id = getattr(self, "elem_id", None) or "<no-elem_id>"
+            raise TypeError(f"Slider preprocess failed for {label} (elem_id={elem_id}); payload={payload!r}") from e
+
+    wrapped._sdw_guarded = True  # type: ignore[attr-defined]
+    Slider.preprocess = wrapped  # type: ignore[assignment]
