@@ -211,6 +211,9 @@ def _install_gradio_type_guards():
     def _coerce_numeric(payload):
         if isinstance(payload, str):
             t = payload.strip()
+            # common sentinels that sometimes leak from mismatched inputs
+            if t.lower() in ("none", "null"):
+                return payload  # handled below via fallback to component default
             if numeric_re.match(t):
                 try:
                     return float(t) if "." in t else int(t)
@@ -220,6 +223,14 @@ def _install_gradio_type_guards():
 
     def wrapped(self, payload):
         p = _coerce_numeric(payload)
+        # If a textual 'None' leaked in, prefer component's current value
+        if isinstance(p, str) and p.strip().lower() in ("none", "null"):
+            try:
+                default_val = getattr(self, "value", None)
+                if isinstance(default_val, (int, float)):
+                    p = default_val
+            except Exception:
+                pass
         try:
             return orig(self, p)
         except TypeError as e:
