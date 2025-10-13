@@ -1,10 +1,11 @@
+from __future__ import annotations
 import functools
 import os.path
 import urllib.parse
 from base64 import b64decode
 from io import BytesIO
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Iterable, Optional, Sequence, Union
 from dataclasses import dataclass
 
 from modules import shared, ui_extra_networks_user_metadata, errors, extra_networks, util
@@ -26,11 +27,11 @@ default_allowed_preview_extensions = ["png", "jpg", "jpeg", "webp", "gif"]
 _dataset_mode = os.getenv('GRADIO_EXTRA_NETWORKS_DATASET', '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 @functools.cache
-def allowed_preview_extensions_with_extra(extra_extensions=None):
+def allowed_preview_extensions_with_extra(extra_extensions: Optional[Iterable[str]] = None) -> set[str]:
     return set(default_allowed_preview_extensions) | set(extra_extensions or [])
 
 
-def allowed_preview_extensions():
+def allowed_preview_extensions() -> set[str]:
     return allowed_preview_extensions_with_extra((shared.opts.samples_format, ))
 
 
@@ -40,7 +41,7 @@ class ExtraNetworksItem:
     item: dict
 
 
-def get_tree(paths: Union[str, list[str]], items: dict[str, ExtraNetworksItem]) -> dict:
+def get_tree(paths: Union[str, list[str]], items: dict[str, ExtraNetworksItem]) -> dict[str, Any]:
     """Recursively builds a directory tree.
 
     Args:
@@ -54,8 +55,8 @@ def get_tree(paths: Union[str, list[str]], items: dict[str, ExtraNetworksItem]) 
     if isinstance(paths, (str,)):
         paths = [paths]
 
-    def _get_tree(_paths: list[str], _root: str):
-        _res = {}
+    def _get_tree(_paths: list[str], _root: str) -> dict[str, Any]:
+        _res: dict[str, Any] = {}
         for path in _paths:
             relpath = os.path.relpath(path, _root)
             if os.path.isdir(path):
@@ -74,7 +75,7 @@ def get_tree(paths: Union[str, list[str]], items: dict[str, ExtraNetworksItem]) 
                 _res[relpath] = items[path]
         return _res
 
-    res = {}
+    res: dict[str, Any] = {}
     # Handle each root directory separately.
     # Each root WILL have a key/value at the root of the result dict though
     # the value can be an empty dict if the directory is empty. We want these
@@ -90,7 +91,7 @@ def get_tree(paths: Union[str, list[str]], items: dict[str, ExtraNetworksItem]) 
 
     return res
 
-def register_page(page):
+def register_page(page) -> None:
     """registers extra networks page for the UI; recommend doing it in on_before_ui() callback for extensions"""
 
     extra_pages.append(page)
@@ -126,8 +127,12 @@ def fetch_cover_images(page: str = "", item: str = "", index: int = 0):
     if metadata is None:
         raise HTTPException(status_code=404, detail="File not found")
 
-    cover_images = json.loads(metadata.get('ssmd_cover_images', {}))
-    image = cover_images[index] if index < len(cover_images) else None
+    cover_images_raw = metadata.get('ssmd_cover_images')
+    try:
+        cover_images = json.loads(cover_images_raw) if isinstance(cover_images_raw, str) else []
+    except Exception:
+        cover_images = []
+    image = cover_images[index] if isinstance(cover_images, list) and index < len(cover_images) else None
     if not image:
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -651,10 +656,10 @@ class ExtraNetworksPage:
             "tree_view_div_default_display_class": "" if show_tree else "extra-network-dirs-hidden",
         }
 
-        if shared.opts.extra_networks_tree_view_style == "Tree":
-            pane_content = self.pane_content_tree_tpl.format(**page_params, tree_html=self.create_tree_view_html(tabname))
-        else:
-            pane_content = self.pane_content_dirs_tpl.format(**page_params, dirs_html=self.create_dirs_view_html(tabname))
+    if shared.opts.extra_networks_tree_view_style == "Tree":
+        pane_content = self.pane_content_tree_tpl.format(**page_params, tree_html=self.create_tree_view_html(tabname))
+    else:
+        pane_content = self.pane_content_dirs_tpl.format(**page_params, dirs_html=self.create_dirs_view_html(tabname))
 
         return self.pane_tpl.format(**page_params, pane_content=pane_content)
 
@@ -693,14 +698,19 @@ class ExtraNetworksPage:
 
         return None
 
-    def find_embedded_preview(self, path, name, metadata):
+    def find_embedded_preview(self, path: str, name: str, metadata: dict[str, Any]) -> Optional[str]:
         """
         Find if embedded preview exists in safetensors metadata and return endpoint for it.
         """
 
         file = f"{path}.safetensors"
-        if self.lister.exists(file) and 'ssmd_cover_images' in metadata and len(list(filter(None, json.loads(metadata['ssmd_cover_images'])))) > 0:
-            return f"./sd_extra_networks/cover-images?page={self.extra_networks_tabname}&item={name}"
+        if self.lister.exists(file) and 'ssmd_cover_images' in metadata:
+            try:
+                covers = json.loads(metadata.get('ssmd_cover_images', '[]'))
+                if isinstance(covers, list) and len(list(filter(None, covers))) > 0:
+                    return f"./sd_extra_networks/cover-images?page={self.extra_networks_tabname}&item={name}"
+            except Exception:
+                pass
 
         return None
 
