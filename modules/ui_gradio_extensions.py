@@ -198,15 +198,15 @@ def _install_gradio_type_guards():
     """
     try:
         from gradio.components.slider import Slider
+        from gradio.components.dropdown import Dropdown
     except Exception:
-        return
-
-    if getattr(Slider.preprocess, "_sdw_guarded", False):
         return
 
     numeric_re = re.compile(r"^-?\d+(?:\.\d+)?$")
 
-    orig = Slider.preprocess
+    # ---- Slider guard ----
+    if not getattr(Slider.preprocess, "_sdw_guarded", False):
+        _slider_orig = Slider.preprocess
 
     def _coerce_numeric(payload):
         if isinstance(payload, str):
@@ -232,7 +232,7 @@ def _install_gradio_type_guards():
             except Exception:
                 pass
         try:
-            return orig(self, p)
+            return _slider_orig(self, p)
         except TypeError as e:
             # Add context for easier debugging
             label = getattr(self, "label", None) or "<no-label>"
@@ -241,3 +241,38 @@ def _install_gradio_type_guards():
 
     wrapped._sdw_guarded = True  # type: ignore[attr-defined]
     Slider.preprocess = wrapped  # type: ignore[assignment]
+
+    # ---- Dropdown guard ----
+    if not getattr(Dropdown.preprocess, "_sdw_guarded", False):
+        _drop_orig = Dropdown.preprocess
+
+        def drop_wrapped(self, payload):
+            # If invalid value (e.g., numeric 32) is given, try to coerce to a valid choice or fallback
+            try:
+                choices = list(getattr(self, "choices", []) or [])
+            except Exception:
+                choices = []
+
+            v = payload
+            if isinstance(v, (int, float)):
+                # Interpret as index if reasonable
+                idx = int(v)
+                if 0 <= idx < len(choices):
+                    v = choices[idx]
+            elif isinstance(v, str) and v.strip().lower() in ("none", "null"):
+                # Fall back to component's current value or first choice
+                cur = getattr(self, "value", None)
+                if isinstance(cur, str) and cur in choices:
+                    v = cur
+                elif choices:
+                    v = choices[0]
+            # Else leave as-is (valid strings will pass)
+            try:
+                return _drop_orig(self, v)
+            except Exception as e:
+                label = getattr(self, "label", None) or "<no-label>"
+                elem_id = getattr(self, "elem_id", None) or "<no-elem_id>"
+                raise TypeError(f"Dropdown preprocess failed for {label} (elem_id={elem_id}); payload={payload!r}") from e
+
+        drop_wrapped._sdw_guarded = True  # type: ignore[attr-defined]
+        Dropdown.preprocess = drop_wrapped  # type: ignore[assignment]
