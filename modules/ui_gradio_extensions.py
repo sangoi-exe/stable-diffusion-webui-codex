@@ -276,9 +276,22 @@ def _install_gradio_type_guards():
             try:
                 return _drop_orig(self, v)
             except Exception as e:
-                label = getattr(self, "label", None) or "<no-label>"
-                elem_id = getattr(self, "elem_id", None) or "<no-elem_id>"
-                raise TypeError(f"Dropdown preprocess failed for {label} (elem_id={elem_id}); payload={payload!r}") from e
+                # Fallback without crashing: pick a valid choice deterministically
+                try:
+                    cur = getattr(self, "value", None)
+                    if isinstance(cur, str) and cur in choices:
+                        return _drop_orig(self, cur)
+                    if choices:
+                        return _drop_orig(self, choices[0])
+                except Exception:
+                    pass
+                # As last resort, do not raise — return original payload to let upstream handle gracefully
+                # But emit a warning for diagnostics
+                try:
+                    print(f"[ui] Dropdown guard fallback for {getattr(self,'label',None)} elem_id={getattr(self,'elem_id',None)} payload={payload!r} choices={choices!r}")
+                except Exception:
+                    pass
+                return v
 
         drop_wrapped._sdw_guarded = True  # type: ignore[attr-defined]
         Dropdown.preprocess = drop_wrapped  # type: ignore[assignment]
