@@ -44,6 +44,13 @@ End-of-sprint documentation: log each sprint under `codex/sprint-logs/` using th
 - `scripts/` – repeatable maintenance tasks, diagnostics, and automation helpers (prefer these over bespoke shell snippets).
 - `models/` – local weights and checkpoints (never commit contents); use symlinks or `.gitignore` patterns to avoid tracking.
 - `codex/` – internal documentation, roadmaps, and operational logs; update these whenever behaviour, contracts, or processes evolve.
+- `legacy/` – snapshot de código legado da WebUI, para CONSULTA somente (read‑only).
+
+## Legacy Code Policy (read‑only)
+- `legacy/` é referência histórica. NÃO modifique, mova ou remova arquivos sob `legacy/`.
+- Não introduza novas dependências do código ativo para módulos em `legacy/`. Se precisar de lógica de lá, porte para os diretórios ativos (`modules/`, `extensions-builtin/`, etc.), com validação e documentação.
+- Pull requests que toquem `legacy/` só serão aceitos sob solicitação explícita do mantenedor para atualizar o snapshot.
+- Use `legacy/` apenas para consultas/diffs de comportamento. Corrijas devem entrar no código não‑legacy.
 
 ## Git Workflow & Hygiene
 - Keep commits small, cohesive, and formatted as `type: summary` (e.g., `fix: guard queue shutdown`); include rationale in commit bodies.

@@ -190,15 +190,19 @@ def reload_javascript():
 
 
 def _install_gradio_type_guards():
-    """Patch Gradio Slider/Number preprocess to coerce numeric strings and raise clear errors.
+    """Patch Gradio components to emit actionable errors with component context.
 
-    This does not change behaviour for valid payloads; it only attempts to parse strings like
-    "512" or "0.5" into numbers and, if parsing fails, raises a descriptive error that includes
-    the component label/elem_id to aid debugging miswired inputs.
+    Policy:
+    - No silent fallbacks or clamping. Invalid input must raise with context.
+    - Coerce numeric strings (e.g. "512", "0.5") to numbers — this is not a
+      fallback, it's a lossless parse. Everything else fails fast with details.
+    - Augment exceptions to include `label`, `elem_id`, slider bounds and the
+      offending payload to avoid guesswork.
     """
     try:
         from gradio.components.slider import Slider
         from gradio.components.dropdown import Dropdown
+        from gradio.exceptions import Error as GradioError
     except Exception:
         return
 
@@ -223,21 +227,21 @@ def _install_gradio_type_guards():
 
     def wrapped(self, payload):
         p = _coerce_numeric(payload)
-        # If a textual 'None' leaked in, prefer component's current value
-        if isinstance(p, str) and p.strip().lower() in ("none", "null"):
-            try:
-                default_val = getattr(self, "value", None)
-                if isinstance(default_val, (int, float)):
-                    p = default_val
-            except Exception:
-                pass
+
+        # Do not substitute sentinels (e.g. 'none'/'null'). Fail fast with context.
+        label = getattr(self, "label", None) or "<no-label>"
+        elem_id = getattr(self, "elem_id", None) or "<no-elem_id>"
+        minimum = getattr(self, "minimum", None)
+        maximum = getattr(self, "maximum", None)
+        step = getattr(self, "step", None)
+        default_val = getattr(self, "value", None)
+
         try:
             return _slider_orig(self, p)
-        except TypeError as e:
-            # Add context for easier debugging
-            label = getattr(self, "label", None) or "<no-label>"
-            elem_id = getattr(self, "elem_id", None) or "<no-elem_id>"
-            raise TypeError(f"Slider preprocess failed for {label} (elem_id={elem_id}); payload={payload!r}") from e
+        except (TypeError, ValueError, GradioError) as e:
+            meta = f"label={label!r} elem_id={elem_id!r} min={minimum!r} max={maximum!r} step={step!r} default={default_val!r} payload={payload!r} coerced={p!r}"
+            # Re-raise preserving the original exception type for compatibility.
+            raise type(e)(f"Slider error [{meta}]: {e}") from e
 
     wrapped._sdw_guarded = True  # type: ignore[attr-defined]
     Slider.preprocess = wrapped  # type: ignore[assignment]

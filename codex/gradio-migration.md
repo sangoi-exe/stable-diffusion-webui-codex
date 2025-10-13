@@ -22,7 +22,13 @@ Components
 
 - Update pattern: always return `gr.update(...)` for partial updates. Common keys:
   - `value=...`, `visible=True|False`, `interactive=True|False`, `choices=[...]`, `minimum=...`, `maximum=...`, `label=...`.
-  - Sliders/Number: front‑end enforces `[minimum, maximum]` before Python runs. Clamp on the server side and never emit ambiguous updates for them.
+  - Sliders/Number: front‑end enforces `[minimum, maximum]` before Python runs. Do not clamp on the server — send valid values and fail fast with clear errors (augmented with component context).
+
+Submit Payloads (strict JSON)
+
+- txt2img: send only `[id_task, ...custom_script_inputs, payload_json]`, where `payload_json` contains only active fields and carries `__strict_version` and `__active_ids`.
+- img2img: keep image/mask and batch file inputs positional; move scalars to the strict JSON. The server ignores positional scalars.
+- Hidden JSON elem ids: `txt2img_named_active`, `img2img_named_active`.
 
 Events
 
@@ -54,18 +60,22 @@ Tabs: programmatic selection
      .then(update_fields, inputs=[...], outputs=[...])
   ```
 
-Paste/Send‑to (safe sliders)
+Paste/Send‑to (validate sliders)
 
-- Clamp and avoid empty updates for sliders:
+- Validate inputs and raise on invalid values instead of clamping silently:
   ```python
-  def _clamp(x, lo, hi, cast=int):
-      try: x = cast(float(x))
-      except Exception: return lo
-      return max(lo, min(hi, x))
+  def _parse_int(x):
+      if isinstance(x, (int, float)):
+          return int(x)
+      if isinstance(x, str) and x.strip().replace(".", "", 1).isdigit():
+          return int(float(x))
+      raise ValueError(f"invalid numeric payload: {x!r}")
 
   def paste_from_pnginfo(params):
-      w = _clamp(params.get("Size-1", 512), 64, 2048)
-      h = _clamp(params.get("Size-2", 512), 64, 2048)
+      w = _parse_int(params.get("Size-1", 512))
+      h = _parse_int(params.get("Size-2", 512))
+      if not (64 <= w <= 2048) or not (64 <= h <= 2048):
+          raise ValueError(f"out-of-bounds size: {w}x{h}")
       return gr.update(value=w), gr.update(value=h)
   ```
 

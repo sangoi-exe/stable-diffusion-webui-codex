@@ -17,9 +17,9 @@ import modules.scripts
 from modules_forge import main_thread
 
 
-def process_batch(p, input, output_dir, inpaint_mask_dir, args, to_scale=False, scale_by=1.0, use_png_info=False, png_info_props=None, png_info_dir=None):
+def process_batch(proc, input, output_dir, inpaint_mask_dir, args, to_scale=False, scale_by=1.0, use_png_info=False, png_info_props=None, png_info_dir=None):
     output_dir = output_dir.strip()
-    processing.fix_seed(p)
+    processing.fix_seed(proc)
 
     if isinstance(input, str):
         batch_images = list(shared.walk_files(input, allowed_extensions=(".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".avif")))
@@ -34,18 +34,18 @@ def process_batch(p, input, output_dir, inpaint_mask_dir, args, to_scale=False, 
         if is_inpaint_batch:
             print(f"\nInpaint batch is enabled. {len(inpaint_masks)} masks found.")
 
-    print(f"Will process {len(batch_images)} images, creating {p.n_iter * p.batch_size} new images for each.")
+    print(f"Will process {len(batch_images)} images, creating {proc.n_iter * proc.batch_size} new images for each.")
 
-    state.job_count = len(batch_images) * p.n_iter
+    state.job_count = len(batch_images) * proc.n_iter
 
     # extract "default" params to use in case getting png info fails
-    prompt = p.prompt
-    negative_prompt = p.negative_prompt
-    seed = p.seed
-    cfg_scale = p.cfg_scale
-    sampler_name = p.sampler_name
-    steps = p.steps
-    override_settings = p.override_settings
+    prompt = proc.prompt
+    negative_prompt = proc.negative_prompt
+    seed = proc.seed
+    cfg_scale = proc.cfg_scale
+    sampler_name = proc.sampler_name
+    steps = proc.steps
+    override_settings = proc.override_settings
     sd_model_checkpoint_override = get_closet_checkpoint_match(override_settings.get("sd_model_checkpoint", None))
     batch_results = None
     discard_further_results = False
@@ -66,10 +66,10 @@ def process_batch(p, input, output_dir, inpaint_mask_dir, args, to_scale=False, 
         img = ImageOps.exif_transpose(img)
 
         if to_scale:
-            p.width = int(img.width * scale_by)
-            p.height = int(img.height * scale_by)
+            proc.width = int(img.width * scale_by)
+            proc.height = int(img.height * scale_by)
 
-        p.init_images = [img] * p.batch_size
+        proc.init_images = [img] * proc.batch_size
 
         image_path = Path(image)
         if is_inpaint_batch:
@@ -90,7 +90,7 @@ def process_batch(p, input, output_dir, inpaint_mask_dir, args, to_scale=False, 
                 mask_image_path = masks_found[0]
 
             mask_image = images.read(mask_image_path)
-            p.image_mask = mask_image
+            proc.image_mask = mask_image
 
         if use_png_info:
             try:
@@ -104,40 +104,40 @@ def process_batch(p, input, output_dir, inpaint_mask_dir, args, to_scale=False, 
             except Exception:
                 parsed_parameters = {}
 
-            p.prompt = prompt + (" " + parsed_parameters["Prompt"] if "Prompt" in parsed_parameters else "")
-            p.negative_prompt = negative_prompt + (" " + parsed_parameters["Negative prompt"] if "Negative prompt" in parsed_parameters else "")
-            p.seed = int(parsed_parameters.get("Seed", seed))
-            p.cfg_scale = float(parsed_parameters.get("CFG scale", cfg_scale))
-            p.sampler_name = parsed_parameters.get("Sampler", sampler_name)
-            p.steps = int(parsed_parameters.get("Steps", steps))
+            proc.prompt = prompt + (" " + parsed_parameters["Prompt"] if "Prompt" in parsed_parameters else "")
+            proc.negative_prompt = negative_prompt + (" " + parsed_parameters["Negative prompt"] if "Negative prompt" in parsed_parameters else "")
+            proc.seed = int(parsed_parameters.get("Seed", seed))
+            proc.cfg_scale = float(parsed_parameters.get("CFG scale", cfg_scale))
+            proc.sampler_name = parsed_parameters.get("Sampler", sampler_name)
+            proc.steps = int(parsed_parameters.get("Steps", steps))
 
             model_info = get_closet_checkpoint_match(parsed_parameters.get("Model hash", None))
             if model_info is not None:
-                p.override_settings['sd_model_checkpoint'] = model_info.name
+                proc.override_settings['sd_model_checkpoint'] = model_info.name
             elif sd_model_checkpoint_override:
-                p.override_settings['sd_model_checkpoint'] = sd_model_checkpoint_override
+                proc.override_settings['sd_model_checkpoint'] = sd_model_checkpoint_override
             else:
-                p.override_settings.pop("sd_model_checkpoint", None)
+                proc.override_settings.pop("sd_model_checkpoint", None)
 
         if output_dir:
-            p.outpath_samples = output_dir
-            p.override_settings['save_to_dirs'] = False
+            proc.outpath_samples = output_dir
+            proc.override_settings['save_to_dirs'] = False
 
         if opts.img2img_batch_use_original_name:
-            filename_pattern = f'{image_path.stem}-[generation_number]' if p.n_iter > 1 or p.batch_size > 1 else f'{image_path.stem}'
-            p.override_settings['samples_filename_pattern'] = filename_pattern
+            filename_pattern = f'{image_path.stem}-[generation_number]' if proc.n_iter > 1 or proc.batch_size > 1 else f'{image_path.stem}'
+            proc.override_settings['samples_filename_pattern'] = filename_pattern
 
-        proc = modules.scripts.scripts_img2img.run(p, *args)
+        result = modules.scripts.scripts_img2img.run(proc, *args)
 
-        if proc is None:
-            proc = process_images(p)
+        if result is None:
+            result = process_images(proc)
 
-        if not discard_further_results and proc:
+        if not discard_further_results and result:
             if batch_results:
-                batch_results.images.extend(proc.images)
-                batch_results.infotexts.extend(proc.infotexts)
+                batch_results.images.extend(result.images)
+                batch_results.infotexts.extend(result.infotexts)
             else:
-                batch_results = proc
+                batch_results = result
 
             if 0 <= shared.opts.img2img_batch_show_results_limit < len(batch_results.images):
                 discard_further_results = True
@@ -195,7 +195,7 @@ def img2img_function(id_task: str, request: gr.Request, mode: int, prompt: str, 
 
     assert 0. <= denoising_strength <= 1., 'can only work with strength in [0.0, 1.0]'
 
-    p = StableDiffusionProcessingImg2Img(
+    proc = StableDiffusionProcessingImg2Img(
         outpath_samples=opts.outdir_samples or opts.outdir_img2img_samples,
         outpath_grids=opts.outdir_grids or opts.outdir_img2img_grids,
         prompt=prompt,
@@ -220,32 +220,32 @@ def img2img_function(id_task: str, request: gr.Request, mode: int, prompt: str, 
         distilled_cfg_scale=distilled_cfg_scale
     )
 
-    p.scripts = modules.scripts.scripts_img2img
-    p.script_args = args
+    proc.scripts = modules.scripts.scripts_img2img
+    proc.script_args = args
 
-    p.user = request.username
+    proc.user = request.username
 
     if shared.opts.enable_console_prompts:
         print(f"\nimg2img: {prompt}", file=shared.progress_print_out)
 
-    with closing(p):
+    with closing(proc):
         if is_batch:
             if img2img_batch_source_type == "upload":
                 assert isinstance(img2img_batch_upload, list) and img2img_batch_upload
                 output_dir = ""
                 inpaint_mask_dir = ""
                 png_info_dir = img2img_batch_png_info_dir if not shared.cmd_opts.hide_ui_dir_config else ""
-                processed = process_batch(p, img2img_batch_upload, output_dir, inpaint_mask_dir, args, to_scale=selected_scale_tab == 1, scale_by=scale_by, use_png_info=img2img_batch_use_png_info, png_info_props=img2img_batch_png_info_props, png_info_dir=png_info_dir)
+                processed = process_batch(proc, img2img_batch_upload, output_dir, inpaint_mask_dir, args, to_scale=selected_scale_tab == 1, scale_by=scale_by, use_png_info=img2img_batch_use_png_info, png_info_props=img2img_batch_png_info_props, png_info_dir=png_info_dir)
             else: # "from dir"
                 assert not shared.cmd_opts.hide_ui_dir_config, "Launched with --hide-ui-dir-config, batch img2img disabled"
-                processed = process_batch(p, img2img_batch_input_dir, img2img_batch_output_dir, img2img_batch_inpaint_mask_dir, args, to_scale=selected_scale_tab == 1, scale_by=scale_by, use_png_info=img2img_batch_use_png_info, png_info_props=img2img_batch_png_info_props, png_info_dir=img2img_batch_png_info_dir)
+                processed = process_batch(proc, img2img_batch_input_dir, img2img_batch_output_dir, img2img_batch_inpaint_mask_dir, args, to_scale=selected_scale_tab == 1, scale_by=scale_by, use_png_info=img2img_batch_use_png_info, png_info_props=img2img_batch_png_info_props, png_info_dir=img2img_batch_png_info_dir)
 
             if processed is None:
-                processed = Processed(p, [], p.seed, "")
+                processed = Processed(proc, [], proc.seed, "")
         else:
-            processed = modules.scripts.scripts_img2img.run(p, *args)
+            processed = modules.scripts.scripts_img2img.run(proc, *args)
             if processed is None:
-                processed = process_images(p)
+                processed = process_images(proc)
 
     shared.total_tqdm.clear()
 
@@ -261,3 +261,152 @@ def img2img_function(id_task: str, request: gr.Request, mode: int, prompt: str, 
 
 def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_prompt: str, prompt_styles, init_img, sketch, sketch_fg, init_img_with_mask, init_img_with_mask_fg, inpaint_color_sketch, inpaint_color_sketch_fg, init_img_inpaint, init_mask_inpaint, mask_blur: int, mask_alpha: float, inpainting_fill: int, n_iter: int, batch_size: int, cfg_scale: float, distilled_cfg_scale: float, image_cfg_scale: float, denoising_strength: float, selected_scale_tab: int, height: int, width: int, scale_by: float, resize_mode: int, inpaint_full_res: bool, inpaint_full_res_padding: int, inpainting_mask_invert: int, img2img_batch_input_dir: str, img2img_batch_output_dir: str, img2img_batch_inpaint_mask_dir: str, override_settings_texts, img2img_batch_use_png_info: bool, img2img_batch_png_info_props: list, img2img_batch_png_info_dir: str, img2img_batch_source_type: str, img2img_batch_upload: list, *args):
     return main_thread.run_and_wait_result(img2img_function, id_task, request, mode, prompt, negative_prompt, prompt_styles, init_img, sketch, sketch_fg, init_img_with_mask, init_img_with_mask_fg, inpaint_color_sketch, inpaint_color_sketch_fg, init_img_inpaint, init_mask_inpaint, mask_blur, mask_alpha, inpainting_fill, n_iter, batch_size, cfg_scale, distilled_cfg_scale, image_cfg_scale, denoising_strength, selected_scale_tab, height, width, scale_by, resize_mode, inpaint_full_res, inpaint_full_res_padding, inpainting_mask_invert, img2img_batch_input_dir, img2img_batch_output_dir, img2img_batch_inpaint_mask_dir, override_settings_texts, img2img_batch_use_png_info, img2img_batch_png_info_props, img2img_batch_png_info_dir, img2img_batch_source_type, img2img_batch_upload, *args)
+
+
+# Strict JSON helpers
+def _require(payload: dict, key: str):
+    if key not in payload:
+        raise ValueError(f"Missing required field in payload: {key}")
+    return payload[key]
+
+
+def _as_int(payload: dict, key: str) -> int:
+    v = _require(payload, key)
+    if isinstance(v, bool):
+        raise ValueError(f"Field {key} must be int, got bool")
+    try:
+        return int(v)
+    except Exception:
+        raise ValueError(f"Field {key} must be int, got {v!r}")
+
+
+def _as_float(payload: dict, key: str) -> float:
+    v = _require(payload, key)
+    try:
+        return float(v)
+    except Exception:
+        raise ValueError(f"Field {key} must be float, got {v!r}")
+
+
+def _as_bool(payload: dict, key: str) -> bool:
+    v = _require(payload, key)
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    if isinstance(v, str):
+        t = v.strip().lower()
+        if t in ("true", "1", "yes", "on"): return True
+        if t in ("false", "0", "no", "off"): return False
+    raise ValueError(f"Field {key} must be bool, got {v!r}")
+
+
+def _as_list(payload: dict, key: str):
+    v = _require(payload, key)
+    if isinstance(v, list):
+        return v
+    raise ValueError(f"Field {key} must be list, got {type(v).__name__}")
+
+
+def img2img_from_json(id_task: str,
+                      request: gr.Request,
+                      _prompt_passthrough,
+                      _neg_passthrough,
+                      _styles_dropdown,
+                      init_img,
+                      sketch,
+                      sketch_fg,
+                      init_img_with_mask,
+                      init_img_with_mask_fg,
+                      inpaint_color_sketch,
+                      inpaint_color_sketch_fg,
+                      init_img_inpaint,
+                      init_mask_inpaint,
+                      img2img_batch_input_dir: str,
+                      img2img_batch_output_dir: str,
+                      img2img_batch_inpaint_mask_dir: str,
+                      img2img_batch_use_png_info: bool,
+                      img2img_batch_png_info_props: list,
+                      img2img_batch_png_info_dir: str,
+                      img2img_batch_source_type: str,
+                      img2img_batch_upload: list,
+                      *rest):
+    if not rest:
+        raise ValueError("Missing JSON payload in img2img_from_json")
+    # split custom script args vs payload
+    payload = rest[-1]
+    script_args = tuple(rest[:-1]) if len(rest) > 1 else tuple()
+
+    if not isinstance(payload, dict) or payload.get("__strict_version") != 1:
+        raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
+
+    prompt = _require(payload, 'img2img_prompt') or ''
+    negative_prompt = _require(payload, 'img2img_neg_prompt') or ''
+    prompt_styles = _as_list(payload, 'img2img_styles')
+    n_iter = _as_int(payload, 'img2img_batch_count')
+    batch_size = _as_int(payload, 'img2img_batch_size')
+    cfg_scale = _as_float(payload, 'img2img_cfg_scale')
+    distilled_cfg_scale = _as_float(payload, 'img2img_distilled_cfg_scale')
+    image_cfg_scale = _as_float(payload, 'img2img_image_cfg_scale')
+    denoising_strength = _as_float(payload, 'img2img_denoising_strength')
+    selected_scale_tab = _as_int(payload, 'img2img_selected_scale_tab')
+    height = _as_int(payload, 'img2img_height')
+    width = _as_int(payload, 'img2img_width')
+    scale_by = _as_float(payload, 'img2img_scale_by')
+    resize_mode = _as_int(payload, 'img2img_resize_mode')
+
+    # Inpaint-related (required if on inpaint tabs; otherwise ignored)
+    inpaint_full_res = bool(payload.get('img2img_inpaint_full_res', False))
+    inpaint_full_res_padding = int(payload.get('img2img_inpaint_full_res_padding', 0))
+    inpainting_mask_invert = int(payload.get('img2img_inpainting_mask_invert', 0))
+    mask_blur = int(payload.get('img2img_mask_blur', 0))
+    mask_alpha = float(payload.get('img2img_mask_alpha', 0.0))
+    inpainting_fill = int(payload.get('img2img_inpainting_fill', 0))
+
+    override_settings_texts = []
+
+    return main_thread.run_and_wait_result(
+        img2img_function,
+        id_task,
+        request,
+        0,  # mode is unused in processing path
+        prompt,
+        negative_prompt,
+        prompt_styles,
+        init_img,
+        sketch,
+        sketch_fg,
+        init_img_with_mask,
+        init_img_with_mask_fg,
+        inpaint_color_sketch,
+        inpaint_color_sketch_fg,
+        init_img_inpaint,
+        init_mask_inpaint,
+        mask_blur,
+        mask_alpha,
+        inpainting_fill,
+        n_iter,
+        batch_size,
+        cfg_scale,
+        distilled_cfg_scale,
+        image_cfg_scale,
+        denoising_strength,
+        selected_scale_tab,
+        height,
+        width,
+        scale_by,
+        resize_mode,
+        inpaint_full_res,
+        inpaint_full_res_padding,
+        inpainting_mask_invert,
+        img2img_batch_input_dir,
+        img2img_batch_output_dir,
+        img2img_batch_inpaint_mask_dir,
+        override_settings_texts,
+        img2img_batch_use_png_info,
+        img2img_batch_png_info_props,
+        img2img_batch_png_info_dir,
+        img2img_batch_source_type,
+        img2img_batch_upload,
+        *script_args,
+    )

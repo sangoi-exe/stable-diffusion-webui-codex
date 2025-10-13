@@ -313,12 +313,31 @@ class ControlNetForForgeOfficial(scripts.Script):
 
         for input_image, input_mask in optional_tqdm(input_list, len(input_list) > 1):
             if unit.pixel_perfect:
-                unit.processor_res = external_code.pixel_perfect_resolution(
+                # Compute pixel-perfect resolution and align to the selected preprocessor's domain
+                raw_res = external_code.pixel_perfect_resolution(
                     input_image,
                     target_H=h,
                     target_W=w,
                     resize_mode=resize_mode,
                 )
+                # Resolve allowed bounds from the preprocessor configuration; fail loudly if missing
+                res_param = getattr(preprocessor, "slider_resolution", None)
+                if res_param is None:
+                    raise RuntimeError(
+                        f"Preprocessor '{unit.module}' does not define slider_resolution; "
+                        f"cannot align pixel-perfect resolution (computed {raw_res})."
+                    )
+                kw = getattr(res_param, "gradio_update_kwargs", {})
+                if not {"minimum", "maximum", "step"} <= set(kw.keys()):
+                    raise RuntimeError(
+                        f"Preprocessor '{unit.module}' slider_resolution must define minimum/maximum/step; got {kw}."
+                    )
+                lo, hi, st = kw["minimum"], kw["maximum"], kw["step"]
+                if not isinstance(st, (int, float)) or st == 0:
+                    raise RuntimeError(f"Invalid step for '{unit.module}': {st!r}")
+                # Snap to step and bound to [lo, hi]
+                snapped = int(round(float(raw_res) / float(st)) * float(st))
+                unit.processor_res = int(min(max(snapped, lo), hi))
 
             seed = set_numpy_seed(p)
             logger.debug(f"Use numpy seed {seed}.")

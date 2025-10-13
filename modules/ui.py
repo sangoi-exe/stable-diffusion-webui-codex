@@ -455,36 +455,12 @@ def create_ui():
 
             output_panel = create_output_panel("txt2img", opts.outdir_txt2img_samples, toprow)
 
-            named_override_txt2img = gr.JSON(value=None, visible=False, elem_id="txt2img_named_override")
+            named_active_txt2img = gr.JSON(value=None, visible=False, elem_id="txt2img_named_active")
 
+            # Compact: only id + custom script inputs + strict JSON
             txt2img_inputs = [
                 dummy_component,
-                toprow.prompt,
-                toprow.negative_prompt,
-                toprow.ui_styles.dropdown,
-                batch_count,
-                batch_size,
-                cfg_scale,
-                distilled_cfg_scale,
-                height,
-                width,
-                hr_enable,
-                denoising_strength,
-                hr_scale,
-                hr_upscaler,
-                hr_second_pass_steps,
-                hr_resize_x,
-                hr_resize_y,
-                hr_checkpoint_name,
-                hr_additional_modules,
-                hr_sampler_name,
-                hr_scheduler,
-                hr_prompt,
-                hr_negative_prompt,
-                hr_cfg,
-                hr_distilled_cfg,
-                override_settings,
-            ] + custom_inputs + [named_override_txt2img]
+            ] + custom_inputs + [named_active_txt2img]
 
             txt2img_outputs = [
                 output_panel.gallery,
@@ -494,64 +470,64 @@ def create_ui():
             ]
 
             def _normalize_args(components, values):
-                out = list(values)
                 try:
-                    # Apply named overrides if present
-                    try:
-                        for i, comp in enumerate(components):
-                            if isinstance(comp, gr.JSON) and getattr(comp, 'elem_id', '').endswith('_named_override'):
-                                named = out[i]
-                                if isinstance(named, dict):
-                                    # build elem_id and suffix maps
-                                    elem_map = {}
-                                    suffix_map = {}
-                                    for j, c in enumerate(components):
-                                        try:
-                                            eid = getattr(c, 'elem_id', None)
-                                            if isinstance(eid, str):
-                                                elem_map[eid] = j
-                                                parts = eid.split('_')
-                                                if len(parts) >= 2:
-                                                    suffix = parts[-1]
-                                                    suffix_map.setdefault(suffix, []).append(j)
-                                        except Exception:
-                                            pass
-                                    # Start from component.value when available to remove dependency on order
-                                    for j, c in enumerate(components):
-                                        try:
-                                            val = getattr(c, 'value', None)
-                                            # Use component value when it exists; keep existing otherwise
-                                            if val is not None:
-                                                out[j] = val
-                                        except Exception:
-                                            pass
-                                    for k, v in named.items():
-                                        idx = None
-                                        if isinstance(k, str) and k in elem_map:
-                                            idx = elem_map[k]
-                                        elif isinstance(k, str):
-                                            suf = k.rsplit('_', 1)[-1]
-                                            cands = suffix_map.get(suf)
-                                            if cands:
-                                                idx = cands[0]
-                                        if idx is not None and idx < len(out):
-                                            out[idx] = v
-                    except Exception:
-                        pass
-
-                    # Build elem_id index and some targeted fix-ups (steps/sampler/scheduler)
+                    # Build elem_id maps
+                    elem_map = {}
+                    suffix_map = {}
                     elem_ids = []
-                    for comp in components:
+                    for j, c in enumerate(components):
                         try:
-                            elem_ids.append(getattr(comp, 'elem_id', None))
+                            eid = getattr(c, 'elem_id', None)
                         except Exception:
-                            elem_ids.append(None)
+                            eid = None
+                        elem_ids.append(eid)
+                        if isinstance(eid, str):
+                            elem_map[eid] = j
+                            parts = eid.split('_')
+                            if len(parts) >= 2:
+                                suffix = parts[-1]
+                                suffix_map.setdefault(suffix, []).append(j)
 
+                    # Start from component defaults; strict mode will then override only active elements
+                    out = [getattr(c, 'value', None) for c in components]
+
+                    # Find named override JSON (last element in our inputs)
+                    named = None
+                    for i, comp in enumerate(components):
+                        if isinstance(comp, gr.JSON):
+                            eid = str(getattr(comp, 'elem_id', ''))
+                            if not (eid.endswith('_named_override') or eid.endswith('_named_active')):
+                                continue
+                            cand = values[i] if i < len(values) else None
+                            if isinstance(cand, dict):
+                                named = cand
+                            break
+
+                    strict = bool(isinstance(named, dict) and named.get('__strict_version'))
+
+                    # If not strict, begin from incoming values to preserve legacy behaviour
+                    if not strict:
+                        out = list(values)
+
+                    # Apply named overrides
+                    if isinstance(named, dict):
+                        for k, v in named.items():
+                            if not isinstance(k, str) or k.startswith('__'):
+                                continue
+                            idx = elem_map.get(k)
+                            if idx is None:
+                                # fallback: match by suffix
+                                suf = k.rsplit('_', 1)[-1]
+                                cands = suffix_map.get(suf)
+                                idx = cands[0] if cands else None
+                            if idx is not None and idx < len(out):
+                                out[idx] = v
+
+                    # Normalize types for Sliders and Dropdowns
                     for i, comp in enumerate(components):
                         if i >= len(out):
                             break
                         v = out[i]
-                        # Normalize Sliders (Number)
                         if isinstance(comp, gr.Slider):
                             if isinstance(v, str):
                                 t = v.strip().lower()
@@ -563,21 +539,22 @@ def create_ui():
                                     except Exception:
                                         v = comp.value
                             out[i] = v
-                        # Normalize Dropdowns
                         elif isinstance(comp, gr.Dropdown):
-                            choices = list(comp.choices or [])
+                            choices = list(getattr(comp, 'choices', []) or [])
                             if isinstance(v, (tuple, list)) and v:
                                 v = v[0]
                             if isinstance(v, (int, float)) and choices:
                                 idx = int(v)
-                                v = choices[idx] if 0 <= idx < len(choices) else (comp.value if comp.value in choices else choices[0])
+                                v = choices[idx] if 0 <= idx < len(choices) else (comp.value if comp.value in choices else (choices[0] if choices else v))
                             elif isinstance(v, str):
-                                if v.strip().lower() in ("none", "null"):
+                                vt = v.strip().lower()
+                                if vt in ("none", "null"):
                                     v = comp.value if (isinstance(comp.value, str) and comp.value in choices) else (choices[0] if choices else v)
                                 elif choices and v not in choices:
-                                    v = comp.value if (isinstance(comp.value, str) and comp.value in choices) else choices[0]
+                                    v = comp.value if (isinstance(comp.value, str) and comp.value in choices) else (choices[0] if choices else v)
                             out[i] = v
-                    # Targeted swap: steps <-> sampler when inverted
+
+                    # Targeted fix-ups: steps/sampler/scheduler alignment
                     def _try_swap(a_idx, b_idx, cond):
                         if a_idx is None or b_idx is None:
                             return
@@ -590,9 +567,7 @@ def create_ui():
                         steps_idx = next((i for i,e in enumerate(elem_ids) if isinstance(components[i], gr.Slider) and isinstance(e, str) and e.endswith('_steps')), None)
                         sampler_idx = next((i for i,e in enumerate(elem_ids) if isinstance(components[i], gr.Dropdown) and isinstance(e, str) and e.endswith('_sampling')), None)
                         sched_idx = next((i for i,e in enumerate(elem_ids) if isinstance(components[i], gr.Dropdown) and isinstance(e, str) and e.endswith('_scheduler')), None)
-                        # swap numeric from sampler into steps
                         _try_swap(steps_idx, sampler_idx, lambda a,b: not isinstance(a,(int,float)) and isinstance(b,(int,float)))
-                        # ensure sampler is in its choices
                         if sampler_idx is not None:
                             comp = components[sampler_idx]
                             if isinstance(comp, gr.Dropdown):
@@ -600,7 +575,6 @@ def create_ui():
                                 v = out[sampler_idx]
                                 if isinstance(v, str) and choices and v not in choices:
                                     out[sampler_idx] = comp.value if (isinstance(comp.value,str) and comp.value in choices) else choices[0]
-                        # ensure scheduler is in its choices
                         if sched_idx is not None:
                             comp = components[sched_idx]
                             if isinstance(comp, gr.Dropdown):
@@ -610,13 +584,19 @@ def create_ui():
                                     out[sched_idx] = comp.value if (isinstance(comp.value,str) and comp.value in choices) else choices[0]
                     except Exception:
                         pass
+
                     return tuple(out)
                 except Exception:
                     return values
 
-            def _txt2img_submit(*args):
-                args = _normalize_args(txt2img_inputs, args)
-                return modules.txt2img.txt2img(*args)
+            def _txt2img_submit(*args, **kwargs):
+                if not args:
+                    raise RuntimeError("Missing arguments for txt2img submit")
+                id_task = args[0]
+                payload = args[-1]
+                script_args = tuple(args[1:-1]) if len(args) > 2 else tuple()
+                request = kwargs.get('request')
+                return modules.txt2img.txt2img_from_json(id_task, request, payload, *script_args)
 
             txt2img_args = dict(
                 fn=wrap_gradio_gpu_call(_txt2img_submit, extra_outputs=[None, '', '']),
@@ -642,9 +622,15 @@ def create_ui():
                     index += 1
                 return gr.update(selected_index=index)
 
-            txt2img_upscale_inputs = txt2img_inputs[0:1] + [output_panel.gallery, dummy_component_number, output_panel.generation_info] + txt2img_inputs[1:]
+            # id + gallery + index + gen_info + custom_inputs + JSON
+            txt2img_upscale_inputs = [
+                txt2img_inputs[0],
+                output_panel.gallery,
+                dummy_component_number,
+                output_panel.generation_info,
+            ] + (txt2img_inputs[1:-1]) + [txt2img_inputs[-1]]
             output_panel.button_upscale.click(
-                fn=wrap_gradio_gpu_call(modules.txt2img.txt2img_upscale, extra_outputs=[None, '', '']),
+                fn=wrap_gradio_gpu_call(modules.txt2img.txt2img_upscale_from_json, extra_outputs=[None, '', '']),
                 inputs=txt2img_upscale_inputs,
                 outputs=txt2img_outputs,
                 show_progress='hidden',
@@ -937,14 +923,15 @@ def create_ui():
 
             output_panel = create_output_panel("img2img", opts.outdir_img2img_samples, toprow)
 
-            named_override_img2img = gr.JSON(value=None, visible=False, elem_id="img2img_named_override")
+            named_active_img2img = gr.JSON(value=None, visible=False, elem_id="img2img_named_active")
 
             submit_img2img_inputs = [
                 dummy_component,
-                img2img_selected_tab,
+                # keep prompt/negative for interrogate hooks; values will be overridden by JSON on submit
                 toprow.prompt,
                 toprow.negative_prompt,
                 toprow.ui_styles.dropdown,
+                # images/masks
                 init_img.background,
                 sketch.background,
                 sketch.foreground,
@@ -954,37 +941,21 @@ def create_ui():
                 inpaint_color_sketch.foreground,
                 init_img_inpaint,
                 init_mask_inpaint,
-                mask_blur,
-                mask_alpha,
-                inpainting_fill,
-                batch_count,
-                batch_size,
-                cfg_scale,
-                distilled_cfg_scale,
-                image_cfg_scale,
-                denoising_strength,
-                selected_scale_tab,
-                height,
-                width,
-                scale_by,
-                resize_mode,
-                inpaint_full_res,
-                inpaint_full_res_padding,
-                inpainting_mask_invert,
+                # batch/source inputs
                 img2img_batch_input_dir,
                 img2img_batch_output_dir,
                 img2img_batch_inpaint_mask_dir,
-                override_settings,
                 img2img_batch_use_png_info,
                 img2img_batch_png_info_props,
                 img2img_batch_png_info_dir,
                 img2img_batch_source_type,
                 img2img_batch_upload,
-            ] + custom_inputs + [named_override_img2img]
+            ] + custom_inputs + [named_active_img2img]
 
-            def _img2img_submit(*args):
-                args = _normalize_args(submit_img2img_inputs, args)
-                return modules.img2img.img2img(*args)
+            def _img2img_submit(*args, **kwargs):
+                if not args:
+                    raise RuntimeError("Missing arguments for img2img submit")
+                return modules.img2img.img2img_from_json(*args, **kwargs)
 
             img2img_args = dict(
                 fn=wrap_gradio_gpu_call(_img2img_submit, extra_outputs=[None, '', '']),

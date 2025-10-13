@@ -770,12 +770,28 @@ class ControlNetUiGroup(object):
             preprocessor = global_state.get_preprocessor(module)
 
             if pp:
-                pres = external_code.pixel_perfect_resolution(
+                raw = external_code.pixel_perfect_resolution(
                     img,
                     target_H=t2i_h,
                     target_W=t2i_w,
                     resize_mode=external_code.resize_mode_from_value(rm),
                 )
+                # Align to preprocessor slider domain; fail if the domain is unknown
+                res_param = getattr(preprocessor, "slider_resolution", None)
+                if res_param is None:
+                    raise RuntimeError(
+                        f"Preprocessor '{module}' lacks slider_resolution; cannot align pixel-perfect resolution (computed {raw})."
+                    )
+                kw = getattr(res_param, "gradio_update_kwargs", {})
+                if not {"minimum", "maximum", "step"} <= set(kw.keys()):
+                    raise RuntimeError(
+                        f"Preprocessor '{module}' slider_resolution must define minimum/maximum/step; got {kw}."
+                    )
+                lo, hi, st = kw["minimum"], kw["maximum"], kw["step"]
+                if not isinstance(st, (int, float)) or st == 0:
+                    raise RuntimeError(f"Invalid step for '{module}': {st!r}")
+                snapped = int(round(float(raw) / float(st)) * float(st))
+                pres = int(min(max(snapped, lo), hi))
 
             class JsonAcceptor:
                 def __init__(self) -> None:
