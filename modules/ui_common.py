@@ -1,9 +1,11 @@
+from __future__ import annotations
 import csv
 import dataclasses
 import json
 import html
 import os
 from contextlib import nullcontext
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import gradio as gr
 
@@ -16,16 +18,16 @@ folder_symbol = '\U0001f4c2'  # 📂
 refresh_symbol = '\U0001f504'  # 🔄
 
 # Registry to map tabname -> gallery index state component
-_GALLERY_INDEX_STATES = {}
+_GALLERY_INDEX_STATES: Dict[str, gr.State] = {}
 
-def register_gallery_index(tabname: str, state_comp: gr.State):
+def register_gallery_index(tabname: str, state_comp: gr.State) -> None:
     _GALLERY_INDEX_STATES[tabname] = state_comp
 
-def get_gallery_index_state(tabname: str):
+def get_gallery_index_state(tabname: str) -> Optional[gr.State]:
     return _GALLERY_INDEX_STATES.get(tabname)
 
 
-def update_generation_info(generation_info, html_info, img_index):
+def update_generation_info(generation_info: str, html_info: Any, img_index: int) -> tuple[Any, Any]:
     try:
         generation_info = json.loads(generation_info)
         if img_index < 0 or img_index >= len(generation_info["infotexts"]):
@@ -37,13 +39,13 @@ def update_generation_info(generation_info, html_info, img_index):
     return html_info, gr.update()
 
 
-def plaintext_to_html(text, classname=None):
+def plaintext_to_html(text: str, classname: Optional[str] = None) -> str:
     content = "<br>\n".join(html.escape(x) for x in text.split('\n'))
 
     return f"<p class='{classname}'>{content}</p>" if classname else f"<p>{content}</p>"
 
 
-def update_logfile(logfile_path, fields):
+def update_logfile(logfile_path: str, fields: Sequence[str]) -> None:
     """Update a logfile from old format to new format to maintain CSV integrity."""
     with open(logfile_path, "r", encoding="utf8", newline="") as file:
         reader = csv.reader(file)
@@ -69,14 +71,14 @@ def update_logfile(logfile_path, fields):
         writer.writerows(rows)
 
 
-def save_files(js_data, images, do_make_zip, index):
-    filenames = []
-    fullfns = []
-    parsed_infotexts = []
+def save_files(js_data: str, images: Sequence[Sequence[Any]], do_make_zip: bool, index: int):
+    filenames: List[str] = []
+    fullfns: List[str] = []
+    parsed_infotexts: List[Dict[str, Any]] = []
 
     # quick dictionary to class object conversion. Its necessary due apply_filename_pattern requiring it
     class MyObject:
-        def __init__(self, d=None):
+        def __init__(self, d: Optional[Dict[str, Any]] = None):
             if d is not None:
                 for key, value in d.items():
                     setattr(self, key, value)
@@ -171,7 +173,7 @@ class OutputPanel:
 def create_output_panel(tabname, outdir, toprow=None):
     res = OutputPanel()
 
-    def open_folder(f, images=None, index=None):
+    def open_folder(f: str, images: Sequence[Dict[str, Any]] | None = None, index: int | None = None) -> None:
         if shared.cmd_opts.hide_ui_dir_config:
             return
 
@@ -194,7 +196,7 @@ def create_output_panel(tabname, outdir, toprow=None):
                 res.gallery = gr.Gallery(label='Output', show_label=False, elem_id=f"{tabname}_gallery", columns=4, preview=True, height=shared.opts.gallery_height or None, interactive=False, type="pil", object_fit="contain")
                 res.gallery_index = gr.State(value=0)
 
-                def _on_gallery_select(evt: gr.SelectData):
+                def _on_gallery_select(evt: gr.SelectData) -> int:
                     try:
                         return int(getattr(evt, 'index', 0))
                     except Exception:
@@ -294,7 +296,7 @@ def create_output_panel(tabname, outdir, toprow=None):
     return res
 
 
-def create_refresh_button(refresh_component, refresh_method, refreshed_args, elem_id):
+def create_refresh_button(refresh_component: gr.components.Component | list[gr.components.Component], refresh_method: Callable[[], None], refreshed_args: Callable[[], Dict[str, Any]] | Dict[str, Any], elem_id: str) -> ToolButton:
     refresh_components = refresh_component if isinstance(refresh_component, list) else [refresh_component]
 
     label = None
@@ -322,7 +324,7 @@ def create_refresh_button(refresh_component, refresh_method, refreshed_args, ele
     return refresh_button
 
 
-def setup_dialog(button_show, dialog, *, button_close=None):
+def setup_dialog(button_show: gr.components.Button, dialog: gr.components.Box, *, button_close: Optional[gr.components.Button] = None) -> None:
     """Sets up the UI so that the dialog (gr.Box) is invisible, and is only shown when buttons_show is clicked, in a fullscreen modal window."""
 
     dialog.visible = False

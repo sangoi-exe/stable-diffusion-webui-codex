@@ -1,4 +1,6 @@
+from __future__ import annotations
 import gradio as gr
+from typing import Any, Callable, Iterable, Optional
 
 from modules import ui_common, shared, script_callbacks, scripts, sd_models, sysinfo, timer, shared_items
 from modules.call_queue import wrap_gradio_call_no_job
@@ -10,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from modules_forge import main_entry
 
 
-def get_value_for_setting(key):
+def get_value_for_setting(key: str) -> gr.Update:
     value = getattr(opts, key)
 
     info = opts.data_labels[key]
@@ -20,8 +22,8 @@ def get_value_for_setting(key):
     return gr.update(value=value, **args)
 
 
-def create_setting_component(key, is_quicksettings=False):
-    def fun():
+def create_setting_component(key: str, is_quicksettings: bool = False):
+    def fun() -> Any:
         return opts.data[key] if key in opts.data else opts.data_labels[key].default
 
     info = opts.data_labels[key]
@@ -73,8 +75,8 @@ class UiSettings:
     show_one_page = None
     search_input = None
 
-    def run_settings(self, *args):
-        changed = []
+    def run_settings(self, *args: Any):
+        changed: list[str] = []
 
         for key, value, comp in zip(opts.data_labels.keys(), args, self.components):
             assert comp == self.dummy_component or opts.same_type(value, opts.data_labels[key].default), f"Bad value for setting {key}: {value}; expecting {type(opts.data_labels[key].default).__name__}"
@@ -96,7 +98,7 @@ class UiSettings:
             return opts.dumpjson(), f'{len(changed)} settings changed without save: {", ".join(changed)}.'
         return opts.dumpjson(), f'{len(changed)} settings changed{": " if changed else ""}{", ".join(changed)}.'
 
-    def run_settings_single(self, value, key):
+    def run_settings_single(self, value: Any, key: str):
         if not opts.same_type(value, opts.data_labels[key].default):
             return gr.update(visible=True), opts.dumpjson()
 
@@ -107,10 +109,10 @@ class UiSettings:
 
         return get_value_for_setting(key), opts.dumpjson()
 
-    def register_settings(self):
+    def register_settings(self) -> None:
         script_callbacks.ui_settings_callback()
 
-    def create_ui(self, loadsave, dummy_component):
+    def create_ui(self, loadsave: Any, dummy_component: gr.components.Component):
         self.components = []
         self.component_dict = {}
         self.dummy_component = dummy_component
@@ -216,8 +218,8 @@ class UiSettings:
 
                 self.text_settings = gr.Textbox(elem_id="settings_json", value=lambda: opts.dumpjson(), visible=False)
 
-            def call_func_and_return_text(func, text):
-                def handler():
+            def call_func_and_return_text(func: Callable[[], None], text: str):
+                def handler() -> str:
                     t = timer.Timer()
                     func()
                     t.record(text)
@@ -269,7 +271,7 @@ class UiSettings:
                 outputs=[],
             )
 
-            def check_file(x):
+            def check_file(x: Optional[bytes]) -> str:
                 if x is None:
                     return ''
 
@@ -284,7 +286,7 @@ class UiSettings:
                 outputs=[sysinfo_check_output],
             )
 
-            def get_internal_memory():
+            def get_internal_memory() -> dict[str, Any]:
                 try:
                     import os as _os
                     import psutil as _ps
@@ -334,7 +336,7 @@ class UiSettings:
                     queue=False,
                 )
 
-            def calculate_all_checkpoint_hash_fn(max_thread):
+            def calculate_all_checkpoint_hash_fn(max_thread: int) -> None:
                 checkpoints_list = sd_models.checkpoints_list.values()
                 with ThreadPoolExecutor(max_workers=max_thread) as executor:
                     futures = [executor.submit(checkpoint.calculate_shorthash) for checkpoint in checkpoints_list]
@@ -362,7 +364,7 @@ class UiSettings:
                 self.component_dict[k] = component
         return quicksettings_row
 
-    def add_functionality(self, demo):
+    def add_functionality(self, demo: gr.Blocks) -> None:
         self.submit.click(
             fn=wrap_gradio_call_no_job(lambda *args: self.run_settings(*args), extra_outputs=[gr.update()]),
             inputs=self.components,
@@ -419,7 +421,7 @@ class UiSettings:
             queue=False,
         )
 
-    def search(self, text):
+    def search(self, text: str):
         print(text)
 
         return [gr.update(visible=text in (comp.label or "")) for comp in self.components]

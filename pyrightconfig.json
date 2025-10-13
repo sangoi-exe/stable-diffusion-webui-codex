@@ -9,7 +9,18 @@
     "webui.py",
     "launch.py",
     "spaces.py",
-    "modules/ui*.py"
+    "modules/ui*.py",
+    "modules/ui_common.py",
+    "modules/ui_settings.py",
+    "modules/ui_extensions.py",
+    "modules/ui_toprow.py",
+    "modules/ui_components.py",
+    "modules/ui_postprocessing.py",
+    "modules/ui_checkpoint_merger.py",
+    "modules/ui_loadsave.py",
+    "modules/ui_prompt_styles.py",
+    "modules/ui_gradio_extensions.py",
+    "modules/ui_extra_networks*.py"
   ],
   "exclude": [
     "**/__pycache__",
