@@ -220,6 +220,8 @@ document.addEventListener("DOMContentLoaded", function() {
 // TypeError: '<' not supported between instances of 'str' and 'int'.
 (() => {
     const origFetch = window.fetch;
+    // Expose helper for WS wrapper
+    /** @type {any} */(window).buildNamedPayload = buildNamedPayload;
     /** @param {unknown} x */
     function coerceNumeric(x) {
         if (typeof x === 'string') {
@@ -233,6 +235,51 @@ document.addEventListener("DOMContentLoaded", function() {
             }
         }
         return x;
+    }
+
+    // Best-effort: enrich request with a named view using gradio_config when available
+    function buildNamedPayload(obj) {
+        try {
+            const fnIndex = typeof obj.fn_index === 'number' ? obj.fn_index : null;
+            const data = Array.isArray(obj.data) ? obj.data : null;
+            const cfg = /** @type {any} */ (window).gradio_config || null;
+            if (!fnIndex || !data || !cfg || !Array.isArray(cfg.components)) return null;
+            /** @type {Record<number,string>} */
+            const idToElem = {};
+            for (const c of cfg.components) {
+                const id = c && typeof c.id === 'number' ? c.id : null;
+                const elem = c && c.props && typeof c.props.elem_id === 'string' ? c.props.elem_id : null;
+                if (id != null && elem) idToElem[id] = elem;
+            }
+            const deps = cfg.dependencies || cfg.deps || [];
+            /** @type {number[]|null} */
+            let inputs = null;
+            for (const d of deps) {
+                const cand = d?.fn_index ?? d?.backend_fn ?? d?.id ?? d?.function_index ?? null;
+                if (cand === fnIndex) {
+                    // Try common properties that could hold input ids
+                    const candidates = [d?.inputs, d?.input_ids, d?.input_component_ids];
+                    for (const arr of candidates) {
+                        if (Array.isArray(arr) && arr.every((x) => typeof x === 'number')) {
+                            inputs = arr;
+                            break;
+                        }
+                    }
+                    if (inputs) break;
+                }
+            }
+            if (!inputs) return null;
+            /** @type {Record<string,unknown>} */
+            const named = {};
+            const L = Math.min(data.length, inputs.length);
+            for (let i = 0; i < L; i++) {
+                const key = idToElem[inputs[i]] || String(inputs[i]);
+                named[key] = data[i];
+            }
+            return named;
+        } catch (_) {
+            return null;
+        }
     }
 
     window.fetch = function(input, init) {
@@ -250,6 +297,9 @@ document.addEventListener("DOMContentLoaded", function() {
                         const body = JSON.parse(init.body);
                         if (Array.isArray(body?.data)) {
                             body.data = body.data.map(coerceNumeric);
+                            // Attach named mapping when possible
+                            const named = buildNamedPayload(body);
+                            if (named) body._named = named;
                             init.body = JSON.stringify(body);
                         }
                     } catch (e) {
@@ -290,6 +340,13 @@ document.addEventListener("DOMContentLoaded", function() {
                 const obj = JSON.parse(data);
                 if (obj && Array.isArray(obj.data)) {
                     obj.data = obj.data.map(coerce);
+                    // Attach named mapping when possible
+                    try {
+                        const named = (function(){
+                            try { return (/** @type {any} */(window)).buildNamedPayload ? (/** @type {any} */(window)).buildNamedPayload(obj) : null; } catch(_) { return null; }
+                        })();
+                        if (named) obj._named = named;
+                    } catch(_) {}
                     data = JSON.stringify(obj);
                 }
             }
