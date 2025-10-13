@@ -455,6 +455,8 @@ def create_ui():
 
             output_panel = create_output_panel("txt2img", opts.outdir_txt2img_samples, toprow)
 
+            named_override_txt2img = gr.JSON(value=None, visible=False, elem_id="txt2img_named_override")
+
             txt2img_inputs = [
                 dummy_component,
                 toprow.prompt,
@@ -482,7 +484,7 @@ def create_ui():
                 hr_cfg,
                 hr_distilled_cfg,
                 override_settings,
-            ] + custom_inputs
+            ] + custom_inputs + [named_override_txt2img]
 
             txt2img_outputs = [
                 output_panel.gallery,
@@ -494,6 +496,40 @@ def create_ui():
             def _normalize_args(components, values):
                 out = list(values)
                 try:
+                    # Apply named overrides if present
+                    try:
+                        for i, comp in enumerate(components):
+                            if isinstance(comp, gr.JSON) and getattr(comp, 'elem_id', '').endswith('_named_override'):
+                                named = out[i]
+                                if isinstance(named, dict):
+                                    # build elem_id and suffix maps
+                                    elem_map = {}
+                                    suffix_map = {}
+                                    for j, c in enumerate(components):
+                                        try:
+                                            eid = getattr(c, 'elem_id', None)
+                                            if isinstance(eid, str):
+                                                elem_map[eid] = j
+                                                parts = eid.split('_')
+                                                if len(parts) >= 2:
+                                                    suffix = parts[-1]
+                                                    suffix_map.setdefault(suffix, []).append(j)
+                                        except Exception:
+                                            pass
+                                    for k, v in named.items():
+                                        idx = None
+                                        if isinstance(k, str) and k in elem_map:
+                                            idx = elem_map[k]
+                                        elif isinstance(k, str):
+                                            suf = k.rsplit('_', 1)[-1]
+                                            cands = suffix_map.get(suf)
+                                            if cands:
+                                                idx = cands[0]
+                                        if idx is not None and idx < len(out):
+                                            out[idx] = v
+                    except Exception:
+                        pass
+
                     # Build elem_id index and some targeted fix-ups (steps/sampler/scheduler)
                     elem_ids = []
                     for comp in components:
@@ -892,6 +928,8 @@ def create_ui():
 
             output_panel = create_output_panel("img2img", opts.outdir_img2img_samples, toprow)
 
+            named_override_img2img = gr.JSON(value=None, visible=False, elem_id="img2img_named_override")
+
             submit_img2img_inputs = [
                 dummy_component,
                 img2img_selected_tab,
@@ -933,7 +971,7 @@ def create_ui():
                 img2img_batch_png_info_dir,
                 img2img_batch_source_type,
                 img2img_batch_upload,
-            ] + custom_inputs
+            ] + custom_inputs + [named_override_img2img]
 
             def _img2img_submit(*args):
                 args = _normalize_args(submit_img2img_inputs, args)
