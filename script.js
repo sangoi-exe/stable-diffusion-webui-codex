@@ -259,6 +259,41 @@ document.addEventListener("DOMContentLoaded", function() {
     };
 })();
 
+// Normalize numeric strings in WebSocket messages used by Gradio's Queue
+(() => {
+    const WS = window.WebSocket;
+    if (!WS) return;
+    const origSend = WS.prototype.send;
+    /** @param {unknown} x */
+    function coerce(x) {
+        if (typeof x === 'string') {
+            const t = x.trim();
+            if (/^-?\d+$/.test(t)) {
+                const n = Number.parseInt(t, 10);
+                if (!Number.isNaN(n)) return n;
+            } else if (/^-?\d*\.\d+$/.test(t)) {
+                const f = Number.parseFloat(t);
+                if (!Number.isNaN(f)) return f;
+            }
+        }
+        return x;
+    }
+    WS.prototype.send = function(data) {
+        try {
+            if (typeof data === 'string') {
+                const obj = JSON.parse(data);
+                if (obj && Array.isArray(obj.data)) {
+                    obj.data = obj.data.map(coerce);
+                    data = JSON.stringify(obj);
+                }
+            }
+        } catch (e) {
+            // ignore non-JSON frames
+        }
+        return origSend.call(this, data);
+    };
+})();
+
 /**
  * Add keyboard shortcuts:
  * Ctrl+Enter to start/restart a generation
