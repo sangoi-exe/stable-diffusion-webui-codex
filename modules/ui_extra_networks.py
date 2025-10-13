@@ -656,10 +656,10 @@ class ExtraNetworksPage:
             "tree_view_div_default_display_class": "" if show_tree else "extra-network-dirs-hidden",
         }
 
-    if shared.opts.extra_networks_tree_view_style == "Tree":
-        pane_content = self.pane_content_tree_tpl.format(**page_params, tree_html=self.create_tree_view_html(tabname))
-    else:
-        pane_content = self.pane_content_dirs_tpl.format(**page_params, dirs_html=self.create_dirs_view_html(tabname))
+        if shared.opts.extra_networks_tree_view_style == "Tree":
+            pane_content = self.pane_content_tree_tpl.format(**page_params, tree_html=self.create_tree_view_html(tabname))
+        else:
+            pane_content = self.pane_content_dirs_tpl.format(**page_params, dirs_html=self.create_dirs_view_html(tabname))
 
         return self.pane_tpl.format(**page_params, pane_content=pane_content)
 
