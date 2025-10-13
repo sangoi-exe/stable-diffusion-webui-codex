@@ -491,8 +491,49 @@ def create_ui():
                 output_panel.html_log,
             ]
 
+            def _normalize_args(components, values):
+                out = list(values)
+                try:
+                    for i, comp in enumerate(components):
+                        if i >= len(out):
+                            break
+                        v = out[i]
+                        # Normalize Sliders (Number)
+                        if isinstance(comp, gr.Slider):
+                            if isinstance(v, str):
+                                t = v.strip().lower()
+                                if t in ("none", "null"):
+                                    v = comp.value
+                                else:
+                                    try:
+                                        v = float(v) if "." in v else int(v)
+                                    except Exception:
+                                        v = comp.value
+                            out[i] = v
+                        # Normalize Dropdowns
+                        elif isinstance(comp, gr.Dropdown):
+                            choices = list(comp.choices or [])
+                            if isinstance(v, (tuple, list)) and v:
+                                v = v[0]
+                            if isinstance(v, (int, float)) and choices:
+                                idx = int(v)
+                                v = choices[idx] if 0 <= idx < len(choices) else (comp.value if comp.value in choices else choices[0])
+                            elif isinstance(v, str):
+                                if v.strip().lower() in ("none", "null"):
+                                    v = comp.value if (isinstance(comp.value, str) and comp.value in choices) else (choices[0] if choices else v)
+                                elif choices and v not in choices:
+                                    v = comp.value if (isinstance(comp.value, str) and comp.value in choices) else choices[0]
+                            out[i] = v
+                    return tuple(out)
+                except Exception:
+                    return values
+
+            def _txt2img_submit(*args):
+                args = _normalize_args(txt2img_inputs, args)
+                return modules.txt2img.txt2img(*args)
+
             txt2img_args = dict(
-                fn=wrap_gradio_gpu_call(modules.txt2img.txt2img, extra_outputs=[None, '', '']),
+                fn=wrap_gradio_gpu_call(_txt2img_submit, extra_outputs=[None, '', '']),
                 inputs=txt2img_inputs,
                 outputs=txt2img_outputs,
                 show_progress='hidden',
@@ -853,8 +894,12 @@ def create_ui():
                 img2img_batch_upload,
             ] + custom_inputs
 
+            def _img2img_submit(*args):
+                args = _normalize_args(submit_img2img_inputs, args)
+                return modules.img2img.img2img(*args)
+
             img2img_args = dict(
-                fn=wrap_gradio_gpu_call(modules.img2img.img2img, extra_outputs=[None, '', '']),
+                fn=wrap_gradio_gpu_call(_img2img_submit, extra_outputs=[None, '', '']),
                 inputs=submit_img2img_inputs,
                 outputs=[
                     output_panel.gallery,
