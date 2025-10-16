@@ -193,9 +193,13 @@ def _install_gradio_type_guards():
     """Patch Gradio components to emit actionable errors with component context.
 
     Policy:
-    - No silent fallbacks or clamping. Invalid input must raise with context.
-    - Coerce numeric strings (e.g. "512", "0.5") to numbers — this is not a
-      fallback, it's a lossless parse. Everything else fails fast with details.
+    - No silent fallbacks or clamping for invalid inputs.
+    - Missing inputs (payload is None) are treated as "not provided" and
+      therefore use the component's declared default (`value`). This aligns
+      with Gradio's semantics during load/startup events where controls may not
+      have emitted a value yet. It is not a corrective fallback for an invalid
+      value; it's the absence of a value.
+    - Coerce numeric strings (e.g. "512", "0.5") to numbers — lossless parse.
     - Augment exceptions to include `label`, `elem_id`, slider bounds and the
       offending payload to avoid guesswork.
     """
@@ -217,7 +221,8 @@ def _install_gradio_type_guards():
             t = payload.strip()
             # common sentinels that sometimes leak from mismatched inputs
             if t.lower() in ("none", "null"):
-                return payload  # handled below via fallback to component default
+                # Treat as not provided; caller will substitute component default
+                return None
             if numeric_re.match(t):
                 try:
                     return float(t) if "." in t else int(t)
@@ -235,9 +240,30 @@ def _install_gradio_type_guards():
         maximum = getattr(self, "maximum", None)
         step = getattr(self, "step", None)
         default_val = getattr(self, "value", None)
+        try:
+            if callable(default_val):
+                default_val = default_val()
+        except Exception:
+            # If default cannot be resolved here, leave as-is; downstream will raise with context if needed
+            pass
 
         try:
-            return _slider_orig(self, p)
+            # If the payload is missing (None), use the component's default.
+            # This occurs legitimately during startup/load events where the
+            # browser hasn't sent values for untouched controls yet.
+            use = default_val if p is None else p
+            # If both payload and default are None, raise a clear error.
+            if use is None:
+                meta = (
+                    f"label={label!r} elem_id={elem_id!r} min={minimum!r} "
+                    f"max={maximum!r} step={step!r} default={default_val!r} "
+                    f"payload={payload!r} coerced={p!r}"
+                )
+                raise TypeError(
+                    f"Slider error [{meta}]: missing value. Neither payload nor component default is set."
+                )
+
+            return _slider_orig(self, use)
         except (TypeError, ValueError, GradioError) as e:
             meta = f"label={label!r} elem_id={elem_id!r} min={minimum!r} max={maximum!r} step={step!r} default={default_val!r} payload={payload!r} coerced={p!r}"
             # Re-raise preserving the original exception type for compatibility.
