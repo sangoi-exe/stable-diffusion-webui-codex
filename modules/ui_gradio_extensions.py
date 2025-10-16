@@ -206,6 +206,8 @@ def _install_gradio_type_guards():
     try:
         from gradio.components.slider import Slider
         from gradio.components.dropdown import Dropdown
+        from gradio.components.radio import Radio
+        from gradio.components.checkbox import Checkbox
         from gradio.exceptions import Error as GradioError
     except Exception:
         return
@@ -330,3 +332,137 @@ def _install_gradio_type_guards():
 
         drop_wrapped._sdw_guarded = True  # type: ignore[attr-defined]
         Dropdown.preprocess = drop_wrapped  # type: ignore[assignment]
+
+    # ---- Radio guard ----
+    if not getattr(Radio.preprocess, "_sdw_guarded", False):
+        _radio_orig = Radio.preprocess
+
+        def radio_wrapped(self, payload):
+            try:
+                raw_choices = list(getattr(self, "choices", []) or [])
+            except Exception:
+                raw_choices = []
+
+            def _choice_value(item):
+                if hasattr(item, "value"):
+                    return item.value
+                if isinstance(item, (tuple, list)):
+                    if len(item) >= 2:
+                        return _choice_value(item[1])
+                    if len(item) == 1:
+                        return _choice_value(item[0])
+                    return None
+                return item
+
+            def _normalize(value):
+                # None means "use default"
+                if value is None:
+                    return None
+                if isinstance(value, bool):
+                    # Interpret booleans as indices for 2-option radios when sensible
+                    return 1 if value else 0
+                if isinstance(value, (int, float)):
+                    try:
+                        return int(value)
+                    except Exception:
+                        return value
+                return value
+
+            choice_values = [_choice_value(c) for c in raw_choices]
+
+            label = getattr(self, "label", None) or "<no-label>"
+            elem_id = getattr(self, "elem_id", None) or "<no-elem_id>"
+
+            # Resolve default now in case it's callable
+            default_val = getattr(self, "value", None)
+            try:
+                if callable(default_val):
+                    default_val = default_val()
+            except Exception:
+                pass
+
+            norm = _normalize(payload)
+
+            # Map numerics to choice indices
+            if isinstance(norm, int) and choice_values:
+                if 0 <= norm < len(choice_values):
+                    norm = choice_values[norm]
+                else:
+                    raise ValueError(
+                        f"Radio preprocess failed for {label} (elem_id={elem_id}): index {norm} out of range for choices len={len(choice_values)}"
+                    )
+
+            # String sentinels: none/null => component default
+            if isinstance(norm, str) and norm.strip().lower() in ("none", "null"):
+                norm = default_val
+
+            # If still None, use default
+            if norm is None:
+                norm = default_val
+
+            if not choice_values:
+                raise ValueError(
+                    f"Radio preprocess failed for {label} (elem_id={elem_id}): choices are empty, received payload={payload!r}"
+                )
+
+            if norm not in choice_values:
+                raise ValueError(
+                    f"Radio preprocess failed for {label} (elem_id={elem_id}): payload={payload!r} normalized={norm!r} is not one of choices={choice_values!r}"
+                )
+
+            try:
+                return _radio_orig(self, norm)
+            except Exception as e:
+                raise type(e)(
+                    f"Radio preprocess failed for {label} (elem_id={elem_id}): payload={payload!r} normalized={norm!r} choices={choice_values!r} -> {e}"
+                ) from e
+
+        radio_wrapped._sdw_guarded = True  # type: ignore[attr-defined]
+        Radio.preprocess = radio_wrapped  # type: ignore[assignment]
+
+    # ---- Checkbox guard ----
+    if not getattr(Checkbox.preprocess, "_sdw_guarded", False):
+        _check_orig = Checkbox.preprocess
+
+        def check_wrapped(self, payload):
+            label = getattr(self, "label", None) or "<no-label>"
+            elem_id = getattr(self, "elem_id", None) or "<no-elem_id>"
+            default_val = getattr(self, "value", None)
+            try:
+                if callable(default_val):
+                    default_val = default_val()
+            except Exception:
+                pass
+
+            def _to_bool(v):
+                if v is None:
+                    return None
+                if isinstance(v, bool):
+                    return v
+                if isinstance(v, (int, float)):
+                    return bool(int(v))
+                if isinstance(v, str):
+                    t = v.strip().lower()
+                    if t in ("true", "1", "yes", "on"): return True
+                    if t in ("false", "0", "no", "off"): return False
+                    if t in ("none", "null"): return None
+                return v
+
+            norm = _to_bool(payload)
+            if norm is None:
+                norm = default_val if default_val is not None else False
+
+            if not isinstance(norm, bool):
+                raise ValueError(
+                    f"Checkbox preprocess failed for {label} (elem_id={elem_id}): payload={payload!r} normalized={norm!r} is not boolean"
+                )
+
+            try:
+                return _check_orig(self, norm)
+            except Exception as e:
+                raise type(e)(
+                    f"Checkbox preprocess failed for {label} (elem_id={elem_id}): payload={payload!r} normalized={norm!r} -> {e}"
+                ) from e
+
+        check_wrapped._sdw_guarded = True  # type: ignore[attr-defined]
+        Checkbox.preprocess = check_wrapped  # type: ignore[assignment]
