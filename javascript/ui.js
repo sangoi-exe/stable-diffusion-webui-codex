@@ -298,7 +298,16 @@ function submitWithProgress(args, galleryContainerId, galleryId) {
 }
 
 function submit() {
-    return submitWithProgress(arguments, 'txt2img_gallery_container', 'txt2img_gallery');
+    const res = submitWithProgress(arguments, 'txt2img_gallery_container', 'txt2img_gallery');
+    // Ensure strict JSON is present even if this generic helper is used
+    try {
+        if (Array.isArray(res) && res.length > 0 && getAppElementById('txt2img_named_active')) {
+            res[res.length - 1] = buildNamedTxt2img(arguments);
+        }
+    } catch (e) {
+        console.warn('submit(): failed to attach strict JSON', e);
+    }
+    return res;
 }
 
 // ---- Strict JSON builders (DOM-based) ----
@@ -442,11 +451,28 @@ function submit_named() {
 function submit_txt2img_upscale() {
     const res = submit(...arguments);
     res[2] = selected_gallery_index();
+    // Last arg is the JSON payload in our wiring; refresh it just in case
+    try {
+        if (Array.isArray(res) && res.length > 0 && getAppElementById('txt2img_named_active')) {
+            res[res.length - 1] = buildNamedTxt2img(arguments);
+        }
+    } catch (e) {
+        console.warn('submit_txt2img_upscale(): failed to attach strict JSON', e);
+    }
     return res;
 }
 
 function submit_img2img() {
-    return submitWithProgress(arguments, 'img2img_gallery_container', 'img2img_gallery');
+    const res = submitWithProgress(arguments, 'img2img_gallery_container', 'img2img_gallery');
+    try {
+        if (Array.isArray(res) && res.length > 0 && getAppElementById('img2img_named_active')) {
+            // When used, attach img2img strict JSON as last arg
+            res[res.length - 1] = buildNamedImg2img(arguments);
+        }
+    } catch (e) {
+        console.warn('submit_img2img(): failed to attach strict JSON', e);
+    }
+    return res;
 }
 
 /** @param {IArguments} _args */
