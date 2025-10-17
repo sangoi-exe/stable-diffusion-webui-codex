@@ -35,6 +35,10 @@ class ScriptSeed(scripts.ScriptBuiltinUI):
             reuse_seed = ToolButton(ui.reuse_symbol, elem_id=self.elem_id("reuse_seed"), tooltip="Reuse seed from last generation, mostly useful if it was randomized")
 
             seed_checkbox = gr.Checkbox(label='Extra', elem_id=self.elem_id("subseed_show"), value=False, scale=0, min_width=60)
+            try:
+                seed_checkbox.do_not_save_to_config = True
+            except Exception:
+                pass
 
         with gr.Group(visible=False, elem_id=self.elem_id("seed_extras")) as seed_extras:
             with gr.Row(elem_id=self.elem_id("subseed_row")):

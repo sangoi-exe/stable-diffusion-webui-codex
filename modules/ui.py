@@ -369,6 +369,10 @@ def create_ui():
                             with InputAccordion(False, label="Hires. fix", elem_id="txt2img_hr") as enable_hr:
                                 with enable_hr.extra():
                                     hr_enable = gr.Checkbox(value=False, label="Enable", show_label=False, elem_id="txt2img_hr_enable")
+                                    try:
+                                        hr_enable.do_not_save_to_config = True
+                                    except Exception:
+                                        pass
                                     hr_final_resolution = FormHTML(value="", elem_id="txtimg_hr_finalres", label="Upscaled resolution")
 
                                 with FormRow(elem_id="txt2img_hires_fix_row1", variant="compact"):
@@ -627,8 +631,17 @@ def create_ui():
                         return modules.txt2img.txt2img_from_json(id_task, request, payload, *script_args)
                 except Exception:
                     pass
-                # Strict mode: reject legacy positional payloads
-                raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
+                # Strict mode: reject legacy positional payloads with diagnostics
+                last = args[-1] if len(args) else None
+                detail = {
+                    'args_len': len(args),
+                    'last_type': type(last).__name__,
+                    'last_is_dict': isinstance(last, dict),
+                    'last_keys': list(last.keys())[:8] if isinstance(last, dict) else None,
+                    'hint_js': 'Front-end must call _js="submit_named" on Generate.',
+                    'hint_slot': 'Hidden JSON slot (txt2img_named_active) must be last input.',
+                }
+                raise ValueError(f"Invalid or missing __strict_version in payload; frontend must send strict JSON | details={detail}")
 
             txt2img_args = dict(
                 fn=wrap_gradio_gpu_call(_txt2img_submit, extra_outputs=[None, '', '']),
@@ -994,7 +1007,16 @@ def create_ui():
                         return modules.img2img.img2img_from_json(*args, **kwargs)
                 except Exception:
                     pass
-                raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
+                last = args[-1] if len(args) else None
+                detail = {
+                    'args_len': len(args),
+                    'last_type': type(last).__name__,
+                    'last_is_dict': isinstance(last, dict),
+                    'last_keys': list(last.keys())[:8] if isinstance(last, dict) else None,
+                    'hint_js': 'Front-end must call _js="submit_img2img_named" on Generate.',
+                    'hint_slot': 'Hidden JSON slot (img2img_named_active) must be last input.',
+                }
+                raise ValueError(f"Invalid or missing __strict_version in payload; frontend must send strict JSON | details={detail}")
 
             img2img_args = dict(
                 fn=wrap_gradio_gpu_call(_img2img_submit, extra_outputs=[None, '', '']),
