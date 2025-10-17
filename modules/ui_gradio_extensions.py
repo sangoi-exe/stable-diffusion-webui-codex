@@ -573,6 +573,10 @@ def _install_gradio_type_guards():
                     t = v.strip()
                     if t.lower() in ("none", "null", ""):
                         return None
+                    # Accept common seed sentinels for seed/subseed fields
+                    is_seed_field = ("seed" in (label or "").lower()) or ("seed" in (elem_id or "").lower())
+                    if is_seed_field and t.lower() in ("automatic", "auto", "random", "randomize"):
+                        return -1
                     if re.match(r"^-?\d+$", t):
                         try:
                             return int(t)
