@@ -594,10 +594,17 @@ def create_ui():
                 if not args:
                     raise RuntimeError("Missing arguments for txt2img submit")
                 id_task = args[0]
-                payload = args[-1]
-                script_args = tuple(args[1:-1]) if len(args) > 2 else tuple()
                 request = kwargs.get('request')
-                return modules.txt2img.txt2img_from_json(id_task, request, payload, *script_args)
+                try:
+                    payload = args[-1]
+                    if isinstance(payload, dict) and payload.get('__strict_version') == 1:
+                        # Strict JSON path
+                        script_args = tuple(args[1:-1]) if len(args) > 2 else tuple()
+                        return modules.txt2img.txt2img_from_json(id_task, request, payload, *script_args)
+                except Exception:
+                    pass
+                # Fallback: legacy positional API (preserve original behaviour)
+                return modules.txt2img.txt2img(id_task, request, *args[1:])
 
             txt2img_args = dict(
                 fn=wrap_gradio_gpu_call(_txt2img_submit, extra_outputs=[None, '', '']),
@@ -957,7 +964,16 @@ def create_ui():
             def _img2img_submit(*args, **kwargs):
                 if not args:
                     raise RuntimeError("Missing arguments for img2img submit")
-                return modules.img2img.img2img_from_json(*args, **kwargs)
+                id_task = args[0]
+                request = kwargs.get('request')
+                try:
+                    payload = args[-1]
+                    if isinstance(payload, dict) and payload.get('__strict_version') == 1:
+                        return modules.img2img.img2img_from_json(*args, **kwargs)
+                except Exception:
+                    pass
+                # Fallback to legacy positional API
+                return modules.img2img.img2img(id_task, request, *args[1:])
 
             img2img_args = dict(
                 fn=wrap_gradio_gpu_call(_img2img_submit, extra_outputs=[None, '', '']),
