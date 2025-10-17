@@ -1066,3 +1066,51 @@ def reload_script_body_only():
 
 
 reload_scripts = load_scripts  # compatibility alias
+
+
+def _resolve_default(value):
+    try:
+        return value() if callable(value) else value
+    except Exception:
+        return value
+
+
+def build_script_args_from_payload(script_runner: ScriptRunner, payload: dict) -> list:
+    """Construct script_args list from UI defaults, then override with payload by elem_id.
+
+    - Initializes args to defaults for all scripts (including always-on and selectable) in `script_runner`.
+    - Sets position 0 to the selected script index if `__script_index` present in payload; otherwise leaves as 0 (None).
+    - For each control with a valid elem_id, if payload contains a value for that id, assigns it to the proper index.
+    """
+    # Determine overall args size
+    last_arg_index = 1
+    for script in script_runner.scripts:
+        if last_arg_index < script.args_to:
+            last_arg_index = script.args_to
+
+    args: list = [None] * last_arg_index
+    # Position 0 is the selected script index (0 => None)
+    script_index = 0
+    if isinstance(payload, dict) and isinstance(payload.get("__script_index"), int):
+        sel = int(payload["__script_index"])  # includes 'None' option at 0
+        script_index = max(0, sel)
+    args[0] = script_index
+
+    # Fill defaults from existing controls
+    for script in script_runner.scripts:
+        if not getattr(script, 'controls', None):
+            continue
+        defaults = [_resolve_default(getattr(ctrl, 'value', None)) for ctrl in script.controls]
+        args[script.args_from:script.args_to] = defaults
+
+    # Apply overrides from payload by elem_id
+    if isinstance(payload, dict):
+        for script in script_runner.scripts:
+            if not getattr(script, 'controls', None):
+                continue
+            for idx, ctrl in enumerate(script.controls):
+                elem_id = getattr(ctrl, 'elem_id', None)
+                if isinstance(elem_id, str) and elem_id in payload:
+                    args[script.args_from + idx] = payload[elem_id]
+
+    return args

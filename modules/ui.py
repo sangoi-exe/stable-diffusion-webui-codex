@@ -460,7 +460,8 @@ def create_ui():
             # Compact: only id + custom script inputs + strict JSON
             txt2img_inputs = [
                 dummy_component,
-            ] + custom_inputs + [named_active_txt2img]
+                named_active_txt2img,
+            ]
 
             txt2img_outputs = [
                 output_panel.gallery,
@@ -628,7 +629,8 @@ def create_ui():
                 output_panel.gallery,
                 dummy_component_number,
                 output_panel.generation_info,
-            ] + (txt2img_inputs[1:-1]) + [txt2img_inputs[-1]]
+                txt2img_inputs[-1],
+            ]
             output_panel.button_upscale.click(
                 fn=wrap_gradio_gpu_call(modules.txt2img.txt2img_upscale_from_json, extra_outputs=[None, '', '']),
                 inputs=txt2img_upscale_inputs,
@@ -950,7 +952,7 @@ def create_ui():
                 img2img_batch_png_info_dir,
                 img2img_batch_source_type,
                 img2img_batch_upload,
-            ] + custom_inputs + [named_active_img2img]
+            ] + [named_active_img2img]
 
             def _img2img_submit(*args, **kwargs):
                 if not args:

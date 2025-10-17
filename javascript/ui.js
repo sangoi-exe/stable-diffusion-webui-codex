@@ -355,6 +355,17 @@ function readRadioIndex(id) {
     });
     return idx;
 }
+/** @param {string} id */
+function readRadioValue(id) {
+    const root = getAppElementById(id);
+    if (!root) return '';
+    const buttons = root.querySelectorAll('button');
+    let value = '';
+    buttons.forEach((btn) => {
+        if (btn instanceof HTMLElement && btn.classList.contains('selected')) value = btn.textContent?.trim() ?? '';
+    });
+    return value;
+}
 /** @param {IArguments} _args */
 function buildNamedTxt2img(_args) {
     /** @type {Record<string, unknown>} */
@@ -390,6 +401,32 @@ function buildNamedTxt2img(_args) {
         named['txt2img_hr_distilled_cfg'] = readFloat('txt2img_hr_distilled_cfg'); active.push('txt2img_hr_distilled_cfg');
     }
     named['__active_ids'] = active;
+    // Dynamic Thresholding (always-on extension). Only include if enabled.
+    try {
+        const dynEnabled = readCheckbox('dynthres_enabled');
+        if (dynEnabled) {
+            named['dynthres_enabled'] = true; active.push('dynthres_enabled');
+            named['dynthres_mimic_scale'] = readFloat('dynthres_mimic_scale'); active.push('dynthres_mimic_scale');
+            named['dynthres_threshold_percentile'] = readFloat('dynthres_threshold_percentile'); active.push('dynthres_threshold_percentile');
+            named['dynthres_mimic_mode'] = readRadioValue('dynthres_mimic_mode'); active.push('dynthres_mimic_mode');
+            named['dynthres_mimic_scale_min'] = readFloat('dynthres_mimic_scale_min'); active.push('dynthres_mimic_scale_min');
+            named['dynthres_cfg_mode'] = readRadioValue('dynthres_cfg_mode'); active.push('dynthres_cfg_mode');
+            named['dynthres_cfg_scale_min'] = readFloat('dynthres_cfg_scale_min'); active.push('dynthres_cfg_scale_min');
+            named['dynthres_sched_val'] = readFloat('dynthres_sched_val'); active.push('dynthres_sched_val');
+            named['dynthres_separate_feature_channels'] = readRadioValue('dynthres_separate_feature_channels'); active.push('dynthres_separate_feature_channels');
+            named['dynthres_scaling_startpoint'] = readRadioValue('dynthres_scaling_startpoint'); active.push('dynthres_scaling_startpoint');
+            named['dynthres_variability_measure'] = readRadioValue('dynthres_variability_measure'); active.push('dynthres_variability_measure');
+            named['dynthres_interpolate_phi'] = readFloat('dynthres_interpolate_phi'); active.push('dynthres_interpolate_phi');
+        }
+        // Selectable Script index (keep parity)
+        const scriptList = getAppElementById('script_list');
+        if (scriptList && scriptList.querySelector('select') instanceof HTMLSelectElement) {
+            const sel = /** @type {HTMLSelectElement} */ (scriptList.querySelector('select'));
+            named['__script_index'] = sel.selectedIndex;
+        }
+    } catch (e) {
+        console.warn('buildNamedTxt2img extensions failed:', e);
+    }
     return named;
 }
 
@@ -442,6 +479,30 @@ function buildNamedImg2img(_args) {
         named['img2img_inpainting_mask_invert'] = readRadioIndex('img2img_mask_mode'); active.push('img2img_inpainting_mask_invert');
     }
     named['__active_ids'] = active;
+    try {
+        const dynEnabled = readCheckbox('dynthres_enabled');
+        if (dynEnabled) {
+            named['dynthres_enabled'] = true; active.push('dynthres_enabled');
+            named['dynthres_mimic_scale'] = readFloat('dynthres_mimic_scale'); active.push('dynthres_mimic_scale');
+            named['dynthres_threshold_percentile'] = readFloat('dynthres_threshold_percentile'); active.push('dynthres_threshold_percentile');
+            named['dynthres_mimic_mode'] = readRadioValue('dynthres_mimic_mode'); active.push('dynthres_mimic_mode');
+            named['dynthres_mimic_scale_min'] = readFloat('dynthres_mimic_scale_min'); active.push('dynthres_mimic_scale_min');
+            named['dynthres_cfg_mode'] = readRadioValue('dynthres_cfg_mode'); active.push('dynthres_cfg_mode');
+            named['dynthres_cfg_scale_min'] = readFloat('dynthres_cfg_scale_min'); active.push('dynthres_cfg_scale_min');
+            named['dynthres_sched_val'] = readFloat('dynthres_sched_val'); active.push('dynthres_sched_val');
+            named['dynthres_separate_feature_channels'] = readRadioValue('dynthres_separate_feature_channels'); active.push('dynthres_separate_feature_channels');
+            named['dynthres_scaling_startpoint'] = readRadioValue('dynthres_scaling_startpoint'); active.push('dynthres_scaling_startpoint');
+            named['dynthres_variability_measure'] = readRadioValue('dynthres_variability_measure'); active.push('dynthres_variability_measure');
+            named['dynthres_interpolate_phi'] = readFloat('dynthres_interpolate_phi'); active.push('dynthres_interpolate_phi');
+        }
+        const scriptList = getAppElementById('script_list');
+        if (scriptList && scriptList.querySelector('select') instanceof HTMLSelectElement) {
+            const sel = /** @type {HTMLSelectElement} */ (scriptList.querySelector('select'));
+            named['__script_index'] = sel.selectedIndex;
+        }
+    } catch (e) {
+        console.warn('buildNamedImg2img extensions failed:', e);
+    }
     return named;
 }
 

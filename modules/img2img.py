@@ -333,9 +333,9 @@ def img2img_from_json(id_task: str,
                       *rest):
     if not rest:
         raise ValueError("Missing JSON payload in img2img_from_json")
-    # split custom script args vs payload
+    # split custom script args vs payload (ignore positional script_args; compute from payload)
     payload = rest[-1]
-    script_args = tuple(rest[:-1]) if len(rest) > 1 else tuple()
+    script_args = tuple()
 
     if not isinstance(payload, dict) or payload.get("__strict_version") != 1:
         raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
@@ -364,6 +364,9 @@ def img2img_from_json(id_task: str,
     inpainting_fill = int(payload.get('img2img_inpainting_fill', 0))
 
     override_settings_texts = []
+
+    # Build script args from payload for img2img pipeline
+    script_args_payload = modules.scripts.build_script_args_from_payload(modules.scripts.scripts_img2img, payload)
 
     return main_thread.run_and_wait_result(
         img2img_function,
@@ -408,5 +411,5 @@ def img2img_from_json(id_task: str,
         img2img_batch_png_info_dir,
         img2img_batch_source_type,
         img2img_batch_upload,
-        *script_args,
+        *script_args_payload,
     )

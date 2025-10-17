@@ -105,6 +105,9 @@ def _txt2img_from_payload(id_task: str, request: gr.Request, payload: dict, *scr
 
     override_settings_texts = []
 
+    # Build script args from named payload (ignores positional script_args to avoid mismatches)
+    script_args_payload = modules.scripts.build_script_args_from_payload(modules.scripts.scripts_txt2img, payload)
+
     proc = txt2img_create_processing(
         id_task,
         request,
@@ -133,7 +136,7 @@ def _txt2img_from_payload(id_task: str, request: gr.Request, payload: dict, *scr
         hr_cfg,
         hr_distilled_cfg,
         override_settings_texts,
-        *script_args,
+        *script_args_payload,
     )
 
     with closing(proc):
@@ -154,7 +157,8 @@ def _txt2img_from_payload(id_task: str, request: gr.Request, payload: dict, *scr
 
 
 def txt2img_from_json(id_task: str, request: gr.Request, payload, *script_args):
-    return _txt2img_from_payload(id_task, request, payload, *script_args)
+    # ignore positional script_args; use payload to build named args
+    return _txt2img_from_payload(id_task, request, payload)
 
 
 def txt2img_upscale_from_json(id_task: str, request: gr.Request, gallery, gallery_index, generation_info, payload, *script_args):
@@ -213,6 +217,8 @@ def txt2img_upscale_from_json(id_task: str, request: gr.Request, gallery, galler
             hr_cfg = 7.0
             hr_distilled_cfg = 3.5
         override_settings_texts = []
+        # Build script args from payload (ignore provided script_args)
+        script_args_payload = modules.scripts.build_script_args_from_payload(modules.scripts.scripts_txt2img, payload)
         return (
             prompt,
             negative_prompt,
@@ -239,7 +245,7 @@ def txt2img_upscale_from_json(id_task: str, request: gr.Request, gallery, galler
             hr_cfg,
             hr_distilled_cfg,
             override_settings_texts,
-            *script_args,
+            *script_args_payload,
         )
 
     # Build p
