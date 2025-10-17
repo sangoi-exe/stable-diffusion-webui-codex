@@ -439,9 +439,7 @@ function buildNamedTxt2img(_args) {
     return named;
 }
 
-// Expose builders globally for fetch wrapper fallbacks
-/** @type {any} */(uiWindow).buildNamedTxt2img = buildNamedTxt2img;
-/** @type {any} */(uiWindow).buildNamedImg2img = buildNamedImg2img;
+// Builders are used by *_named submit paths; no global exposure.
 
 function submit_named() {
     const res = submitWithProgress(arguments, 'txt2img_gallery_container', 'txt2img_gallery');
@@ -461,28 +459,11 @@ function submit_named() {
 function submit_txt2img_upscale() {
     const res = submit(...arguments);
     res[2] = selected_gallery_index();
-    // Last arg is the JSON payload in our wiring; refresh it just in case
-    try {
-        if (Array.isArray(res) && res.length > 0 && getAppElementById('txt2img_named_active')) {
-            res[res.length - 1] = buildNamedTxt2img(arguments);
-        }
-    } catch (e) {
-        console.warn('submit_txt2img_upscale(): failed to attach strict JSON', e);
-    }
     return res;
 }
 
 function submit_img2img() {
-    const res = submitWithProgress(arguments, 'img2img_gallery_container', 'img2img_gallery');
-    try {
-        if (Array.isArray(res) && res.length > 0 && getAppElementById('img2img_named_active')) {
-            // When used, attach img2img strict JSON as last arg
-            res[res.length - 1] = buildNamedImg2img(arguments);
-        }
-    } catch (e) {
-        console.warn('submit_img2img(): failed to attach strict JSON', e);
-    }
-    return res;
+    return submitWithProgress(arguments, 'img2img_gallery_container', 'img2img_gallery');
 }
 
 /** @param {IArguments} _args */

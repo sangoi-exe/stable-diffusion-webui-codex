@@ -627,12 +627,8 @@ def create_ui():
                         return modules.txt2img.txt2img_from_json(id_task, request, payload, *script_args)
                 except Exception:
                     pass
-                # Fallback: legacy positional API (ignore last JSON slot) and provide default script_args
-                try:
-                    defaults_script_args = modules.scripts.build_script_args_from_payload(modules.scripts.scripts_txt2img, {})
-                except Exception:
-                    defaults_script_args = []
-                return modules.txt2img.txt2img(id_task, request, *args[1:-1], *defaults_script_args)
+                # Strict mode: reject legacy positional payloads
+                raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
 
             txt2img_args = dict(
                 fn=wrap_gradio_gpu_call(_txt2img_submit, extra_outputs=[None, '', '']),
@@ -998,12 +994,7 @@ def create_ui():
                         return modules.img2img.img2img_from_json(*args, **kwargs)
                 except Exception:
                     pass
-                # Fallback to legacy positional API (ignore last JSON slot) and provide default script_args
-                try:
-                    defaults_script_args = modules.scripts.build_script_args_from_payload(modules.scripts.scripts_img2img, {})
-                except Exception:
-                    defaults_script_args = []
-                return modules.img2img.img2img(id_task, request, *args[1:-1], *defaults_script_args)
+                raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
 
             img2img_args = dict(
                 fn=wrap_gradio_gpu_call(_img2img_submit, extra_outputs=[None, '', '']),
