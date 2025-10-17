@@ -375,6 +375,28 @@ def _install_gradio_type_guards():
                     )
 
                 if norm not in choice_values:
+                    # Special-case: some UIs miswire sampler value into scheduler dropdown.
+                    # If the label suggests scheduler and the incoming value looks like a known sampler,
+                    # fall back to the component default to avoid a hard crash.
+                    try:
+                        from modules import sd_samplers
+                        known_samplers = set([x.name for x in sd_samplers.visible_samplers()])
+                    except Exception:
+                        known_samplers = set()
+
+                    is_scheduler_label = isinstance(label, str) and 'schedule' in label.lower()
+                    if is_scheduler_label and isinstance(norm, str) and norm in known_samplers:
+                        # Use default if available; otherwise pick the first choice
+                        substitute = default_val if default_val in choice_values else (choice_values[0] if choice_values else None)
+                        if substitute is not None:
+                            try:
+                                return _drop_orig(self, substitute)
+                            except Exception as e:
+                                raise type(e)(
+                                    f"Dropdown preprocess auto-substitution for {label} (elem_id={elem_id}) due to sampler value in scheduler: "
+                                    f"payload={payload!r} -> using default={substitute!r}; choices={choice_values!r} -> {e}"
+                                ) from e
+                    # Otherwise, strict failure
                     raise ValueError(
                         f"Dropdown preprocess failed for {label} (elem_id={elem_id}): payload={payload!r} normalized={norm!r} is not one of choices={choice_values!r}"
                     )
