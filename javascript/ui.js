@@ -375,6 +375,29 @@ function readRadioValue(id) {
     });
     return value;
 }
+/** @param {string} id */
+function readDropdownOrRadioValue(id) {
+    const dd = readDropdownValue(id);
+    if (typeof dd === 'string' && dd !== '') return dd;
+    return readRadioValue(id);
+}
+/** @param {string} id */
+function readSeedValue(id) {
+    const root = getAppElementById(id);
+    if (!root) return -1;
+    const num = root.querySelector('input[type=number]');
+    if (num && num instanceof HTMLInputElement) {
+        const v = Number(num.value || -1);
+        return Number.isFinite(v) ? Math.trunc(v) : -1;
+    }
+    const text = root.querySelector('input[type=text]');
+    if (text && text instanceof HTMLInputElement) {
+        const t = (text.value || '').trim();
+        if (/^-?\d+$/.test(t)) return Number.parseInt(t, 10);
+        return -1;
+    }
+    return -1;
+}
 /** @param {IArguments} _args */
 function buildNamedTxt2img(_args) {
     /** @type {Record<string, unknown>} */
@@ -408,6 +431,20 @@ function buildNamedTxt2img(_args) {
         named['txt2img_hr_neg_prompt'] = readText('hires_neg_prompt'); active.push('txt2img_hr_neg_prompt');
         named['txt2img_hr_cfg'] = readFloat('txt2img_hr_cfg'); active.push('txt2img_hr_cfg');
         named['txt2img_hr_distilled_cfg'] = readFloat('txt2img_hr_distilled_cfg'); active.push('txt2img_hr_distilled_cfg');
+    }
+    // Sampler & Scheduler (required)
+    named['txt2img_steps'] = readInt('txt2img_steps'); active.push('txt2img_steps');
+    named['txt2img_sampling'] = readDropdownOrRadioValue('txt2img_sampling'); active.push('txt2img_sampling');
+    named['txt2img_scheduler'] = readDropdownValue('txt2img_scheduler'); active.push('txt2img_scheduler');
+    // Seed + variation (only include extras if enabled)
+    named['txt2img_seed'] = readSeedValue('txt2img_seed'); active.push('txt2img_seed');
+    const showVar = readCheckbox('txt2img_subseed_show');
+    if (showVar) {
+        named['txt2img_subseed_show'] = true; active.push('txt2img_subseed_show');
+        named['txt2img_subseed'] = readInt('txt2img_subseed'); active.push('txt2img_subseed');
+        named['txt2img_subseed_strength'] = readFloat('txt2img_subseed_strength'); active.push('txt2img_subseed_strength');
+        named['txt2img_seed_resize_from_w'] = readInt('txt2img_seed_resize_from_w'); active.push('txt2img_seed_resize_from_w');
+        named['txt2img_seed_resize_from_h'] = readInt('txt2img_seed_resize_from_h'); active.push('txt2img_seed_resize_from_h');
     }
     named['__active_ids'] = active;
     // Dynamic Thresholding (always-on extension). Only include if enabled.
@@ -486,6 +523,20 @@ function buildNamedImg2img(_args) {
     named['img2img_width'] = readInt('img2img_width'); active.push('img2img_width');
     named['img2img_scale_by'] = readFloat('img2img_scale'); active.push('img2img_scale_by');
     named['img2img_resize_mode'] = readRadioIndex('resize_mode'); active.push('img2img_resize_mode');
+    // Sampler & Scheduler
+    named['img2img_steps'] = readInt('img2img_steps'); active.push('img2img_steps');
+    named['img2img_sampling'] = readDropdownOrRadioValue('img2img_sampling'); active.push('img2img_sampling');
+    named['img2img_scheduler'] = readDropdownValue('img2img_scheduler'); active.push('img2img_scheduler');
+    // Seed + variation
+    named['img2img_seed'] = readSeedValue('img2img_seed'); active.push('img2img_seed');
+    const showVarI2I = readCheckbox('img2img_subseed_show');
+    if (showVarI2I) {
+        named['img2img_subseed_show'] = true; active.push('img2img_subseed_show');
+        named['img2img_subseed'] = readInt('img2img_subseed'); active.push('img2img_subseed');
+        named['img2img_subseed_strength'] = readFloat('img2img_subseed_strength'); active.push('img2img_subseed_strength');
+        named['img2img_seed_resize_from_w'] = readInt('img2img_seed_resize_from_w'); active.push('img2img_seed_resize_from_w');
+        named['img2img_seed_resize_from_h'] = readInt('img2img_seed_resize_from_h'); active.push('img2img_seed_resize_from_h');
+    }
     const tab = get_tab_index('mode_img2img');
     if ([2,3,4].includes(tab)) {
         named['img2img_mask_blur'] = readInt('img2img_mask_blur'); active.push('img2img_mask_blur');
