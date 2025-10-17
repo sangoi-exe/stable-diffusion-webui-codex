@@ -277,7 +277,61 @@ def forge_main_entry():
                     shared.opts.save(shared.config_filename)
                 except Exception:
                     pass
-                return [gr.update() for _ in outputs]
+
+                # Choose per-preset defaults
+                if v == 'sd':
+                    t2i_wh = (512, 512)
+                    i2i_wh = (512, 512)
+                    t2i_cfg, t2i_dcfg = (7.0, 3.5)
+                    i2i_cfg, i2i_dcfg = (7.0, 3.5)
+                    t2i_sampler = getattr(shared.opts, 'sd_t2i_sampler', 'Euler a')
+                    t2i_scheduler = getattr(shared.opts, 'sd_t2i_scheduler', 'Automatic')
+                    i2i_sampler = getattr(shared.opts, 'sd_i2i_sampler', 'Euler a')
+                    i2i_scheduler = getattr(shared.opts, 'sd_i2i_scheduler', 'Automatic')
+                elif v == 'xl':
+                    t2i_wh = (1024, 1024)
+                    i2i_wh = (1024, 1024)
+                    t2i_cfg, t2i_dcfg = (7.0, 3.5)
+                    i2i_cfg, i2i_dcfg = (7.0, 3.5)
+                    t2i_sampler = getattr(shared.opts, 'xl_t2i_sampler', 'DPM++ 2M SDE')
+                    t2i_scheduler = getattr(shared.opts, 'xl_t2i_scheduler', 'Karras')
+                    i2i_sampler = getattr(shared.opts, 'xl_i2i_sampler', 'DPM++ 2M SDE')
+                    i2i_scheduler = getattr(shared.opts, 'xl_i2i_scheduler', 'Karras')
+                elif v == 'flux':
+                    t2i_wh = (896, 1152)
+                    i2i_wh = (1024, 1024)
+                    t2i_cfg, t2i_dcfg = (1.0, 3.5)
+                    i2i_cfg, i2i_dcfg = (1.0, 3.5)
+                    t2i_sampler = getattr(shared.opts, 'flux_t2i_sampler', 'Euler')
+                    t2i_scheduler = getattr(shared.opts, 'flux_t2i_scheduler', 'Simple')
+                    i2i_sampler = getattr(shared.opts, 'flux_i2i_sampler', 'Euler')
+                    i2i_scheduler = getattr(shared.opts, 'flux_i2i_scheduler', 'Simple')
+                else:
+                    # 'all' preset leaves values unchanged
+                    return [gr.update() for _ in outputs]
+
+                (t2i_w, t2i_h) = t2i_wh
+                (i2i_w, i2i_h) = i2i_wh
+                return [
+                    gr.update(),  # ui_vae
+                    gr.update(),  # ui_clip_skip
+                    gr.update(),  # ui_forge_unet_storage_dtype_options
+                    gr.update(),  # ui_forge_async_loading
+                    gr.update(),  # ui_forge_pin_shared_memory
+                    gr.update(),  # ui_forge_inference_memory
+                    gr.update(value=t2i_w),   # ui_txt2img_width
+                    gr.update(value=i2i_w),   # ui_img2img_width
+                    gr.update(value=t2i_h),   # ui_txt2img_height
+                    gr.update(value=i2i_h),   # ui_img2img_height
+                    gr.update(value=t2i_cfg), # ui_txt2img_cfg
+                    gr.update(value=i2i_cfg), # ui_img2img_cfg
+                    gr.update(value=t2i_dcfg),# ui_txt2img_distilled_cfg
+                    gr.update(value=i2i_dcfg),# ui_img2img_distilled_cfg
+                    gr.update(value=t2i_sampler),    # ui_txt2img_sampler
+                    gr.update(value=i2i_sampler),    # ui_img2img_sampler
+                    gr.update(value=t2i_scheduler),  # ui_txt2img_scheduler
+                    gr.update(value=i2i_scheduler),  # ui_img2img_scheduler
+                ]
             ui_forge_preset.change(on_preset_change, inputs=[ui_forge_preset], outputs=outputs, queue=False, show_progress=False)
     except Exception:
         pass

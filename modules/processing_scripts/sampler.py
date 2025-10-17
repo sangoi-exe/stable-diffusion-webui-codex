@@ -21,16 +21,36 @@ class ScriptSampler(scripts.ScriptBuiltinUI):
         sampler_names = [x.name for x in sd_samplers.visible_samplers()]
         scheduler_names = [x.label for x in sd_schedulers.schedulers]
 
+        preset = getattr(shared.opts, 'forge_preset', 'all')
+        def _defaults(tab: str):
+            if preset == 'xl':
+                return (
+                    getattr(shared.opts, 'xl_t2i_sampler' if tab == 'txt2img' else 'xl_i2i_sampler', sampler_names[0]),
+                    getattr(shared.opts, 'xl_t2i_scheduler' if tab == 'txt2img' else 'xl_i2i_scheduler', scheduler_names[0]),
+                )
+            if preset == 'flux':
+                return (
+                    getattr(shared.opts, 'flux_t2i_sampler' if tab == 'txt2img' else 'flux_i2i_sampler', sampler_names[0]),
+                    getattr(shared.opts, 'flux_t2i_scheduler' if tab == 'txt2img' else 'flux_i2i_scheduler', scheduler_names[0]),
+                )
+            # default to 'sd'
+            return (
+                getattr(shared.opts, 'sd_t2i_sampler' if tab == 'txt2img' else 'sd_i2i_sampler', sampler_names[0]),
+                getattr(shared.opts, 'sd_t2i_scheduler' if tab == 'txt2img' else 'sd_i2i_scheduler', scheduler_names[0]),
+            )
+
+        default_sampler, default_scheduler = _defaults(self.tabname)
+
         if shared.opts.samplers_in_dropdown:
             with FormRow(elem_id=f"sampler_selection_{self.tabname}"):
-                self.sampler_name = gr.Dropdown(label='Sampling method', elem_id=f"{self.tabname}_sampling", choices=sampler_names, value=sampler_names[0])
-                self.scheduler = gr.Dropdown(label='Schedule type', elem_id=f"{self.tabname}_scheduler", choices=scheduler_names, value=scheduler_names[0])
+                self.sampler_name = gr.Dropdown(label='Sampling method', elem_id=f"{self.tabname}_sampling", choices=sampler_names, value=default_sampler)
+                self.scheduler = gr.Dropdown(label='Schedule type', elem_id=f"{self.tabname}_scheduler", choices=scheduler_names, value=default_scheduler)
                 self.steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{self.tabname}_steps", label="Sampling steps", value=20)
         else:
             with FormGroup(elem_id=f"sampler_selection_{self.tabname}"):
                 self.steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{self.tabname}_steps", label="Sampling steps", value=20)
-                self.sampler_name = gr.Radio(label='Sampling method', elem_id=f"{self.tabname}_sampling", choices=sampler_names, value=sampler_names[0])
-                self.scheduler = gr.Dropdown(label='Schedule type', elem_id=f"{self.tabname}_scheduler", choices=scheduler_names, value=scheduler_names[0])
+                self.sampler_name = gr.Radio(label='Sampling method', elem_id=f"{self.tabname}_sampling", choices=sampler_names, value=default_sampler)
+                self.scheduler = gr.Dropdown(label='Schedule type', elem_id=f"{self.tabname}_scheduler", choices=scheduler_names, value=default_scheduler)
 
         self.infotext_fields = [
             PasteField(self.steps, "Steps", api="steps"),
