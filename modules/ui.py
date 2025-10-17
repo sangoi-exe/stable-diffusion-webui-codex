@@ -485,7 +485,7 @@ def create_ui():
                 hr_cfg,
                 hr_distilled_cfg,
                 override_settings,
-            ] + custom_inputs + [named_active_txt2img]
+            ] + [named_active_txt2img]
 
             txt2img_outputs = [
                 output_panel.gallery,
@@ -627,8 +627,12 @@ def create_ui():
                         return modules.txt2img.txt2img_from_json(id_task, request, payload, *script_args)
                 except Exception:
                     pass
-                # Fallback: legacy positional API (ignore last JSON slot if present)
-                return modules.txt2img.txt2img(id_task, request, *args[1:-1])
+                # Fallback: legacy positional API (ignore last JSON slot) and provide default script_args
+                try:
+                    defaults_script_args = modules.scripts.build_script_args_from_payload(modules.scripts.scripts_txt2img, {})
+                except Exception:
+                    defaults_script_args = []
+                return modules.txt2img.txt2img(id_task, request, *args[1:-1], *defaults_script_args)
 
             txt2img_args = dict(
                 fn=wrap_gradio_gpu_call(_txt2img_submit, extra_outputs=[None, '', '']),
@@ -981,7 +985,7 @@ def create_ui():
                 img2img_batch_png_info_dir,
                 img2img_batch_source_type,
                 img2img_batch_upload,
-            ] + custom_inputs + [named_active_img2img]
+            ] + [named_active_img2img]
 
             def _img2img_submit(*args, **kwargs):
                 if not args:
@@ -994,8 +998,12 @@ def create_ui():
                         return modules.img2img.img2img_from_json(*args, **kwargs)
                 except Exception:
                     pass
-                # Fallback to legacy positional API (ignore last JSON slot)
-                return modules.img2img.img2img(id_task, request, *args[1:-1])
+                # Fallback to legacy positional API (ignore last JSON slot) and provide default script_args
+                try:
+                    defaults_script_args = modules.scripts.build_script_args_from_payload(modules.scripts.scripts_img2img, {})
+                except Exception:
+                    defaults_script_args = []
+                return modules.img2img.img2img(id_task, request, *args[1:-1], *defaults_script_args)
 
             img2img_args = dict(
                 fn=wrap_gradio_gpu_call(_img2img_submit, extra_outputs=[None, '', '']),
