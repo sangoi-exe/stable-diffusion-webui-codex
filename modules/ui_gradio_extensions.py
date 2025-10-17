@@ -287,10 +287,10 @@ def _install_gradio_type_guards():
             multiselect = bool(getattr(self, "multiselect", False) or getattr(self, "allow_multiple", False))
 
             def _choice_value(item):
+                # Always reduce choice objects/tuples to their value token
                 if hasattr(item, "value"):
                     return item.value
-                if isinstance(item, (tuple, list)) and not multiselect:
-                    # for single-select, a choice can be (label, value)
+                if isinstance(item, (tuple, list)):
                     if len(item) >= 2:
                         return _choice_value(item[1])
                     if len(item) == 1:
