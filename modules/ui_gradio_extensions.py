@@ -208,6 +208,7 @@ def _install_gradio_type_guards():
         from gradio.components.dropdown import Dropdown
         from gradio.components.radio import Radio
         from gradio.components.checkbox import Checkbox
+        from gradio.components.number import Number
         from gradio.exceptions import Error as GradioError
     except Exception:
         return
@@ -544,3 +545,65 @@ def _install_gradio_type_guards():
 
         check_wrapped._sdw_guarded = True  # type: ignore[attr-defined]
         Checkbox.preprocess = check_wrapped  # type: ignore[assignment]
+
+    # ---- Number guard ----
+    if not getattr(Number.preprocess, "_sdw_guarded", False):
+        _num_orig = Number.preprocess
+
+        def num_wrapped(self, payload):
+            label = getattr(self, "label", None) or "<no-label>"
+            elem_id = getattr(self, "elem_id", None) or "<no-elem_id>"
+            precision = getattr(self, "precision", None)
+            minimum = getattr(self, "minimum", None)
+            maximum = getattr(self, "maximum", None)
+
+            default_val = getattr(self, "value", None)
+            try:
+                if callable(default_val):
+                    default_val = default_val()
+            except Exception:
+                pass
+
+            def _coerce(v):
+                if v is None:
+                    return None
+                if isinstance(v, (int, float)):
+                    return v
+                if isinstance(v, str):
+                    t = v.strip()
+                    if t.lower() in ("none", "null", ""):
+                        return None
+                    if re.match(r"^-?\d+$", t):
+                        try:
+                            return int(t)
+                        except Exception:
+                            pass
+                    if re.match(r"^-?\d*\.\d+$", t):
+                        try:
+                            return float(t)
+                        except Exception:
+                            pass
+                return v
+
+            coerced = _coerce(payload)
+            use = default_val if coerced is None else coerced
+            if use is None:
+                meta = (
+                    f"label={label!r} elem_id={elem_id!r} min={minimum!r} max={maximum!r} "
+                    f"precision={precision!r} default={default_val!r} payload={payload!r} coerced={coerced!r}"
+                )
+                raise TypeError(
+                    f"Number error [{meta}]: missing value. Neither payload nor component default is set."
+                )
+
+            try:
+                return _num_orig(self, use)
+            except Exception as e:
+                meta = (
+                    f"label={label!r} elem_id={elem_id!r} min={minimum!r} max={maximum!r} "
+                    f"precision={precision!r} default={default_val!r} payload={payload!r} coerced={coerced!r}"
+                )
+                raise type(e)(f"Number error [{meta}]: {e}") from e
+
+        num_wrapped._sdw_guarded = True  # type: ignore[attr-defined]
+        Number.preprocess = num_wrapped  # type: ignore[assignment]
