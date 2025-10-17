@@ -284,10 +284,13 @@ def _install_gradio_type_guards():
             except Exception:
                 raw_choices = []
 
+            multiselect = bool(getattr(self, "multiselect", False) or getattr(self, "allow_multiple", False))
+
             def _choice_value(item):
                 if hasattr(item, "value"):
                     return item.value
-                if isinstance(item, (tuple, list)):
+                if isinstance(item, (tuple, list)) and not multiselect:
+                    # for single-select, a choice can be (label, value)
                     if len(item) >= 2:
                         return _choice_value(item[1])
                     if len(item) == 1:
@@ -295,40 +298,93 @@ def _install_gradio_type_guards():
                     return None
                 return item
 
-            def _normalize(value):
+            def _normalize_single(value):
                 if hasattr(value, "value"):
                     return value.value
-                if isinstance(value, (tuple, list)):
+                if isinstance(value, (tuple, list)) and not multiselect:
                     return _choice_value(value)
+                if isinstance(value, int):
+                    # index into choices
+                    return value
                 return value
 
+            def _normalize_multi(value):
+                if value is None:
+                    return None
+                if isinstance(value, (tuple, list)):
+                    return [
+                        _choice_value(v.value if hasattr(v, "value") else v)
+                        for v in list(value)
+                    ]
+                # scalar provided to multiselect: coerce to single-item list
+                return [_normalize_single(value)]
+
             choice_values = [_choice_value(c) for c in raw_choices]
-            normalized_payload = _normalize(payload)
 
             label = getattr(self, "label", None) or "<no-label>"
             elem_id = getattr(self, "elem_id", None) or "<no-elem_id>"
 
-            if not choice_values:
-                raise ValueError(
-                    f"Dropdown preprocess failed for {label} (elem_id={elem_id}): "
-                    f"choices are empty, received payload={payload!r}"
-                )
-
-            if normalized_payload not in choice_values:
-                raise ValueError(
-                    f"Dropdown preprocess failed for {label} (elem_id={elem_id}): "
-                    f"payload={payload!r} normalized={normalized_payload!r} "
-                    f"is not one of choices={choice_values!r}"
-                )
-
+            # Resolve default now in case it's callable
+            default_val = getattr(self, "value", None)
             try:
-                return _drop_orig(self, normalized_payload)
-            except Exception as e:
-                raise type(e)(
-                    f"Dropdown preprocess failed for {label} (elem_id={elem_id}): "
-                    f"payload={payload!r} normalized={normalized_payload!r} "
-                    f"choices={choice_values!r} -> {e}"
-                ) from e
+                if callable(default_val):
+                    default_val = default_val()
+            except Exception:
+                pass
+
+            if multiselect:
+                norm = _normalize_multi(payload)
+                # None -> default -> [] if still None
+                if norm is None:
+                    norm = default_val if isinstance(default_val, list) else []
+                # Validate all selections
+                unknown = [v for v in norm if v not in choice_values]
+                if unknown:
+                    raise ValueError(
+                        f"Dropdown preprocess failed for {label} (elem_id={elem_id}): "
+                        f"unknown selections={unknown!r}; choices={choice_values!r}; payload={payload!r}"
+                    )
+                try:
+                    return _drop_orig(self, norm)
+                except Exception as e:
+                    raise type(e)(
+                        f"Dropdown preprocess failed for {label} (elem_id={elem_id}): payload={payload!r} normalized={norm!r} choices={choice_values!r} -> {e}"
+                    ) from e
+            else:
+                norm = _normalize_single(payload)
+                # Numeric index mapping
+                if isinstance(norm, int) and choice_values:
+                    if 0 <= norm < len(choice_values):
+                        norm = choice_values[norm]
+                    else:
+                        raise ValueError(
+                            f"Dropdown preprocess failed for {label} (elem_id={elem_id}): index {norm} out of range for choices len={len(choice_values)}"
+                        )
+
+                # String sentinels: none/null => default
+                if isinstance(norm, str) and norm.strip().lower() in ("none", "null"):
+                    norm = default_val
+
+                # If still None, use default
+                if norm is None:
+                    norm = default_val
+
+                if not choice_values:
+                    raise ValueError(
+                        f"Dropdown preprocess failed for {label} (elem_id={elem_id}): choices are empty, received payload={payload!r}"
+                    )
+
+                if norm not in choice_values:
+                    raise ValueError(
+                        f"Dropdown preprocess failed for {label} (elem_id={elem_id}): payload={payload!r} normalized={norm!r} is not one of choices={choice_values!r}"
+                    )
+
+                try:
+                    return _drop_orig(self, norm)
+                except Exception as e:
+                    raise type(e)(
+                        f"Dropdown preprocess failed for {label} (elem_id={elem_id}): payload={payload!r} normalized={norm!r} choices={choice_values!r} -> {e}"
+                    ) from e
 
         drop_wrapped._sdw_guarded = True  # type: ignore[attr-defined]
         Dropdown.preprocess = drop_wrapped  # type: ignore[assignment]
