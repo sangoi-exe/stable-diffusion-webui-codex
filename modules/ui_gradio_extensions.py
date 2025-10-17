@@ -255,20 +255,6 @@ def _install_gradio_type_guards():
             # This occurs legitimately during startup/load events where the
             # browser hasn't sent values for untouched controls yet.
             use = default_val if p is None else p
-            # Special-case: Variation strength slider sometimes receives the
-            # subseed sentinel -1 due to legacy positional misalignment. Map
-            # it to a safe default instead of crashing on bounds check.
-            is_variation_strength = (
-                (isinstance(label, str) and 'variation strength' in label.lower()) or
-                (isinstance(elem_id, str) and 'subseed_strength' in elem_id.lower())
-            )
-            if is_variation_strength and isinstance(use, (int, float)):
-                if use < 0 and (minimum is None or minimum >= 0):
-                    # prefer component default; fallback to min or 0
-                    fallback = default_val
-                    if fallback is None:
-                        fallback = minimum if isinstance(minimum, (int, float)) else 0.0
-                    use = fallback
             # If both payload and default are None, raise a clear error.
             if use is None:
                 meta = (
@@ -390,28 +376,6 @@ def _install_gradio_type_guards():
                     )
 
                 if norm not in choice_values:
-                    # Special-case: some UIs miswire sampler value into scheduler dropdown.
-                    # If the label suggests scheduler and the incoming value looks like a known sampler,
-                    # fall back to the component default to avoid a hard crash.
-                    try:
-                        from modules import sd_samplers
-                        known_samplers = set([x.name for x in sd_samplers.visible_samplers()])
-                    except Exception:
-                        known_samplers = set()
-
-                    is_scheduler_label = isinstance(label, str) and 'schedule' in label.lower()
-                    if is_scheduler_label and isinstance(norm, str) and norm in known_samplers:
-                        # Use default if available; otherwise pick the first choice
-                        substitute = default_val if default_val in choice_values else (choice_values[0] if choice_values else None)
-                        if substitute is not None:
-                            try:
-                                return _drop_orig(self, substitute)
-                            except Exception as e:
-                                raise type(e)(
-                                    f"Dropdown preprocess auto-substitution for {label} (elem_id={elem_id}) due to sampler value in scheduler: "
-                                    f"payload={payload!r} -> using default={substitute!r}; choices={choice_values!r} -> {e}"
-                                ) from e
-                    # Otherwise, strict failure
                     raise ValueError(
                         f"Dropdown preprocess failed for {label} (elem_id={elem_id}): payload={payload!r} normalized={norm!r} is not one of choices={choice_values!r}"
                     )
@@ -587,10 +551,6 @@ def _install_gradio_type_guards():
                     t = v.strip()
                     if t.lower() in ("none", "null", ""):
                         return None
-                    # Accept common seed sentinels for seed/subseed fields
-                    is_seed_field = ("seed" in (label or "").lower()) or ("seed" in (elem_id or "").lower())
-                    if is_seed_field and t.lower() in ("automatic", "auto", "random", "randomize"):
-                        return -1
                     if re.match(r"^-?\d+$", t):
                         try:
                             return int(t)
