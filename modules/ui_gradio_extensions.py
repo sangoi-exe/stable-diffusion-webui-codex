@@ -255,6 +255,20 @@ def _install_gradio_type_guards():
             # This occurs legitimately during startup/load events where the
             # browser hasn't sent values for untouched controls yet.
             use = default_val if p is None else p
+            # Special-case: Variation strength slider sometimes receives the
+            # subseed sentinel -1 due to legacy positional misalignment. Map
+            # it to a safe default instead of crashing on bounds check.
+            is_variation_strength = (
+                (isinstance(label, str) and 'variation strength' in label.lower()) or
+                (isinstance(elem_id, str) and 'subseed_strength' in elem_id.lower())
+            )
+            if is_variation_strength and isinstance(use, (int, float)):
+                if use < 0 and (minimum is None or minimum >= 0):
+                    # prefer component default; fallback to min or 0
+                    fallback = default_val
+                    if fallback is None:
+                        fallback = minimum if isinstance(minimum, (int, float)) else 0.0
+                    use = fallback
             # If both payload and default are None, raise a clear error.
             if use is None:
                 meta = (
