@@ -57,6 +57,13 @@ def _as_list(payload: dict, key: str):
 
 
 def _txt2img_from_payload(id_task: str, request: gr.Request, payload: dict, *script_args):
+    # Accept JSON string payload from hidden textbox and parse
+    if isinstance(payload, str):
+        try:
+            import json as _json
+            payload = _json.loads(payload)
+        except Exception:
+            raise ValueError("Invalid strict JSON payload: could not parse string")
     if not isinstance(payload, dict) or payload.get("__strict_version") != 1:
         raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
 

@@ -335,6 +335,12 @@ def img2img_from_json(id_task: str,
         raise ValueError("Missing JSON payload in img2img_from_json")
     # split custom script args vs payload (ignore positional script_args; compute from payload)
     payload = rest[-1]
+    if isinstance(payload, str):
+        try:
+            import json as _json
+            payload = _json.loads(payload)
+        except Exception:
+            raise ValueError("Invalid strict JSON payload: could not parse string")
     script_args = tuple()
     if not isinstance(payload, dict) or payload.get("__strict_version") != 1:
         raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")

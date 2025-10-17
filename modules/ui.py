@@ -461,7 +461,7 @@ def create_ui():
 
             output_panel = create_output_panel("txt2img", opts.outdir_txt2img_samples, toprow)
 
-            named_active_txt2img = gr.JSON(value={"__strict_version": 1, "__source": "txt2img", "__note": "placeholder"}, visible=False, elem_id="txt2img_named_active")
+            named_active_txt2img = gr.Textbox(value='{"__strict_version":1,"__source":"txt2img","__note":"placeholder"}', visible=False, elem_id="txt2img_named_active")
 
             # Legacy-compatible positional inputs + strict JSON at the end
             txt2img_inputs = [
@@ -1012,7 +1012,7 @@ def create_ui():
 
             output_panel = create_output_panel("img2img", opts.outdir_img2img_samples, toprow)
 
-            named_active_img2img = gr.JSON(value={"__strict_version": 1, "__source": "img2img", "__note": "placeholder"}, visible=False, elem_id="img2img_named_active")
+            named_active_img2img = gr.Textbox(value='{"__strict_version":1,"__source":"img2img","__note":"placeholder"}', visible=False, elem_id="img2img_named_active")
 
             submit_img2img_inputs = [
                 dummy_component,

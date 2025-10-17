@@ -491,7 +491,11 @@ function submit_named() {
         if (typeof strict !== 'object' || strict === null) {
             strict = { __strict_version: 1, __source: 'txt2img', __builder_error: 'builder returned non-object' };
         }
-        res[res.length - 1] = strict;
+        try {
+            res[res.length - 1] = JSON.stringify(strict);
+        } catch (_) {
+            res[res.length - 1] = '{"__strict_version":1,"__source":"txt2img","__builder_error":"json_stringify_failed"}';
+        }
     }
     return res;
 }
@@ -590,7 +594,11 @@ function submit_img2img_named() {
         if (typeof strict !== 'object' || strict === null) {
             strict = { __strict_version: 1, __source: 'img2img', __builder_error: 'builder returned non-object' };
         }
-        res[res.length - 1] = strict;
+        try {
+            res[res.length - 1] = JSON.stringify(strict);
+        } catch (_) {
+            res[res.length - 1] = '{"__strict_version":1,"__source":"img2img","__builder_error":"json_stringify_failed"}';
+        }
     }
     return res;
 }
