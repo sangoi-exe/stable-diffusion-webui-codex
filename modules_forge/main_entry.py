@@ -240,6 +240,7 @@ def forge_main_entry():
         ui_txt2img_height = get_a1111_ui_component('txt2img', 'Size-2')
         ui_txt2img_cfg = get_a1111_ui_component('txt2img', 'CFG scale')
         ui_txt2img_distilled_cfg = get_a1111_ui_component('txt2img', 'Distilled CFG Scale')
+        ui_txt2img_hr_distilled_cfg = get_a1111_ui_component('txt2img', 'Hires Distilled CFG Scale')
         ui_txt2img_sampler = get_a1111_ui_component('txt2img', 'sampler_name')
         ui_txt2img_scheduler = get_a1111_ui_component('txt2img', 'scheduler')
 
@@ -264,6 +265,7 @@ def forge_main_entry():
             ui_txt2img_cfg,
             ui_img2img_cfg,
             ui_txt2img_distilled_cfg,
+            ui_txt2img_hr_distilled_cfg,
             ui_img2img_distilled_cfg,
             ui_txt2img_sampler,
             ui_img2img_sampler,
@@ -312,6 +314,7 @@ def forge_main_entry():
 
                 (t2i_w, t2i_h) = t2i_wh
                 (i2i_w, i2i_h) = i2i_wh
+                flux_interactive = (v == 'flux')
                 return [
                     gr.update(),  # ui_vae
                     gr.update(),  # ui_clip_skip
@@ -325,8 +328,9 @@ def forge_main_entry():
                     gr.update(value=i2i_h),   # ui_img2img_height
                     gr.update(value=t2i_cfg), # ui_txt2img_cfg
                     gr.update(value=i2i_cfg), # ui_img2img_cfg
-                    gr.update(value=t2i_dcfg),# ui_txt2img_distilled_cfg
-                    gr.update(value=i2i_dcfg),# ui_img2img_distilled_cfg
+                    gr.update(value=t2i_dcfg, interactive=flux_interactive), # ui_txt2img_distilled_cfg
+                    gr.update(interactive=flux_interactive), # ui_txt2img_hr_distilled_cfg
+                    gr.update(value=i2i_dcfg, interactive=flux_interactive), # ui_img2img_distilled_cfg
                     gr.update(value=t2i_sampler),    # ui_txt2img_sampler
                     gr.update(value=i2i_sampler),    # ui_img2img_sampler
                     gr.update(value=t2i_scheduler),  # ui_txt2img_scheduler
