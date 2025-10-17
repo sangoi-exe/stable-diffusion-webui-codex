@@ -336,6 +336,8 @@ def img2img_from_json(id_task: str,
     # split custom script args vs payload (ignore positional script_args; compute from payload)
     payload = rest[-1]
     script_args = tuple()
+    if not isinstance(payload, dict) or payload.get("__strict_version") != 1:
+        raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
 
     if not isinstance(payload, dict) or payload.get("__strict_version") != 1:
         raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
@@ -364,6 +366,19 @@ def img2img_from_json(id_task: str,
     inpainting_fill = int(payload.get('img2img_inpainting_fill', 0))
 
     override_settings_texts = []
+
+    # Early required keys for img2img core
+    required_keys = [
+        'img2img_prompt', 'img2img_neg_prompt', 'img2img_styles',
+        'img2img_batch_count', 'img2img_batch_size',
+        'img2img_cfg_scale', 'img2img_distilled_cfg_scale',
+        'img2img_height', 'img2img_width',
+        'img2img_steps', 'img2img_sampling', 'img2img_scheduler', 'img2img_seed',
+    ]
+    missing = [k for k in required_keys if k not in payload]
+    if missing:
+        present = sorted([k for k in payload.keys() if not k.startswith('__')])[:16]
+        raise ValueError(f"Strict JSON is missing required fields: {missing} | present_keys(sample)={present}")
 
     # Build script args from payload for img2img pipeline
     script_args_payload = modules.scripts.build_script_args_from_payload(modules.scripts.scripts_img2img, payload)

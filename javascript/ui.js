@@ -480,15 +480,18 @@ function buildNamedTxt2img(_args) {
 
 function submit_named() {
     const res = submitWithProgress(arguments, 'txt2img_gallery_container', 'txt2img_gallery');
-    try {
-        if (Array.isArray(res) && res.length > 0) {
-            const strict = buildNamedTxt2img(arguments);
-            if (strict && typeof strict === 'object' && strict.__strict_version === 1) {
-                res[res.length - 1] = strict;
-            }
+    if (Array.isArray(res) && res.length > 0) {
+        let strict;
+        try {
+            strict = buildNamedTxt2img(arguments);
+        } catch (e) {
+            console.warn('submit_named(): builder failed, sending minimal strict JSON for diagnostics', e);
+            strict = { __strict_version: 1, __source: 'txt2img', __builder_error: String(e?.message || e) };
         }
-    } catch (e) {
-        console.warn('submit_named(): failed to attach strict JSON', e);
+        if (typeof strict !== 'object' || strict === null) {
+            strict = { __strict_version: 1, __source: 'txt2img', __builder_error: 'builder returned non-object' };
+        }
+        res[res.length - 1] = strict;
     }
     return res;
 }
@@ -577,7 +580,17 @@ function buildNamedImg2img(_args) {
 function submit_img2img_named() {
     const res = submitWithProgress(arguments, 'img2img_gallery_container', 'img2img_gallery');
     if (Array.isArray(res) && res.length > 0) {
-        res[res.length - 1] = buildNamedImg2img(arguments);
+        let strict;
+        try {
+            strict = buildNamedImg2img(arguments);
+        } catch (e) {
+            console.warn('submit_img2img_named(): builder failed, sending minimal strict JSON for diagnostics', e);
+            strict = { __strict_version: 1, __source: 'img2img', __builder_error: String(e?.message || e) };
+        }
+        if (typeof strict !== 'object' || strict === null) {
+            strict = { __strict_version: 1, __source: 'img2img', __builder_error: 'builder returned non-object' };
+        }
+        res[res.length - 1] = strict;
     }
     return res;
 }

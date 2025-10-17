@@ -60,6 +60,19 @@ def _txt2img_from_payload(id_task: str, request: gr.Request, payload: dict, *scr
     if not isinstance(payload, dict) or payload.get("__strict_version") != 1:
         raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
 
+    # Early validation to report all missing required fields at once
+    required_keys = [
+        'txt2img_prompt', 'txt2img_neg_prompt', 'txt2img_styles',
+        'txt2img_batch_count', 'txt2img_batch_size',
+        'txt2img_cfg_scale', 'txt2img_distilled_cfg_scale',
+        'txt2img_height', 'txt2img_width', 'txt2img_hr_enable',
+        'txt2img_steps', 'txt2img_sampling', 'txt2img_scheduler', 'txt2img_seed',
+    ]
+    missing = [k for k in required_keys if k not in payload]
+    if missing:
+        present = sorted([k for k in payload.keys() if not k.startswith('__')])[:16]
+        raise ValueError(f"Strict JSON is missing required fields: {missing} | present_keys(sample)={present}")
+
     prompt = _require(payload, 'txt2img_prompt') or ''
     negative_prompt = _require(payload, 'txt2img_neg_prompt') or ''
     prompt_styles = _as_list(payload, 'txt2img_styles')
@@ -70,6 +83,12 @@ def _txt2img_from_payload(id_task: str, request: gr.Request, payload: dict, *scr
     height = _as_int(payload, 'txt2img_height')
     width = _as_int(payload, 'txt2img_width')
     enable_hr = _as_bool(payload, 'txt2img_hr_enable')
+
+    # Sampler core (required)
+    steps = _as_int(payload, 'txt2img_steps')
+    sampler_name = _require(payload, 'txt2img_sampling')
+    scheduler_name = _require(payload, 'txt2img_scheduler')
+    seed = _as_int(payload, 'txt2img_seed')
 
     # Hires fields required only if enabled
     if enable_hr:
@@ -138,6 +157,12 @@ def _txt2img_from_payload(id_task: str, request: gr.Request, payload: dict, *scr
         override_settings_texts,
         *script_args_payload,
     )
+
+    # Apply sampler core onto processing object
+    proc.steps = steps
+    proc.sampler_name = sampler_name
+    proc.scheduler = scheduler_name
+    proc.seed = seed
 
     with closing(proc):
         processed = modules.scripts.scripts_txt2img.run(proc, *proc.script_args)
