@@ -661,6 +661,48 @@ def create_ui():
             def _sync_hr(v):
                 return v, gr.Accordion.update(open=bool(v))
             hr_enable.change(fn=_sync_hr, inputs=[hr_enable], outputs=[enable_hr, enable_hr.accordion], show_progress=False, queue=False)
+
+            # Gate Hires controls interactivity by the toggle; preset gating for Distilled handled elsewhere
+            def _hr_set_interactive(v):
+                on = bool(v)
+                return [
+                    gr.update(interactive=on),  # hr_upscaler
+                    gr.update(interactive=on),  # hr_second_pass_steps
+                    gr.update(interactive=on),  # denoising_strength
+                    gr.update(interactive=on),  # hr_scale
+                    gr.update(interactive=on),  # hr_resize_x
+                    gr.update(interactive=on),  # hr_resize_y
+                    gr.update(interactive=on),  # hr_checkpoint_name
+                    gr.update(interactive=on),  # hr_additional_modules
+                    gr.update(interactive=on),  # hr_sampler_name
+                    gr.update(interactive=on),  # hr_scheduler
+                    gr.update(interactive=on),  # hr_prompt
+                    gr.update(interactive=on),  # hr_negative_prompt
+                    gr.update(interactive=on),  # hr_cfg
+                    gr.update(interactive=on),  # hr_distilled_cfg (preset gating adds extra restriction)
+                ]
+            hr_enable.change(
+                fn=_hr_set_interactive,
+                inputs=[hr_enable],
+                outputs=[
+                    hr_upscaler,
+                    hr_second_pass_steps,
+                    denoising_strength,
+                    hr_scale,
+                    hr_resize_x,
+                    hr_resize_y,
+                    hr_checkpoint_name,
+                    hr_additional_modules,
+                    hr_sampler_name,
+                    hr_scheduler,
+                    hr_prompt,
+                    hr_negative_prompt,
+                    hr_cfg,
+                    hr_distilled_cfg,
+                ],
+                show_progress=False,
+                queue=False,
+            )
             enable_hr.change(fn=lambda v: gr.update(value=v), inputs=[enable_hr], outputs=[hr_enable], show_progress=False, queue=False)
 
             def select_gallery_image(index):
@@ -919,8 +961,8 @@ def create_ui():
                             pass
 
                     elif category == "accordions":
-            with gr.Row(elem_id="img2img_accordions", elem_classes="accordions"):
-                scripts.scripts_img2img.setup_ui_for_section(category)
+                        with gr.Row(elem_id="img2img_accordions", elem_classes="accordions"):
+                            scripts.scripts_img2img.setup_ui_for_section(category)
 
                     elif category == "batch":
                         if not opts.dimensions_and_batch_together:
