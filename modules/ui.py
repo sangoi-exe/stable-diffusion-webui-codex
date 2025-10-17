@@ -457,11 +457,35 @@ def create_ui():
 
             named_active_txt2img = gr.JSON(value=None, visible=False, elem_id="txt2img_named_active")
 
-            # Compact: only id + custom script inputs + strict JSON
+            # Legacy-compatible positional inputs + strict JSON at the end
             txt2img_inputs = [
                 dummy_component,
-                named_active_txt2img,
-            ]
+                toprow.prompt,
+                toprow.negative_prompt,
+                toprow.ui_styles.dropdown,
+                batch_count,
+                batch_size,
+                cfg_scale,
+                distilled_cfg_scale,
+                height,
+                width,
+                enable_hr,
+                denoising_strength,
+                hr_scale,
+                hr_upscaler,
+                hr_second_pass_steps,
+                hr_resize_x,
+                hr_resize_y,
+                hr_checkpoint_name,
+                hr_additional_modules,
+                hr_sampler_name,
+                hr_scheduler,
+                hr_prompt,
+                hr_negative_prompt,
+                hr_cfg,
+                hr_distilled_cfg,
+                override_settings,
+            ] + custom_inputs + [named_active_txt2img]
 
             txt2img_outputs = [
                 output_panel.gallery,
@@ -603,8 +627,8 @@ def create_ui():
                         return modules.txt2img.txt2img_from_json(id_task, request, payload, *script_args)
                 except Exception:
                     pass
-                # Fallback: legacy positional API (preserve original behaviour)
-                return modules.txt2img.txt2img(id_task, request, *args[1:])
+                # Fallback: legacy positional API (ignore last JSON slot if present)
+                return modules.txt2img.txt2img(id_task, request, *args[1:-1])
 
             txt2img_args = dict(
                 fn=wrap_gradio_gpu_call(_txt2img_submit, extra_outputs=[None, '', '']),
@@ -630,14 +654,12 @@ def create_ui():
                     index += 1
                 return gr.update(selected_index=index)
 
-            # id + gallery + index + gen_info + custom_inputs + JSON
-            txt2img_upscale_inputs = [
-                txt2img_inputs[0],
+            # id + gallery + index + gen_info + all txt2img inputs (positional + JSON)
+            txt2img_upscale_inputs = txt2img_inputs[0:1] + [
                 output_panel.gallery,
                 dummy_component_number,
                 output_panel.generation_info,
-                txt2img_inputs[-1],
-            ]
+            ] + txt2img_inputs[1:]
             output_panel.button_upscale.click(
                 fn=wrap_gradio_gpu_call(modules.txt2img.txt2img_upscale_from_json, extra_outputs=[None, '', '']),
                 inputs=txt2img_upscale_inputs,
@@ -959,7 +981,7 @@ def create_ui():
                 img2img_batch_png_info_dir,
                 img2img_batch_source_type,
                 img2img_batch_upload,
-            ] + [named_active_img2img]
+            ] + custom_inputs + [named_active_img2img]
 
             def _img2img_submit(*args, **kwargs):
                 if not args:
@@ -972,8 +994,8 @@ def create_ui():
                         return modules.img2img.img2img_from_json(*args, **kwargs)
                 except Exception:
                     pass
-                # Fallback to legacy positional API
-                return modules.img2img.img2img(id_task, request, *args[1:])
+                # Fallback to legacy positional API (ignore last JSON slot)
+                return modules.img2img.img2img(id_task, request, *args[1:-1])
 
             img2img_args = dict(
                 fn=wrap_gradio_gpu_call(_img2img_submit, extra_outputs=[None, '', '']),
