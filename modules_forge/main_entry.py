@@ -94,7 +94,13 @@ def make_checkpoint_manager_ui():
         if len(sd_models.checkpoints_list) > 0:
             shared.opts.set('sd_model_checkpoint', next(iter(sd_models.checkpoints_list.values())).name)
 
-    ui_forge_preset = gr.Radio(label="UI", value=lambda: getattr(shared.opts, 'forge_preset', 'all'), choices=['sd', 'xl', 'flux', 'all'], elem_id="forge_ui_preset")
+    ui_forge_preset = gr.Radio(
+        label="UI",
+        value=lambda: getattr(shared.opts, 'forge_preset', 'all'),
+        choices=['sd', 'xl', 'flux', 'all'],
+        elem_id="forge_ui_preset",
+        interactive=True,
+    )
 
     ckpt_list, vae_list = refresh_models()
     if not ckpt_list:
@@ -228,7 +234,7 @@ def get_a1111_ui_component(tab, label):
 
 
 def forge_main_entry():
-    # Wire preset changes to downstream defaults
+    # Wire preset changes to downstream defaults and persist option
     try:
         ui_txt2img_width = get_a1111_ui_component('txt2img', 'Size-1')
         ui_txt2img_height = get_a1111_ui_component('txt2img', 'Size-2')
@@ -265,9 +271,14 @@ def forge_main_entry():
             ui_img2img_scheduler,
         ]
         if ui_forge_preset is not None:
-            def _noop():
+            def on_preset_change(v):
+                shared.opts.set('forge_preset', v)
+                try:
+                    shared.opts.save(shared.config_filename)
+                except Exception:
+                    pass
                 return [gr.update() for _ in outputs]
-            ui_forge_preset.change(_noop, inputs=[], outputs=outputs, queue=False, show_progress=False)
+            ui_forge_preset.change(on_preset_change, inputs=[ui_forge_preset], outputs=outputs, queue=False, show_progress=False)
     except Exception:
         pass
     refresh_model_loading_parameters()
