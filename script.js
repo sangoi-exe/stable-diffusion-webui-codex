@@ -293,23 +293,46 @@ document.addEventListener("DOMContentLoaded", function() {
                     method = input.method || 'GET';
                 }
             } catch (_) { /* ignore */ }
-            if (method.toUpperCase() === 'POST' && init && typeof init.body === 'string') {
-                if (/(\/queue|\/predict|\/internal\/queue)/.test(String(url))) {
-                    try {
-                        const body = JSON.parse(init.body);
-                        if (Array.isArray(body?.data)) {
-                            body.data = body.data.map(coerceNumeric);
-                            // Attach named mapping when possible
-                            const named = buildNamedPayload(body);
-                            if (named) body._named = named;
-                            init.body = JSON.stringify(body);
+                if (method.toUpperCase() === 'POST' && init && typeof init.body === 'string') {
+                    if (/(\/queue|\/predict|\/internal\/queue)/.test(String(url))) {
+                        try {
+                            const body = JSON.parse(init.body);
+                            if (Array.isArray(body?.data)) {
+                                body.data = body.data.map(coerceNumeric);
+                                // Attach named mapping when possible
+                                const named = buildNamedPayload(body);
+                                if (named) body._named = named;
+                                // If we're on txt2img/img2img tabs and payload lacks strict JSON
+                                // attach DOM-built strict JSON into the last slot as a safety net.
+                                try {
+                                    const tabBtn = /** @type {HTMLElement|null} */ (get_uiCurrentTab());
+                                    const label = (tabBtn?.textContent || '').toLowerCase();
+                                    const last = body.data[body.data.length - 1];
+                                    const hasStrict = !!(last && typeof last === 'object' && last.__strict_version === 1);
+                                    if (!hasStrict) {
+                                        if (label.includes('txt2img') && typeof /** @type {any} */(window).buildNamedTxt2img === 'function') {
+                                            const strict = /** @type {any} */(window).buildNamedTxt2img([]);
+                                            if (strict && strict.__strict_version === 1) {
+                                                body.data[body.data.length - 1] = strict;
+                                            }
+                                        } else if (label.includes('img2img') && typeof /** @type {any} */(window).buildNamedImg2img === 'function') {
+                                            const strict = /** @type {any} */(window).buildNamedImg2img([]);
+                                            if (strict && strict.__strict_version === 1) {
+                                                body.data[body.data.length - 1] = strict;
+                                            }
+                                        }
+                                    }
+                                } catch (e) {
+                                    console.warn('strict JSON attach fallback failed:', e);
+                                }
+                                init.body = JSON.stringify(body);
+                            }
+                        } catch (e) {
+                            // ignore malformed JSON; fall through to original fetch
                         }
-                    } catch (e) {
-                        // ignore malformed JSON; fall through to original fetch
                     }
                 }
-            }
-        } catch (e) {
+            } catch (e) {
             console.warn('fetch-normalize failed:', e);
         }
         return origFetch.call(this, input, init);

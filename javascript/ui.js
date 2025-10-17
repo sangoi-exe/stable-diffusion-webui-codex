@@ -439,11 +439,21 @@ function buildNamedTxt2img(_args) {
     return named;
 }
 
+// Expose builders globally for fetch wrapper fallbacks
+/** @type {any} */(uiWindow).buildNamedTxt2img = buildNamedTxt2img;
+/** @type {any} */(uiWindow).buildNamedImg2img = buildNamedImg2img;
+
 function submit_named() {
     const res = submitWithProgress(arguments, 'txt2img_gallery_container', 'txt2img_gallery');
-    // Put named override into the last argument slot (hidden JSON)
-    if (Array.isArray(res) && res.length > 0) {
-        res[res.length - 1] = buildNamedTxt2img(arguments);
+    try {
+        if (Array.isArray(res) && res.length > 0) {
+            const strict = buildNamedTxt2img(arguments);
+            if (strict && typeof strict === 'object' && strict.__strict_version === 1) {
+                res[res.length - 1] = strict;
+            }
+        }
+    } catch (e) {
+        console.warn('submit_named(): failed to attach strict JSON', e);
     }
     return res;
 }
