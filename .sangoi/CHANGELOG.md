@@ -23,3 +23,26 @@
  - DX: Erros de submit sem JSON estrito agora trazem diagnóstico aprofundado: amostra dos últimos args (tipos/parse JSON), busca por JSON estrito fora de ordem (índice), elem_id esperado vs. real do último input, IP/UA do cliente e local do código. Mantemos fail‑fast sem reintroduzir fallback.
 - Fix(UI Inject): Evitamos colisões de basenames ao injetar JS. `modules/ui_gradio_extensions.py` agora ignora assets sob `legacy/` e deduplica por basename, preferindo arquivos não‑legacy. Isso previne que `legacy/javascript/ui.js` sobrescreva o `javascript/ui.js` atual e evita perda do `submit_named` no navegador.
  - Fix(JS Submit): `submitWithProgress()` agora injeta o payload estrito como string JSON (fallback para objeto). Isso maximiza compatibilidade com `gr.JSON` como input oculto e previne valores `None` no último slot.
+
+- Docs/Structure: Added `.sangoi/one-trainer/` with research and plan to align repo structure with Nerogar’s OneTrainer patterns (no Tkinter, keep Gradio). Includes mapping, multi‑path proposal, implementation plan, UI integration, and rollout.
+- Docs/Architecture: Added `.sangoi/one-trainer/architecture/*` describing full inference rewrite (per‑model engines, orchestrator/registry, and new `Txt2Vid`/`Img2Vid` tabs) with migration and rollout plan.
+- Research: Added ComfyUI/SwarmUI research, compatibility matrix, and UI dropdown plan for inference type.
+- Core: Scaffolded `backend/core/` package (engine interface, request dataclasses, registry, orchestrator) plus unit tests to support the new modular pipeline.
+- Process: Updated implementation/rollout plans to enforce manual-only validation and verbose error logging (sem pytest).
+- Engines: Added `backend/engines/` scaffolding with SD15/SDXL/Flux stubs and registration helpers; documented manual validation steps in `.sangoi/one-trainer/architecture/manual-validation.md`.
+ - Engine(sd15): Implemented functional SD15 engine over existing WebUI processing for `txt2img`, `img2img`, `inpaint`, and `upscale` via hires-fix; loads checkpoints through Forge loading parameters (`modules.sd_models.model_data.forge_loading_parameters`).
+- Engine(sdxl): Implemented functional SDXL engine (`txt2img`, `img2img`, `inpaint`, `upscale`), same loading/bridging strategy as sd15.
+- Engine(flux): Implemented functional Flux engine (`txt2img`); unsupported tasks raise `UnsupportedTaskError` with full context.
+- UI: Replaced legacy radio preset with `Engine` dropdown (left of `Checkpoint`) populated from engine registry; persists as `codex_engine` and mirrors legacy preset for compat; updates default dims/CFG/sampler/scheduler per engine.
+- Policy: Zero legacy compatibility — removed preset radio wiring and any fallback/adapters from the migration plan. `txt2img` handler now calls the new Orchestrator directly (no legacy processing path).
+- Cutover(img2img): `img2img_from_json` now builds `Img2ImgRequest` and routes through `InferenceOrchestrator` using `codex_engine` + current checkpoint. No legacy processing path.
+- Video: Added Txt2Vid and Img2Vid tabs (UI) wired to Orchestrator with strict JSON submit; added engine stubs `svd` (img2vid) and `hunyuan_video` (txt2vid/img2vid) to the registry.
+- Video(Wan 2.2): Added WAN engines: `wan_ti2v_5b` (txt2vid/img2vid), `wan_t2v_14b` (txt2vid), `wan_i2v_14b` (img2vid) — stubs with explicit errors until integration.
+- Docs: Added `.sangoi/one-trainer/param-matrix.md` mapping required/optional parameters per engine/task.
+- UI: Added Mode dropdown (Normal/LCM/Turbo/Lightning) in Quicksettings; requests carry `metadata.mode`; engines may adapt or ignore with explicit logs.
+- Core: Added per-engine parameter interfaces + parsers:
+  - Code: `backend/core/params/*`, `backend/core/enums.py`, `backend/core/param_registry.py`.
+  - Engines now validate/normalize requests via `parse_params(engine, task, request)`.
+ - Presets: Added loader/applier (`backend/core/presets.py`) and seed preset files under `configs/presets/`. Engines apply preset patch (fill-only) before validation and log `applied_preset_patch`.
+
+- Docs: Updated handoff `.sangoi/handoffs/2025-10-18-codex-inference-rewrite.md` with 6 solution paths for WAN 2.2 integration, selected Path A (Native PyTorch) as intended approach, and added MVP/validation/risks sections. No user-facing changes yet.
