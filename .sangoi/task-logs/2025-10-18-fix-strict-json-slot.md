@@ -41,4 +41,5 @@ Update: 2025-10-18 (VAE dropdown parity)
 - modules_forge/main_entry.py / shared_options.py: Introduced `forge_selected_vae` option, split quicksettings into single-select VAE and multiselect text encoder list, migrated legacy stored values, and ensured backend loading combines the selected VAE with additional modules.
 - modules/ui_settings.py & javascript/ui.js: wired the “Change checkpoint” button and `selectVAE()` helper to drive the new components (VAE dropdown + text encoder multiselect) with clear fallbacks; skipped legacy quicksettings so only the new widgets render.
 - modules/ui_extra_networks_checkpoints_user_metadata.py: refreshed module list retrieval to match the updated `refresh_models()` contract.
+- Follow-up: Made the new VAE/text encoder dropdowns explicitly `interactive=True` so Gradio renders the full listbox UI.
 - Validation: `npm run typecheck` (blocked in sandbox; host run shows only legacy errors).
