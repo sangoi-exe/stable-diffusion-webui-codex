@@ -14,7 +14,7 @@ from transformers import modeling_utils
 
 from backend import memory_management
 from backend.args import args
-from backend.utils import read_arbitrary_config, load_torch_file, beautiful_print_gguf_state_dict_statics
+from backend.utils import read_arbitrary_config, load_torch_file, beautiful_print_gguf_state_dict_statics, KeyPrefixView
 from backend.state_dict import try_filter_state_dict, load_state_dict
 from backend.operations import using_forge_operations
 from backend.nn.vae import IntegratedAutoencoderKL
@@ -527,16 +527,8 @@ def replace_state_dict(sd, asd, guess):
 
 def preprocess_state_dict(sd):
     if not any(k.startswith("model.diffusion_model") for k in sd.keys()):
-        try:
-            _trace.event("preprocess_prefix_add_start")
-        except Exception:
-            pass
-        sd = {f"model.diffusion_model.{k}": v for k, v in sd.items()}
-        try:
-            _trace.event("preprocess_prefix_add_done")
-        except Exception:
-            pass
-
+        _trace.event("preprocess_prefix_add_view")
+        return KeyPrefixView(sd, "model.diffusion_model.")
     return sd
 
 

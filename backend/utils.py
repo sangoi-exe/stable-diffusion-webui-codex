@@ -9,6 +9,45 @@ import torch
 
 import backend.misc.checkpoint_pickle
 from backend.operations_gguf import ParameterGGUF
+from collections.abc import MutableMapping
+
+
+class KeyPrefixView(MutableMapping):
+    """Lightweight mapping view that exposes `base` keys with a fixed prefix.
+
+    - Does not materialize tensor values; delegates to `base[key_without_prefix]` on access.
+    - Deletions and sets propagate to the underlying mapping.
+    - Useful to avoid rebuilding huge state_dicts on CPU.
+    """
+
+    def __init__(self, base: MutableMapping, prefix: str):
+        self._base = base
+        self._prefix = prefix
+
+    def _strip(self, k: str) -> str:
+        if not k.startswith(self._prefix):
+            raise KeyError(k)
+        return k[len(self._prefix):]
+
+    def __getitem__(self, k: str):
+        return self._base[self._strip(k)]
+
+    def __setitem__(self, k: str, v):
+        self._base[self._strip(k)] = v
+
+    def __delitem__(self, k: str):
+        del self._base[self._strip(k)]
+
+    def __iter__(self):
+        for k in self._base.keys():
+            yield f"{self._prefix}{k}"
+
+    def __len__(self) -> int:
+        try:
+            return len(self._base.keys())
+        except Exception:
+            # Fallback: iterate
+            return sum(1 for _ in self.__iter__())
 
 
 def read_arbitrary_config(directory):
