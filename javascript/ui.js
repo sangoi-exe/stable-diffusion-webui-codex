@@ -745,11 +745,14 @@ onUiLoaded(() => {
                 submit_named_exported: hasNamed,
                 submit_img2img_named_exported: hasImgNamed,
             });
+            try { uiWindow.__STRICT_CHECK_OK__ = false; uiWindow.__STRICT_CHECK_REASON__ = 'missing pieces'; } catch {}
         } else {
             console.info('[StrictSubmitCheck] OK: strict submit handlers and hidden JSON slots detected.');
+            try { uiWindow.__STRICT_CHECK_OK__ = true; uiWindow.__STRICT_CHECK_REASON__ = ''; } catch {}
         }
     } catch (e) {
         console.warn('[StrictSubmitCheck] Failed to run startup checks', e);
+        try { uiWindow.__STRICT_CHECK_OK__ = false; uiWindow.__STRICT_CHECK_REASON__ = String(e); } catch {}
     }
 });
 

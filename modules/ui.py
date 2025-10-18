@@ -791,6 +791,35 @@ def create_ui():
                         })
                 except Exception:
                     pass
+                # Build a narrative route script (human-friendly)
+                route_lines = []
+                try:
+                    route_lines.append("1) Client action: Generate clicked (inferred)")
+                    route_lines.append("2) Server handler: modules/ui.py::_txt2img_submit")
+                    route_lines.append(f"3) Args received: len={len(args)}; last_idx={len(args)-1}")
+                    ltype = type(last).__name__
+                    route_lines.append(f"4) Last arg type: {ltype}; JSON parse: {'ok' if (tail and tail[-1].get('json_parse_ok')) else 'fail' if isinstance(last, str) else 'n/a'}")
+                    route_lines.append(f"5) Strict JSON found elsewhere: {found_idx != -1} (idx={found_idx})")
+                    route_lines.append(f"6) Component tail: {[x.get('elem_id') for x in comp_tail]}")
+                    route_lines.append(f"7) Expected last elem_id: {expected_last_eid}; actual: {actual_last_eid}")
+                    route_lines.append("8) Verdict: missing strict JSON in last slot → reject")
+                except Exception:
+                    pass
+
+                route_lines = []
+                try:
+                    route_lines.append("1) Client action: Generate clicked (inferred)")
+                    route_lines.append("2) Server handler: modules/ui.py::_img2img_submit")
+                    route_lines.append(f"3) Args received: len={len(args)}; last_idx={len(args)-1}")
+                    ltype = type(last).__name__
+                    route_lines.append(f"4) Last arg type: {ltype}; JSON parse: {'ok' if (tail and tail[-1].get('json_parse_ok')) else 'fail' if isinstance(last, str) else 'n/a'}")
+                    route_lines.append(f"5) Strict JSON found elsewhere: {found_idx != -1} (idx={found_idx})")
+                    route_lines.append(f"6) Component tail: {[x.get('elem_id') for x in comp_tail]}")
+                    route_lines.append(f"7) Expected last elem_id: {expected_last_eid}; actual: {actual_last_eid}")
+                    route_lines.append("8) Verdict: missing strict JSON in last slot → reject")
+                except Exception:
+                    pass
+
                 detail = {
                     'error_code': 'SDWUI_STRICT_JSON_MISSING',
                     'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
@@ -812,6 +841,8 @@ def create_ui():
                     'component_tail': comp_tail,
                     'likely_root_cause': likely,
                     'remediation': 'Ensure Generate is bound with _js="submit_named" and that javascript/ui.js attaches strict JSON into the hidden slot; clear browser cache and disable extensions that add inputs after the named slot.',
+                    'route_trace': route_lines,
+                    'route_script': "\n".join(route_lines),
                     'strict_mode_enforced_since': '2025-10-17',
                 }
                 raise ValueError(f"Invalid or missing __strict_version in payload; frontend must send strict JSON | details={detail}")
@@ -1323,6 +1354,8 @@ def create_ui():
                     'component_tail': comp_tail,
                     'likely_root_cause': likely,
                     'remediation': 'Ensure Generate is bound with _js="submit_img2img_named" and that javascript/ui.js attaches strict JSON into the hidden slot; clear browser cache and disable extensions that add inputs after the named slot.',
+                    'route_trace': route_lines,
+                    'route_script': "\n".join(route_lines),
                     'strict_mode_enforced_since': '2025-10-17',
                 }
                 raise ValueError(f"Invalid or missing __strict_version in payload; frontend must send strict JSON | details={detail}")
