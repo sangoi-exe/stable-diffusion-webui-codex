@@ -13,6 +13,7 @@ set CODEX_VAE_DTYPE=fp32
 set CODEX_VAE_IN_CPU=0
 set CODEX_ALL_IN_FP32=0
 set CODEX_TRACE_TORCH=1
+set CODEX_TRACE_LIMIT=1000
 
 REM Note: You can still use an external 'webui.settings.bat' if you prefer.
 if exist webui.settings.bat (
