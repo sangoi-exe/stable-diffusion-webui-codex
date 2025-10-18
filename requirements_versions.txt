@@ -44,3 +44,5 @@ huggingface-hub==0.35.3
 joblib==1.5.2
 onnxruntime-gpu==1.23.0 # pinned: bumping often causes resolver conflicts
 clip-interrogator
+colorama==0.4.6
+rich==13.9.2

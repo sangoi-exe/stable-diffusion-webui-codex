@@ -43,7 +43,9 @@
 - Core: Added per-engine parameter interfaces + parsers:
   - Code: `backend/core/params/*`, `backend/core/enums.py`, `backend/core/param_registry.py`.
   - Engines now validate/normalize requests via `parse_params(engine, task, request)`.
-  - Presets: Added loader/applier (`backend/core/presets.py`) and seed preset files under `configs/presets/`. Engines apply preset patch (fill-only) before validation and log `applied_preset_patch`.
+- Presets: Added loader/applier (`backend/core/presets.py`) and seed preset files under `configs/presets/`. Engines apply preset patch (fill-only) before validation and log `applied_preset_patch`.
+
+- Deps: Add `colorama==0.4.6` and `rich==13.9.2` to enable colored console/logging; logging setup already uses Rich/Colorama with tqdm-aware handler and safe fallback.
 
 - Engine(wan_ti2v_5b): Introduced loader (`backend/engines/video/wan/loader.py`) and forward skeleton with progress events in `backend/engines/video/wan/ti2v5b_engine.py`. Adds Normal `img2vid.yaml` preset. Generation intentionally raises `EngineExecutionError` until weights are wired; validation is UI-first.
 
