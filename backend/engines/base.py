@@ -20,7 +20,13 @@ class DiffusionEngine(BaseInferenceEngine):
         super().__init__()
         self._model_ref: Optional[str] = None
         self._load_options: Dict[str, Any] = {}
-        self._logger = logging.getLogger(self.__class__.__name__)
+        # Use module-qualified logger under 'backend' hierarchy to align with
+        # centralized logging and ensure DEBUG visibility via the dedicated handler.
+        name = f"{self.__class__.__module__}.{self.__class__.__name__}"
+        # Normalize to start with 'backend.' if not already
+        if not name.startswith("backend."):
+            name = f"backend.{name}"
+        self._logger = logging.getLogger(name)
 
     # ------------------------------------------------------------------
     def load(self, model_ref: str, **options: Any) -> None:  # type: ignore[override]

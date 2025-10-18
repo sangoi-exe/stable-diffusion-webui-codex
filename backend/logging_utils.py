@@ -72,6 +72,25 @@ def setup_logging() -> None:
         sh.setFormatter(logging.Formatter(fmt=fmt, datefmt=datefmt))
         root.addHandler(sh)
 
+    # Ensure a dedicated handler for the 'backend' logger hierarchy so DEBUG
+    # logs are not filtered by third-party handlers (e.g., uvicorn/gradio)
+    codex = logging.getLogger("backend")
+    codex.setLevel(level)
+    # mark our handler to avoid duplicates on re-entry
+    has_codex = False
+    for h in codex.handlers:
+        if isinstance(h, logging.StreamHandler) and getattr(h, "_codex", False):
+            has_codex = True
+            break
+    if not has_codex:
+        h = logging.StreamHandler(stream=sys.stderr)
+        h.setLevel(level)
+        h.setFormatter(logging.Formatter(fmt=fmt, datefmt=datefmt))
+        setattr(h, "_codex", True)
+        codex.addHandler(h)
+    # prevent double printing via root handlers
+    codex.propagate = False
+
     log_file = os.environ.get("CODEX_LOG_FILE")
     if log_file and not any(
         isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == os.path.abspath(log_file)
@@ -94,4 +113,3 @@ def setup_logging() -> None:
     )
 
     _CONFIGURED = True
-
