@@ -42,6 +42,7 @@ def _parse_js_allowlist():
             "localization.js",
             "codex.components.core.js",
             "codex.components.sampler.js",
+            "codex.components.readers.js",
             "codex.components.prompt.js",
             "codex.components.hires.js",
             "codex.components.canvas.js",

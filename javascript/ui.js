@@ -727,6 +727,88 @@ function submit_extras() {
     return submitWithProgress(arguments, 'extras_gallery_container', 'extras_gallery');
 }
 
+// -------- Video (Txt2Vid / Img2Vid) --------
+
+/** @param {IArguments} _args */
+function buildNamedTxt2Vid(_args) {
+    const named = { __strict_version: 1, __source: 'txt2vid' };
+    const active = [];
+    const R = (window.Codex && window.Codex.Components && window.Codex.Components.Readers) || null;
+    const rText = R ? R.readText : readText;
+    const rDD = R ? R.readDropdownValue : readDropdownValue;
+    const rDDR = R ? R.readDropdownOrRadioValue : readDropdownOrRadioValue;
+    const rInt = R ? R.readInt : readInt;
+    const rSeed = R ? R.readSeedValue : readSeedValue;
+    named['txt2vid_prompt'] = rText('txt2vid_prompt'); active.push('txt2vid_prompt');
+    named['txt2vid_neg_prompt'] = rText('txt2vid_neg_prompt'); active.push('txt2vid_neg_prompt');
+    named['txt2vid_styles'] = rDD('txt2vid_styles') || []; active.push('txt2vid_styles');
+    named['txt2vid_width'] = rInt('txt2vid_width'); active.push('txt2vid_width');
+    named['txt2vid_height'] = rInt('txt2vid_height'); active.push('txt2vid_height');
+    named['txt2vid_steps'] = rInt('txt2vid_steps'); active.push('txt2vid_steps');
+    named['txt2vid_fps'] = rInt('txt2vid_fps'); active.push('txt2vid_fps');
+    named['txt2vid_num_frames'] = rInt('txt2vid_num_frames'); active.push('txt2vid_num_frames');
+    named['txt2vid_sampling'] = rDDR('txt2vid_sampling'); active.push('txt2vid_sampling');
+    named['txt2vid_scheduler'] = rDD('txt2vid_scheduler'); active.push('txt2vid_scheduler');
+    named['txt2vid_seed'] = rSeed('txt2vid_seed'); active.push('txt2vid_seed');
+    named['__active_ids'] = active;
+    return named;
+}
+
+function submit_txt2vid_named() {
+    /** @type {StrictBuilder} */
+    const builder = (submitArgs) => {
+        try {
+            const strict = buildNamedTxt2Vid(submitArgs);
+            if (strict && typeof strict === 'object') return strict;
+        } catch (error) {
+            console.warn('submit_txt2vid_named(): builder failed', error);
+            return { __strict_version: 1, __source: 'txt2vid', __builder_error: formatErrorMessage(error) };
+        }
+        return { __strict_version: 1, __source: 'txt2vid', __builder_error: 'builder returned non-object' };
+    };
+    return submitWithProgress(arguments, 'txt2vid_gallery_container', 'txt2vid_gallery', builder);
+}
+
+/** @param {IArguments} _args */
+function buildNamedImg2Vid(_args) {
+    const named = { __strict_version: 1, __source: 'img2vid' };
+    const active = [];
+    const R = (window.Codex && window.Codex.Components && window.Codex.Components.Readers) || null;
+    const rText = R ? R.readText : readText;
+    const rDD = R ? R.readDropdownValue : readDropdownValue;
+    const rDDR = R ? R.readDropdownOrRadioValue : readDropdownOrRadioValue;
+    const rInt = R ? R.readInt : readInt;
+    const rSeed = R ? R.readSeedValue : readSeedValue;
+    named['img2vid_prompt'] = rText('img2vid_prompt'); active.push('img2vid_prompt');
+    named['img2vid_neg_prompt'] = rText('img2vid_neg_prompt'); active.push('img2vid_neg_prompt');
+    named['img2vid_styles'] = rDD('img2vid_styles') || []; active.push('img2vid_styles');
+    named['img2vid_width'] = rInt('img2vid_width'); active.push('img2vid_width');
+    named['img2vid_height'] = rInt('img2vid_height'); active.push('img2vid_height');
+    named['img2vid_steps'] = rInt('img2vid_steps'); active.push('img2vid_steps');
+    named['img2vid_fps'] = rInt('img2vid_fps'); active.push('img2vid_fps');
+    named['img2vid_num_frames'] = rInt('img2vid_num_frames'); active.push('img2vid_num_frames');
+    named['img2vid_sampling'] = rDDR('img2vid_sampling'); active.push('img2vid_sampling');
+    named['img2vid_scheduler'] = rDD('img2vid_scheduler'); active.push('img2vid_scheduler');
+    named['img2vid_seed'] = rSeed('img2vid_seed'); active.push('img2vid_seed');
+    named['__active_ids'] = active;
+    return named;
+}
+
+function submit_img2vid_named() {
+    /** @type {StrictBuilder} */
+    const builder = (submitArgs) => {
+        try {
+            const strict = buildNamedImg2Vid(submitArgs);
+            if (strict && typeof strict === 'object') return strict;
+        } catch (error) {
+            console.warn('submit_img2vid_named(): builder failed', error);
+            return { __strict_version: 1, __source: 'img2vid', __builder_error: formatErrorMessage(error) };
+        }
+        return { __strict_version: 1, __source: 'img2vid', __builder_error: 'builder returned non-object' };
+    };
+    return submitWithProgress(arguments, 'img2vid_gallery_container', 'img2vid_gallery', builder);
+}
+
 /** @param {string} tabname */
 function restoreProgress(tabname) {
     showRestoreProgressButton(tabname, false);
@@ -758,6 +840,8 @@ function restoreProgressImg2img() {
 uiWindow.submit_txt2img_upscale = submit_txt2img_upscale;
 uiWindow.submit_named = submit_named;
 uiWindow.restoreProgressTxt2img = restoreProgressTxt2img;
+uiWindow.submit_txt2vid_named = submit_txt2vid_named;
+uiWindow.submit_img2vid_named = submit_img2vid_named;
 uiWindow.restoreProgressImg2img = restoreProgressImg2img;
 uiWindow.submit_img2img_named = submit_img2img_named;
 
