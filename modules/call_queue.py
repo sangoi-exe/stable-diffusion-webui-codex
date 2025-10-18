@@ -78,8 +78,8 @@ def wrap_gradio_call_no_job(func, extra_outputs=None, add_stats=False):
             if main_thread.last_exception is not None:
                 e = main_thread.last_exception
             else:
+                # Print the full traceback once; avoid duplicate message prints.
                 traceback.print_exc()
-                print(e)
 
             if extra_outputs_array is None:
                 extra_outputs_array = [None, '']
@@ -130,4 +130,3 @@ def wrap_gradio_call_no_job(func, extra_outputs=None, add_stats=False):
         return tuple(res)
 
     return f
-
