@@ -228,11 +228,11 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                 print(f'Using pre-quant state dict!')
 
             load_device = memory_management.get_torch_device()
-            computation_dtype = memory_management.get_computation_dtype(load_device, parameters=state_dict_parameters, supported_dtypes=guess.supported_inference_dtypes)
+            computation_dtype = memory_management.get_computation_dtype(load_device, parameters=0, supported_dtypes=guess.supported_inference_dtypes)
             offload_device = memory_management.unet_offload_device()
 
             if storage_dtype in ['nf4', 'fp4', 'gguf']:
-                initial_device = memory_management.unet_inital_load_device(parameters=state_dict_parameters, dtype=computation_dtype)
+                initial_device = memory_management.unet_inital_load_device(parameters=0, dtype=computation_dtype)
                 with using_forge_operations(device=initial_device, dtype=computation_dtype, manual_cast_enabled=False, bnb_dtype=storage_dtype):
                     model = model_loader(unet_config)
             else:
@@ -241,7 +241,7 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                 if prefer_gpu:
                     construct_device = load_device
                 else:
-                    construct_device = memory_management.unet_inital_load_device(parameters=state_dict_parameters, dtype=storage_dtype)
+                    construct_device = memory_management.unet_inital_load_device(parameters=0, dtype=storage_dtype)
                 initial_device = construct_device
                 construct_dtype = storage_dtype
                 if memory_management.is_device_cpu(construct_device) and construct_dtype in (torch.bfloat16, torch.float16):
