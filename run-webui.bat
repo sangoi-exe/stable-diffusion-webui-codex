@@ -1,8 +1,7 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >NUL 2>&1
 title Stable Diffusion WebUI - Codex Launcher
-color 0A
 
 REM Align with upstream webui.bat flow and add verify steps
 if exist webui.settings.bat (
@@ -73,19 +72,39 @@ set PYTHON="%VENV_DIR%\Scripts\Python.exe"
 :venv_done
 
 REM 4) Upgrade pip/setuptools/wheel
-echo [3/7] Upgrading pip/setuptools/wheel ...
-%PYTHON% -m pip install --upgrade pip setuptools wheel >NUL
-if errorlevel 1 (
-  echo [WARN] Failed to upgrade pip/setuptools/wheel. Continuing.
+REM 3) Upgrade pip/setuptools/wheel only once per Python minor version
+set "PIP_STAMP=%VENV_DIR%\codex_pip_ok.%PYVER%"
+if exist "%PIP_STAMP%" (
+  echo [3/7] pip/setuptools/wheel already up-to-date; skipping.
+) else (
+  echo [3/7] Upgrading pip/setuptools/wheel ...
+  %PYTHON% -m pip install --upgrade pip setuptools wheel >tmp\stdout.txt 2>tmp\stderr.txt
+  if errorlevel 1 (
+    echo [WARN] Failed to upgrade pip/setuptools/wheel. Continuing.
+  ) else (
+    echo.>"%PIP_STAMP%"
+  )
 )
 
 REM 5) Install requirements (best-effort) then verify imports
 if exist requirements_versions.txt (
-  echo [4/7] Installing requirements from requirements_versions.txt ...
-  %PYTHON% -m pip install -r requirements_versions.txt
-  if errorlevel 1 (
-    echo [WARN] Failed to install some requirements. Will verify imports next.
+  call :sha256 requirements_versions.txt REQ_HASH
+  set "REQ_STAMP=%VENV_DIR%\codex_req.sha256"
+  set "REQ_PREV="
+  if exist "%REQ_STAMP%" set /p REQ_PREV=<"%REQ_STAMP%"
+  if /I "!REQ_PREV!"=="!REQ_HASH!" (
+    echo [4/7] Requirements unchanged; skipping install.
+  ) else (
+    echo [4/7] Installing requirements from requirements_versions.txt ...
+    %PYTHON% -m pip install -r requirements_versions.txt
+    if errorlevel 1 (
+      echo [WARN] Failed to install some requirements. Will verify imports next.
+    ) else (
+      echo !REQ_HASH!>"%REQ_STAMP%"
+    )
   )
+) else (
+  echo [4/7] No requirements_versions.txt; skipping.
 )
 
 echo [5/7] Verifying core libraries ...
@@ -142,3 +161,17 @@ echo stderr:
 type tmp\stderr.txt
 
 :end
+exit /b %errorlevel%
+
+:sha256
+REM :: Computes SHA256 or falls back to size+mtime
+setlocal EnableDelayedExpansion
+set "_FILE=%~1"
+set "_OUTVAR=%~2"
+set "_HASH="
+for /f "skip=1 tokens=1 delims= " %%H in ('certutil -hashfile "%_FILE%" SHA256 ^| findstr /R "^[0-9A-F]"') do if not defined _HASH set "_HASH=%%H"
+if not defined _HASH (
+  for %%A in ("%_FILE%") do set "_HASH=%%~zA_%%~tA"
+)
+endlocal & set "%_OUTVAR%=%_HASH%"
+exit /b 0
