@@ -591,10 +591,8 @@ def create_ui():
                             break
 
                     strict = bool(isinstance(named, dict) and named.get('__strict_version'))
-
-                    # If not strict, begin from incoming values to preserve legacy behaviour
-                    if not strict:
-                        out = list(values)
+                    # Do not attempt to preserve legacy positional values when not strict.
+                    # When strict JSON is missing, the submit handler will reject with diagnostics.
 
                     # Apply named overrides
                     if isinstance(named, dict):
@@ -678,17 +676,20 @@ def create_ui():
 
             def _extract_strict_payload(all_args):
                 import json as _json
-                # Search from the end to handle the common 'last arg' case first
-                for idx in range(len(all_args) - 1, -1, -1):
-                    v = all_args[idx]
-                    if isinstance(v, str):
-                        try:
-                            v_loaded = _json.loads(v)
-                            v = v_loaded
-                        except Exception:
-                            pass
-                    if isinstance(v, dict) and v.get('__strict_version') == 1:
-                        return idx, v
+                # Strict mode hard requirement: last input must be the strict JSON
+                if not all_args:
+                    return -1, None
+                idx = len(all_args) - 1
+                v = all_args[idx]
+                if isinstance(v, str):
+                    try:
+                        v_loaded = _json.loads(v)
+                        v = v_loaded
+                    except Exception:
+                        # leave as-is; validation below will fail with details
+                        pass
+                if isinstance(v, dict) and v.get('__strict_version') == 1:
+                    return idx, v
                 return -1, None
 
             def _txt2img_submit(*args, **kwargs):

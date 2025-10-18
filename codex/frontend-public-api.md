@@ -42,6 +42,7 @@ Strict Submit JSON (Generate flows)
   - `img2img_named_active` – idem para img2img (escalares; imagens/arquivos seguem como inputs).
 - Builders (client side): `buildNamedTxt2img` e `buildNamedImg2img` leem os valores do DOM (via elem_id) e populam o JSON.
 - Servidor: ignora escalares posicionais quando `__strict_version==1` está presente; apenas o JSON é fonte‑de‑verdade.
+- Requisito de ordem: o JSON estrito DEVE ser o último input enviado no array; o servidor não escaneia mais outras posições.
 - Erros são “fail‑fast”: campos ausentes ou tipo errado levantam `ValueError` com mensagem clara; sliders fora de faixa levantam `gradio.exceptions.Error` enriquecida com label/elem_id e bounds.
 
 Extensions page hooks

@@ -18,3 +18,4 @@
 - UI: Removed legacy combined selector. Split Hires selector into `Hires VAE` (single) and `Hires Text Encoder(s)` (multi); kept hidden compatibility field `hr_vae_te` to preserve payload shape (`modules/ui.py`).
  - UI: Quicksettings VAE (`sd_vae`) and Text Encoders (`sd_text_encoders`) now render unconditionally inside Quicksettings row; removed `render=False` and explicit `.render()` calls to avoid duplicate/hidden components. Element ids updated to `sd_vae` and `sd_text_encoders`.
  - UX: Quicksettings VAE now espelha o seletor de Checkpoint (mesmo dropdown, refresh, eventos). Unificamos discovery (inclui `sd_vae.vae_dict`) e tornamos a resolução nome→caminho mais resiliente (aceita rótulos com sufixo `[hash]`).
+ - Refactor: Eliminated legacy submit path. Server no longer scans args to locate strict JSON; it must be the last input. Removed pre-submit fallback that copied incoming positional values when strict JSON is absent (`modules/ui.py`).
