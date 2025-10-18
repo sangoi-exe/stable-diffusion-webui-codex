@@ -54,6 +54,7 @@
 - DX: Add `run-webui.bat` (Windows launcher) — checks Python 3.10, creates/activates `.venv`, installs requirements, verifies core libs, warns on missing ffmpeg, and launches `webui.py`.
 
 - Deps: Add `colorama==0.4.6` and `rich==13.9.2` to enable colored console/logging; logging setup already uses Rich/Colorama with tqdm-aware handler and safe fallback.
+- Deps: Pin `torch==2.7.1` and `torchvision==0.22.0` for Windows stability (recreate venv recommended).
 
 - Engine(wan_ti2v_5b): Loader attempts Diffusers `WanPipeline`/`AutoencoderKLWan` (local-only by default). Engine wired to call pipeline for txt2vid/img2vid, returning frames + `info` JSON, with prepare/run progress and VRAM metrics. If pipeline is unavailable or weights missing, raises explicit `EngineExecutionError` with upgrade/instructions.
 
