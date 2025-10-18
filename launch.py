@@ -1,5 +1,10 @@
-# import faulthandler
-# faulthandler.enable()
+try:
+    import faulthandler, os
+    _fh_log = os.path.join(os.getcwd(), 'tracebacks.log')
+    _fh_fp = open(_fh_log, 'w', encoding='utf-8')
+    faulthandler.enable(file=_fh_fp, all_threads=True)
+except Exception:
+    pass
 
 from modules import launch_utils
 
