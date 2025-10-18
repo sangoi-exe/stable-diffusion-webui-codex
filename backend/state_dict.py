@@ -17,11 +17,12 @@ def load_state_dict(model, sd, ignore_errors=[], log_name=None, ignore_start=Non
 
     log_name = log_name or type(model).__name__
     if len(missing) > 0:
-        print(f'{log_name} Missing: {missing}')
-        _log.debug("%s missing_count=%d", log_name, len(missing))
+        print(f'{log_name} Missing: {len(missing)} keys')
+        # Sample a few keys at DEBUG for diagnostics
+        _log.debug("%s missing_count=%d sample=%s", log_name, len(missing), missing[:10])
     if len(unexpected) > 0:
-        print(f'{log_name} Unexpected: {unexpected}')
-        _log.debug("%s unexpected_count=%d", log_name, len(unexpected))
+        print(f'{log_name} Unexpected: {len(unexpected)} keys')
+        _log.debug("%s unexpected_count=%d sample=%s", log_name, len(unexpected), unexpected[:10])
     _trace.event("load_state_dict_done", name=log_name, missing=len(missing), unexpected=len(unexpected))
     return
 
@@ -150,10 +151,10 @@ def safe_load_state_dict(model, sd, *, log_name=None):
 
     unexpected = [k for k in sd_keys if k not in model_keys]
     if missing:
-        print(f'{log_name} Missing: {missing}')
-        _log.debug("%s missing_count=%d", log_name, len(missing))
+        print(f'{log_name} Missing: {len(missing)} keys')
+        _log.debug("%s missing_count=%d sample=%s", log_name, len(missing), missing[:10])
     if unexpected:
-        print(f'{log_name} Unexpected: {unexpected}')
-        _log.debug("%s unexpected_count=%d", log_name, len(unexpected))
+        print(f'{log_name} Unexpected: {len(unexpected)} keys')
+        _log.debug("%s unexpected_count=%d sample=%s", log_name, len(unexpected), unexpected[:10])
     _trace.event("load_state_dict_done", name=log_name, missing=len(missing), unexpected=len(unexpected))
     return missing, unexpected

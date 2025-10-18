@@ -86,3 +86,6 @@
   - Loader: constrói UNet preferencialmente no GPU; em OOM, fallback condicionado à policy (never aborta; cpu/shared permite CPU).
   - Memory: offload devices respeitam policy (never => GPU; cpu/shared => CPU). Streams controladas por `swap-method` (async tenta CUDA streams até no Windows; fallback se falhar).
   - Windows launcher: bloco inline com CODEX_* para policy e método; logs de policy no boot.
+- Chore(Logs): summarize state_dict key diffs
+  - Print only counts for Missing/Unexpected; sample first 10 keys at DEBUG.
+  - Applicable to UNet/CLIP/T5 loaders, including safe UNet loader.
