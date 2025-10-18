@@ -33,5 +33,6 @@ Update: 2025-10-18 (typecheck follow-up)
 - javascript/ui.js:
   - Added `StrictBuilder` typedef, `formatErrorMessage()` helper, and explicit builder closures so TypeScript recognises the strict payload flow.
   - Extended `UIWindow` typedef with the exported submitters.
+- 2025-10-18b: Tightened `StrictBuilder` to accept `IArguments`, removing the last `javascript/ui.js` complaints from `npm run typecheck`.
 - Validation: Host-reported `npm run typecheck` now expected to pass for `javascript/ui.js`; other legacy JS files still exhibit pre-existing Forge errors (see host log).
 - TODO: Coordinate remediation plan for remaining `extraNetworks`/`hints`/`imageMaskFix` type errors (out of scope of this strict submit fix).

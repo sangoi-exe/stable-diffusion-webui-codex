@@ -23,7 +23,7 @@
  *   args_to_array?: typeof Array.from;
  * }} UIWindow */
 
-/** @typedef {(args: IArguments | unknown[]) => Record<string, unknown> | null | undefined} StrictBuilder */
+/** @typedef {(args: IArguments) => Record<string, unknown> | null | undefined} StrictBuilder */
 
 /** @type {UIWindow} */
 const uiWindow = window;
