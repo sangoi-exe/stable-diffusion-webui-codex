@@ -18,10 +18,6 @@ div.gradio-container{
     max-width: unset !important;
 }
 
-.hidden{
-    display: none !important;
-}
-
 .compact{
     background: transparent !important;
     padding: 0 !important;

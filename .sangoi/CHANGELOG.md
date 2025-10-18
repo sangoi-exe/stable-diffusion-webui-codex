@@ -14,3 +14,4 @@
 - Fix: Typed strict submit flow (`javascript/ui.js`) to satisfy `npm run typecheck` (added `StrictBuilder` typedef tightened to `IArguments`, error formatter, and UIWindow exports).
 - UI: Restored VAE selector to checkpoint-style dropdown and moved text encoders to a separate multiselect (`modules_forge/main_entry.py`, `modules/ui_settings.py`, `javascript/ui.js`).
 - Test: Added Playwright variant `scripts/ui_headless_click_pw.sh` + `tools/ui-click-generate.playwright.mjs` with local browsers cache.
+ - Fix: VAE/Text Encoder dropdown wouldn’t open due to global `.hidden { display: none !important; }` override. Removed the rule from `style.css`; dropdown overlays now render correctly under Gradio 5 while keeping overflow visible via `div.gradio-dropdown { overflow: visible !important; }`.
