@@ -189,6 +189,7 @@ def make_checkpoint_manager_ui():
         value=_current_vae_value,
         label="VAE",
         elem_classes=['model_selection'],
+        elem_id="forge_vae",
         choices=_compose_vae_choices(),
         interactive=True,
         allow_custom_value=False,
@@ -201,6 +202,7 @@ def make_checkpoint_manager_ui():
         render=False,
         choices=sorted(text_encoder_module_list.keys()),
         elem_classes=['model_selection'],
+        elem_id="forge_text_encoders",
         interactive=True,
         allow_custom_value=False,
     )
