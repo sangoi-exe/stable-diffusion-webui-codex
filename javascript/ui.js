@@ -694,12 +694,19 @@ function restoreProgressImg2img() {
     return restoreProgress('img2img');
 }
 
-// Export only strict-named submitters
+// Export strict-named submitters
 uiWindow.submit_txt2img_upscale = submit_txt2img_upscale;
 uiWindow.submit_named = submit_named;
 uiWindow.restoreProgressTxt2img = restoreProgressTxt2img;
 uiWindow.restoreProgressImg2img = restoreProgressImg2img;
 uiWindow.submit_img2img_named = submit_img2img_named;
+
+// Strict-compat aliases: keep legacy names but route to strict builders.
+// This does NOT reintroduce legacy server behavior; it only maps old _js hooks to strict JSON submitters.
+function submit() { return submit_named.apply(null, arguments); }
+function submit_img2img() { return submit_img2img_named.apply(null, arguments); }
+uiWindow.submit = submit;
+uiWindow.submit_img2img = submit_img2img;
 
 /**
  * Configure the width and height elements on `tabname` to accept pasting of resolutions.
