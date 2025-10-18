@@ -342,6 +342,18 @@ function submitWithProgress(args, galleryContainerId, galleryId, strictBuilder) 
                 // Prefer string to maximize compatibility with Gradio JSON input transport
                 const asString = JSON.stringify(strictPayload);
                 res[res.length - 1] = asString;
+                try {
+                    const hiddenRoot = getAppElementById(`${tabname}_named_active`);
+                    if (hiddenRoot) {
+                        const field = hiddenRoot.querySelector('textarea, input');
+                        if (field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement) {
+                            field.value = asString;
+                            updateInput(field);
+                        }
+                    }
+                } catch (err) {
+                    console.warn('submitWithProgress(): failed to sync hidden strict textbox', err);
+                }
             } catch {
                 res[res.length - 1] = strictPayload;
             }
@@ -775,10 +787,20 @@ onUiLoaded(() => {
                 submit_named_exported: hasNamed,
                 submit_img2img_named_exported: hasImgNamed,
             });
-            try { uiWindow.__STRICT_CHECK_OK__ = false; uiWindow.__STRICT_CHECK_REASON__ = 'missing pieces'; } catch {}
+            try {
+                uiWindow.__STRICT_CHECK_OK__ = false;
+                uiWindow.__STRICT_CHECK_REASON__ = 'missing pieces';
+                uiWindow.STRICT_CHECK_OK = false;
+                uiWindow.STRICT_CHECK_REASON = 'missing pieces';
+            } catch {}
         } else {
             console.info('[StrictSubmitCheck] OK: strict submit handlers and hidden JSON slots detected.');
-            try { uiWindow.__STRICT_CHECK_OK__ = true; uiWindow.__STRICT_CHECK_REASON__ = ''; } catch {}
+            try {
+                uiWindow.__STRICT_CHECK_OK__ = true;
+                uiWindow.__STRICT_CHECK_REASON__ = '';
+                uiWindow.STRICT_CHECK_OK = true;
+                uiWindow.STRICT_CHECK_REASON = '';
+            } catch {}
         }
         // Harden legacy hook names to strict submitters and freeze them
         try {
@@ -797,7 +819,12 @@ onUiLoaded(() => {
         }
     } catch (e) {
         console.warn('[StrictSubmitCheck] Failed to run startup checks', e);
-        try { uiWindow.__STRICT_CHECK_OK__ = false; uiWindow.__STRICT_CHECK_REASON__ = String(e); } catch {}
+        try {
+            uiWindow.__STRICT_CHECK_OK__ = false;
+            uiWindow.__STRICT_CHECK_REASON__ = String(e);
+            uiWindow.STRICT_CHECK_OK = false;
+            uiWindow.STRICT_CHECK_REASON = String(e);
+        } catch {}
     }
 });
 
