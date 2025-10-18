@@ -86,6 +86,25 @@ if exist "%PIP_STAMP%" (
   )
 )
 
+REM 4.5) Install pinned Torch (CUDA 12.8) BEFORE requirements to avoid unwanted upgrades
+if not defined TORCH_INDEX_URL set "TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128"
+set "TORCH_SPEC=torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1"
+set "TORCH_STAMP=%VENV_DIR%\codex_torch_cu128.ok"
+set "TORCH_MARK=torch==2.7.1|torchvision==0.22.1|torchaudio==2.7.1|index=%TORCH_INDEX_URL%"
+set "TORCH_PREV="
+if exist "%TORCH_STAMP%" set /p TORCH_PREV=<"%TORCH_STAMP%"
+if /I not "%TORCH_PREV%"=="%TORCH_MARK%" (
+  echo [4a/7] Installing %TORCH_SPEC% from %TORCH_INDEX_URL% ...
+  %PYTHON% -m pip install --upgrade --force-reinstall --index-url %TORCH_INDEX_URL% %TORCH_SPEC%
+  if errorlevel 1 (
+    echo [ERROR] Failed to install Torch CUDA 12.8 wheels.
+    exit /b 1
+  )
+  echo %TORCH_MARK%>"%TORCH_STAMP%"
+) else (
+  echo [4a/7] Torch CUDA 12.8 already pinned; skipping.
+)
+
 REM 5) Install requirements (best-effort) then verify imports
 if exist requirements_versions.txt (
   call :sha256 requirements_versions.txt REQ_HASH
