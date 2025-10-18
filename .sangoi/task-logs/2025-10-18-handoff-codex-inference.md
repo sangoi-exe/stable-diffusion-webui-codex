@@ -17,10 +17,10 @@ Commands run
 - ls/rg/sed to inspect repo and handoff files.
 
 Open points / Next steps
-- Await approval to implement WAN 2.2 TI2V‑5B via Path A.
-- After WAN MVP, expand presets coverage (sd15/sdxl img2img/inpaint/upscale; flux LCM/Lightning; video Img2Vid + SVD/Hunyuan).
-- Add mode-aware warnings; add VRAM/time metrics; add strict JSON examples in docs.
+- Smoke test tornou-se opcional (não bloqueia). Validação principal será via UI (Txt2Vid/Img2Vid) com logs.
+- Implementar WAN 2.2 TI2V‑5B via Path A.
+- Após o MVP, expandir presets (sd15/sdxl img2img/inpaint/upscale; flux LCM/Lightning; vídeo Img2Vid + SVD/Hunyuan).
+- Adicionar avisos de modo incompatível; métricas de VRAM/tempo; exemplos de JSON estrito.
 
 Risks
 - VRAM constraints for video models; ensure robust logs and fail-fast errors.
-

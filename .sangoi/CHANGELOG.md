@@ -45,4 +45,4 @@
   - Engines now validate/normalize requests via `parse_params(engine, task, request)`.
  - Presets: Added loader/applier (`backend/core/presets.py`) and seed preset files under `configs/presets/`. Engines apply preset patch (fill-only) before validation and log `applied_preset_patch`.
 
-- Docs: Updated handoff `.sangoi/handoffs/2025-10-18-codex-inference-rewrite.md` with 6 solution paths for WAN 2.2 integration, selected Path A (Native PyTorch) as intended approach, and added MVP/validation/risks sections. No user-facing changes yet.
+- Docs: Updated handoff `.sangoi/handoffs/2025-10-18-codex-inference-rewrite.md` with 6 solution paths for WAN 2.2 integration, selected Path A (Native PyTorch) as intended approach, and added MVP/validation/risks sections. Validation is UI-first; smoke script now optional. No user-facing changes yet.

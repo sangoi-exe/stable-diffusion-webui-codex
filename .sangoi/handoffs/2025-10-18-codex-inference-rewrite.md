@@ -114,9 +114,9 @@ MVP Deliverables (TI2V‑5B)
 
 Validation Plan
 
-- Run manual smoke with deterministic seeds; verify frame count/dims and no silent defaults.
-- Compare step/fps/cfg defaults with ComfyUI reference; document any intentional deviations.
-- Capture VRAM/time metrics across 3 resolutions (e.g., 384x384, 512x320, 768x432) and 16/24/32 frames.
+- UI-first: validar via UI (Txt2Vid/Img2Vid) com JSON estrito; logs imprimem contagem/dimensões de frames e métricas sem exigir script externo.
+- Comparar step/fps/cfg com ComfyUI como referência e documentar desvios intencionais.
+- Capturar métricas (tempo/VRAM) em resoluções e contagens de frames típicas. O script de smoke é opcional (apenas para diagnóstico), não requisito.
 
 Risks & Fallbacks
 
