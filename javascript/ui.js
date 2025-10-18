@@ -338,7 +338,13 @@ function submitWithProgress(args, galleryContainerId, galleryId, strictBuilder) 
             };
         }
         if (strictPayload && typeof strictPayload === 'object') {
-            res[res.length - 1] = strictPayload;
+            try {
+                // Prefer string to maximize compatibility with Gradio JSON input transport
+                const asString = JSON.stringify(strictPayload);
+                res[res.length - 1] = asString;
+            } catch {
+                res[res.length - 1] = strictPayload;
+            }
         } else {
             console.warn('submitWithProgress(): strict builder returned invalid payload', strictPayload);
         }
