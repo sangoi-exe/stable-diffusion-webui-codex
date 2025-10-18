@@ -203,22 +203,29 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                 model_loader = lambda c: MMDiTX(**c)
 
             unet_config = guess.unet_config.copy()
-            state_dict_parameters = memory_management.state_dict_parameters(state_dict)
-            state_dict_dtype = memory_management.state_dict_dtype(state_dict)
+            # Avoid materializing tensors during stats; rely on policy/env
+            try:
+                _trace.event("unet_stats_start")
+                # Lightweight hint via keys only (detect BnB quant markers without loading tensors)
+                keys_iter = state_dict.keys() if hasattr(state_dict, 'keys') else []
+                hint_nf4 = any('bitsandbytes__nf4' in k for k in keys_iter)
+                hint_fp4 = any('bitsandbytes__fp4' in k for k in keys_iter)
+                _trace.event("unet_stats_done", nf4=hint_nf4, fp4=hint_fp4)
+            except Exception:
+                hint_nf4 = False
+                hint_fp4 = False
 
-            storage_dtype = memory_management.unet_dtype(model_params=state_dict_parameters, supported_dtypes=guess.supported_inference_dtypes)
+            storage_dtype = memory_management.unet_dtype(supported_dtypes=guess.supported_inference_dtypes)
 
             unet_storage_dtype_overwrite = backend.args.dynamic_args.get('forge_unet_storage_dtype')
 
             if unet_storage_dtype_overwrite is not None:
                 storage_dtype = unet_storage_dtype_overwrite
-            elif state_dict_dtype in [torch.float8_e4m3fn, torch.float8_e5m2, 'nf4', 'fp4', 'gguf']:
-                print(f'Using Detected UNet Type: {state_dict_dtype}')
-                storage_dtype = state_dict_dtype
-                if state_dict_dtype in ['nf4', 'fp4', 'gguf']:
-                    print(f'Using pre-quant state dict!')
-                    if state_dict_dtype in ['gguf']:
-                        beautiful_print_gguf_state_dict_statics(state_dict)
+            elif hint_nf4 or hint_fp4:
+                q = 'nf4' if hint_nf4 else 'fp4'
+                print(f'Using Detected UNet Type: {q}')
+                storage_dtype = q
+                print(f'Using pre-quant state dict!')
 
             load_device = memory_management.get_torch_device()
             computation_dtype = memory_management.get_computation_dtype(load_device, parameters=state_dict_parameters, supported_dtypes=guess.supported_inference_dtypes)
