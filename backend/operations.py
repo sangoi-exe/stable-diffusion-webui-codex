@@ -130,21 +130,34 @@ class ForgeOperations:
             self.out_features = out_features
             self.dummy = torch.nn.Parameter(torch.empty(1, device=current_device, dtype=current_dtype))
             self.weight = None
+            # Register a tiny placeholder tensor to signal our custom
+            # _load_from_state_dict to take over and materialize real params
+            # from the incoming state_dict. Without this, Module's default
+            # loader won't assign anything and weights stay None.
+            self.dummy = torch.nn.Parameter(torch.empty(1, device=current_device, dtype=current_dtype))
+            self.weight = None
             self.scale_weight = None
             self.bias = None
             self.parameters_manual_cast = current_manual_cast_enabled
 
         def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-            if hasattr(self, 'dummy'):
-                if prefix + 'weight' in state_dict:
-                    self.weight = torch.nn.Parameter(state_dict[prefix + 'weight'].to(self.dummy))
+            # Always attempt explicit param assign to avoid relying on Module's default
+            # (we don't register parameters until now).
+            if prefix + 'weight' in state_dict:
+                w = state_dict[prefix + 'weight']
+                device = getattr(self.dummy, 'device', current_device)
+                dtype = getattr(self.dummy, 'dtype', current_dtype)
+                self.weight = torch.nn.Parameter(w.to(device=device, dtype=dtype))
                 if prefix + 'scale_weight' in state_dict:
-                     self.scale_weight = torch.nn.Parameter(state_dict[prefix + 'scale_weight'])                    
+                    self.scale_weight = torch.nn.Parameter(state_dict[prefix + 'scale_weight'].to(device=device))
                 if prefix + 'bias' in state_dict:
-                    self.bias = torch.nn.Parameter(state_dict[prefix + 'bias'].to(self.dummy))
-                del self.dummy
-            else:
-                super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+                    b = state_dict[prefix + 'bias']
+                    self.bias = torch.nn.Parameter(b.to(device=device, dtype=dtype))
+                if hasattr(self, 'dummy'):
+                    del self.dummy
+                return
+            # Fallback to default behavior
+            super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
 
         def forward(self, x):
             if self.parameters_manual_cast:
