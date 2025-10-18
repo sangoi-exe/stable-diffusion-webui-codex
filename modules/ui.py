@@ -713,17 +713,30 @@ def create_ui():
                     raise RuntimeError("Missing arguments for txt2img submit")
                 id_task = args[0]
                 request = kwargs.get('request')
+                payload = None
+                strict_idx = -1
                 try:
-                    strict_idx, payload = _extract_strict_payload(args)
-                    if payload is not None:
-                        # Strict JSON path (exclude the payload arg if it's inside args)
-                        script_seq = list(args[1:])
-                        if 1 <= strict_idx < len(args):
-                            del script_seq[strict_idx - 1]
-                        script_args = tuple(script_seq)
-                        return modules.txt2img.txt2img_from_json(id_task, request, payload, *script_args)
+                    # Prefer last argument (strict JSON) and fall back to search
+                    if len(args) >= 2:
+                        strict_idx = len(args) - 1
+                        cand = args[strict_idx]
+                        if isinstance(cand, str):
+                            import json as _json
+                            payload = _json.loads(cand)
+                        elif isinstance(cand, dict):
+                            payload = cand
+                        else:
+                            payload = None
+                    if not (isinstance(payload, dict) and payload.get('__strict_version') == 1):
+                        strict_idx, payload = _extract_strict_payload(args)
                 except Exception:
-                    pass
+                    payload = None
+                if isinstance(payload, dict) and payload.get('__strict_version') == 1:
+                    script_seq = list(args[1:])
+                    if 1 <= strict_idx < len(args):
+                        del script_seq[strict_idx - 1]
+                    script_args = tuple(script_seq)
+                    return modules.txt2img.txt2img_from_json(id_task, request, payload, *script_args)
                 # Strict mode: reject legacy positional payloads with deep diagnostics
                 import inspect, datetime, json as _json
                 last = args[-1] if len(args) else None
