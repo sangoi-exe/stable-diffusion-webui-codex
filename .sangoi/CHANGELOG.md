@@ -47,6 +47,6 @@
 
 - Deps: Add `colorama==0.4.6` and `rich==13.9.2` to enable colored console/logging; logging setup already uses Rich/Colorama with tqdm-aware handler and safe fallback.
 
-- Engine(wan_ti2v_5b): Introduced loader (`backend/engines/video/wan/loader.py`) and forward skeleton with progress events in `backend/engines/video/wan/ti2v5b_engine.py`. Adds Normal `img2vid.yaml` preset. Generation intentionally raises `EngineExecutionError` until weights are wired; validation is UI-first.
+- Engine(wan_ti2v_5b): Loader attempts Diffusers `WanPipeline`/`AutoencoderKLWan` (local-only by default). Engine wired to call pipeline for txt2vid/img2vid, returning frames + `info` JSON, with prepare/run progress and VRAM metrics. If pipeline is unavailable or weights missing, raises explicit `EngineExecutionError` with upgrade/instructions.
 
 - Docs: Updated handoff `.sangoi/handoffs/2025-10-18-codex-inference-rewrite.md` with 6 solution paths for WAN 2.2 integration, selected Path A (Native PyTorch) as intended approach, and added MVP/validation/risks sections. Validation is UI-first; smoke script now optional. No user-facing changes yet.

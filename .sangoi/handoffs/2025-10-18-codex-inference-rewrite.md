@@ -99,7 +99,7 @@ Intended Solution (before implementation)
 
 - Engine layout: `backend/engines/video/wan/{__init__.py, engine.py, loader.py, params.py, schedulers.py}`.
 - Loader: resolve local `models/Wan/...` or env `WAN_REPO_ID`; build components (text encoder, transformer, VAE) with FP16 + `channels_last` and autocast guards; explicit logs for precision/memory.
-- Forward (TI2V‑5B first): accept `Txt2VidRequest`/`Img2VidRequest`, apply preset fill‑only, validate via `parse_params`, run encode→denoise→decode; yield frames as PIL list plus optional mp4/webm assembly (guarded by `ffmpeg` availability).
+- Forward (TI2V‑5B first): accept `Txt2VidRequest`/`Img2VidRequest`, apply preset fill‑only, validar via `parse_params`, executar via Diffusers `WanPipeline` (local files only por padrão), retornar frames como `PIL.Image` list e `info` JSON; opcionalmente, montagem mp4/webm (guardada por `ffmpeg`).
 - Parameters: fps, num_frames, width, height, cfg, seed, motion_guidance (or analogous), scheduler/sampler names; unsupported fields raise ValidationError with engine/task context.
 - Presets: seed `configs/presets/wan_ti2v_5b/txt2vid.yaml` and `img2vid.yaml` with conservative VRAM defaults; log `applied_preset_patch` keys.
 - Metrics: time each stage (tokenize/denoise/decode); VRAM peak via `torch.cuda.max_memory_allocated()` when GPU visible; include `mode_ignored_reason` if Mode not supported.
@@ -107,9 +107,9 @@ Intended Solution (before implementation)
 
 MVP Deliverables (TI2V‑5B)
 
-- Loader + forward skeleton with progress events and preset application.
-- Registry entries wired; explicit `EngineExecutionError` until generation is wired.
-- Presets + param validation; timing/VRAM logs via progress events.
+- Loader + forward usando Diffusers `WanPipeline` (local-only) com presets e progress events.
+- Registry entries wired; erros explícitos quando `WanPipeline` indisponível ou pesos ausentes.
+- Presets + validação; métricas (tempo/VRAM) em `info` JSON.
 - UI‑first validation; optional smoke script can be added later for diagnostics.
 
 Validation Plan

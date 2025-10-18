@@ -14,6 +14,7 @@ class WanComponents:
     text_encoder: Any | None = None
     transformer: Any | None = None
     vae: Any | None = None
+    pipeline: Any | None = None
     model_dir: str | None = None
     device: str = "cpu"
     dtype: str = "fp16"
@@ -30,7 +31,7 @@ class WanLoader:
         self._logger = logger or logging.getLogger(self.__class__.__name__)
         self._components: Optional[WanComponents] = None
 
-    def load(self, model_ref: str, *, device: str = "auto", dtype: str = "fp16") -> WanComponents:
+    def load(self, model_ref: str, *, device: str = "auto", dtype: str = "fp16", allow_download: bool = False) -> WanComponents:
         if not model_ref or not isinstance(model_ref, str):
             raise EngineLoadError("WAN loader requires a non-empty model_ref (path or repo id)")
 
@@ -60,19 +61,54 @@ class WanLoader:
         if resolved_dtype not in ("fp16", "bf16", "fp32"):
             resolved_dtype = "fp16"
 
+        # Try loading via Diffusers WanPipeline if available (local files only unless explicitly allowed)
+        pipe = None
+        vae = None
+        try:
+            from diffusers import WanPipeline  # type: ignore
+            from diffusers import AutoencoderKLWan  # type: ignore
+            import torch  # type: ignore
+
+            torch_dtype = {
+                "fp16": torch.float16,
+                "bf16": getattr(torch, "bfloat16", torch.float16),
+                "fp32": torch.float32,
+            }[resolved_dtype]
+
+            vae = AutoencoderKLWan.from_pretrained(
+                maybe_path,
+                subfolder="vae",
+                torch_dtype=torch_dtype,
+                local_files_only=not allow_download,
+            )
+
+            pipe = WanPipeline.from_pretrained(
+                maybe_path,
+                torch_dtype=torch_dtype,
+                vae=vae,
+                local_files_only=not allow_download,
+            )
+
+            target_device = "cuda" if resolved_device == "cuda" and torch.cuda.is_available() else "cpu"
+            pipe = pipe.to(target_device)
+            self._logger.info("WAN diffusers pipeline loaded: %s (device=%s, dtype=%s)", maybe_path, target_device, resolved_dtype)
+        except Exception as exc:
+            # Keep components None; engine will raise actionable error on use
+            self._logger.warning(
+                "WAN diffusers pipeline not available from %s (local-only=%s): %s",
+                maybe_path,
+                str(not allow_download),
+                exc,
+            )
+
         self._components = WanComponents(
             text_encoder=None,
             transformer=None,
-            vae=None,
+            vae=vae,
+            pipeline=pipe,
             model_dir=maybe_path,
             device=resolved_device,
             dtype=resolved_dtype,
-        )
-        self._logger.info(
-            "WAN loader ready: dir=%s device=%s dtype=%s",
-            maybe_path,
-            resolved_device,
-            resolved_dtype,
         )
         return self._components
 
@@ -93,4 +129,3 @@ class WanLoader:
             except Exception:
                 return "cpu"
         return device
-
