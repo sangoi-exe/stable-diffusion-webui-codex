@@ -271,7 +271,7 @@ function showRestoreProgressButton(tabname, show) {
  * @param {string} galleryId
  * @returns {unknown[]}
  */
-function submitWithProgress(args, galleryContainerId, galleryId) {
+function submitWithProgress(args, galleryContainerId, galleryId, strictBuilder) {
     const tabname = /** @type {string} */ (galleryContainerId.split('_', 1)[0]);
     showSubmitButtons(tabname, false);
 
@@ -294,20 +294,46 @@ function submitWithProgress(args, galleryContainerId, galleryId) {
 
     const res = normalizeSubmitArgs(tabname, create_submit_args(args));
     res[0] = id;
+    if (typeof strictBuilder === 'function' && Array.isArray(res) && res.length > 0) {
+        let strictPayload;
+        try {
+            strictPayload = strictBuilder(args);
+        } catch (error) {
+            console.warn('submitWithProgress(): strict builder failed, sending diagnostic strict JSON', error);
+            strictPayload = {
+                __strict_version: 1,
+                __source: tabname,
+                __builder_error: String(error?.message || error),
+            };
+        }
+        if (strictPayload && typeof strictPayload === 'object') {
+            res[res.length - 1] = strictPayload;
+        } else {
+            console.warn('submitWithProgress(): strict builder returned invalid payload', strictPayload);
+        }
+    }
     return res;
 }
 
 function submit() {
-    const res = submitWithProgress(arguments, 'txt2img_gallery_container', 'txt2img_gallery');
-    // Ensure strict JSON is present even if this generic helper is used
-    try {
-        if (Array.isArray(res) && res.length > 0 && getAppElementById('txt2img_named_active')) {
-            res[res.length - 1] = buildNamedTxt2img(arguments);
+    return submitWithProgress(
+        arguments,
+        'txt2img_gallery_container',
+        'txt2img_gallery',
+        (submitArgs) => {
+            let strict = null;
+            try {
+                strict = buildNamedTxt2img(submitArgs);
+            } catch (error) {
+                console.warn('submit(): failed to attach strict JSON', error);
+                strict = { __strict_version: 1, __source: 'txt2img', __builder_error: String(error?.message || error) };
+            }
+            if (!strict || typeof strict !== 'object') {
+                return { __strict_version: 1, __source: 'txt2img', __builder_error: 'builder returned non-object' };
+            }
+            return strict;
         }
-    } catch (e) {
-        console.warn('submit(): failed to attach strict JSON', e);
-    }
-    return res;
+    );
 }
 
 // ---- Strict JSON builders (DOM-based) ----
@@ -479,22 +505,24 @@ function buildNamedTxt2img(_args) {
 // Builders are used by *_named submit paths; no global exposure.
 
 function submit_named() {
-    const res = submitWithProgress(arguments, 'txt2img_gallery_container', 'txt2img_gallery');
-    if (Array.isArray(res) && res.length > 0) {
-        let strict;
-        try {
-            strict = buildNamedTxt2img(arguments);
-        } catch (e) {
-            console.warn('submit_named(): builder failed, sending minimal strict JSON for diagnostics', e);
-            strict = { __strict_version: 1, __source: 'txt2img', __builder_error: String(e?.message || e) };
+    return submitWithProgress(
+        arguments,
+        'txt2img_gallery_container',
+        'txt2img_gallery',
+        (submitArgs) => {
+            let strict = null;
+            try {
+                strict = buildNamedTxt2img(submitArgs);
+            } catch (error) {
+                console.warn('submit_named(): builder failed, sending minimal strict JSON for diagnostics', error);
+                strict = { __strict_version: 1, __source: 'txt2img', __builder_error: String(error?.message || error) };
+            }
+            if (!strict || typeof strict !== 'object') {
+                return { __strict_version: 1, __source: 'txt2img', __builder_error: 'builder returned non-object' };
+            }
+            return strict;
         }
-        if (typeof strict !== 'object' || strict === null) {
-            strict = { __strict_version: 1, __source: 'txt2img', __builder_error: 'builder returned non-object' };
-        }
-        // Send object directly so gr.JSON receives a dict (not string)
-        res[res.length - 1] = strict;
-    }
-    return res;
+    );
 }
 
 function submit_txt2img_upscale() {
@@ -504,7 +532,24 @@ function submit_txt2img_upscale() {
 }
 
 function submit_img2img() {
-    return submitWithProgress(arguments, 'img2img_gallery_container', 'img2img_gallery');
+    return submitWithProgress(
+        arguments,
+        'img2img_gallery_container',
+        'img2img_gallery',
+        (submitArgs) => {
+            let strict = null;
+            try {
+                strict = buildNamedImg2img(submitArgs);
+            } catch (error) {
+                console.warn('submit_img2img(): builder failed, sending minimal strict JSON for diagnostics', error);
+                strict = { __strict_version: 1, __source: 'img2img', __builder_error: String(error?.message || error) };
+            }
+            if (!strict || typeof strict !== 'object') {
+                return { __strict_version: 1, __source: 'img2img', __builder_error: 'builder returned non-object' };
+            }
+            return strict;
+        }
+    );
 }
 
 /** @param {IArguments} _args */
@@ -579,25 +624,24 @@ function buildNamedImg2img(_args) {
 }
 
 function submit_img2img_named() {
-    const res = submitWithProgress(arguments, 'img2img_gallery_container', 'img2img_gallery');
-    if (Array.isArray(res) && res.length > 0) {
-        let strict;
-        try {
-            strict = buildNamedImg2img(arguments);
-        } catch (e) {
-            console.warn('submit_img2img_named(): builder failed, sending minimal strict JSON for diagnostics', e);
-            strict = { __strict_version: 1, __source: 'img2img', __builder_error: String(e?.message || e) };
+    return submitWithProgress(
+        arguments,
+        'img2img_gallery_container',
+        'img2img_gallery',
+        (submitArgs) => {
+            let strict = null;
+            try {
+                strict = buildNamedImg2img(submitArgs);
+            } catch (error) {
+                console.warn('submit_img2img_named(): builder failed, sending minimal strict JSON for diagnostics', error);
+                strict = { __strict_version: 1, __source: 'img2img', __builder_error: String(error?.message || error) };
+            }
+            if (!strict || typeof strict !== 'object') {
+                return { __strict_version: 1, __source: 'img2img', __builder_error: 'builder returned non-object' };
+            }
+            return strict;
         }
-        if (typeof strict !== 'object' || strict === null) {
-            strict = { __strict_version: 1, __source: 'img2img', __builder_error: 'builder returned non-object' };
-        }
-        try {
-            res[res.length - 1] = JSON.stringify(strict);
-        } catch (_) {
-            res[res.length - 1] = '{"__strict_version":1,"__source":"img2img","__builder_error":"json_stringify_failed"}';
-        }
-    }
-    return res;
+    );
 }
 
 function submit_extras() {
@@ -633,8 +677,11 @@ function restoreProgressImg2img() {
 
 uiWindow.submit = submit;
 uiWindow.submit_txt2img_upscale = submit_txt2img_upscale;
+uiWindow.submit_named = submit_named;
 uiWindow.restoreProgressTxt2img = restoreProgressTxt2img;
 uiWindow.restoreProgressImg2img = restoreProgressImg2img;
+uiWindow.submit_img2img = submit_img2img;
+uiWindow.submit_img2img_named = submit_img2img_named;
 
 /**
  * Configure the width and height elements on `tabname` to accept pasting of resolutions.

@@ -10,4 +10,5 @@
 - Fix: Strict JSON submit wiring
   - `modules/ui.py`: hidden slots now use `gr.JSON` for `txt2img_named_active`/`img2img_named_active`; server accepts JSON strings.
   - `javascript/ui.js`: `submit_named()` now injects object (not stringified JSON) into the hidden slot.
+- Fix: JS submitters always attach strict payloads and export named handlers for Gradio `_js` hooks (see `javascript/ui.js`).
 - Test: Added Playwright variant `scripts/ui_headless_click_pw.sh` + `tools/ui-click-generate.playwright.mjs` with local browsers cache.

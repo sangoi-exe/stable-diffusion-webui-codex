@@ -21,3 +21,10 @@ Validation
 
 Next steps
 - On host: hard refresh UI (cache bust) and click Generate; strict error should disappear and generation should start.
+
+Update: 2025-10-18 (later session)
+- javascript/ui.js:
+  - `submitWithProgress()` now accepts an optional strict JSON builder and injects its payload, so every submit path populates the hidden slot.
+  - `submit`, `submit_named`, `submit_img2img`, and `submit_img2img_named` pass the appropriate builders; the named handlers are exposed via `uiWindow` for Gradio `_js=...` hooks.
+- Validation: `npm run typecheck` (fails in sandbox; no output provided). Manual reasoning confirms strict payload now forced before returning args array.
+- TODO: Re-run UI/headless click once sandbox/network allows; confirm Windows bundle loads refreshed JS.
