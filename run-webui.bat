@@ -30,11 +30,11 @@ set "_TMPVER=%TEMP%\codex_pyver_%RANDOM%.txt"
 %PYTHON% -c "import sys;print(str(sys.version_info.major)+'.'+str(sys.version_info.minor))" > "%_TMPVER%" 2>NUL
 set /p PYVER=<"%_TMPVER%"
 del /q "%_TMPVER%" >NUL 2>&1
-if not "%PYVER%"=="3.10" (
-  echo [ERROR] Detected Python %PYVER%. Windows build requires Python 3.10.x.
-  exit /b 1
+if "%PYVER%"=="3.12" (
+  echo [OK] Python %PYVER% (recommended)
+) else (
+  echo [WARN] Detected Python %PYVER%. WebUI base is Python 3.12.10; continuing.
 )
-echo [OK] Python %PYVER%
 
 REM 3) VENV create/activate (same style as webui.bat)
 if ["%VENV_DIR%"] == ["-"] goto :venv_done
