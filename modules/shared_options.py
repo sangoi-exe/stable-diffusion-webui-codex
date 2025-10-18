@@ -78,6 +78,11 @@ options_templates.update(options_section(('saving-images', "Saving images/grids"
     "notification_volume": OptionInfo(100, "Notification sound volume", gr.Slider, {"minimum": 0, "maximum": 100, "step": 1}).info("in %"),
 }))
 
+# Codex-specific runtime toggles
+options_templates.update(options_section(('codex', "Codex", "system"), {
+    "codex_export_video": OptionInfo(False, "Export generated video to mp4/webm (WAN/Hunyuan/SVD) when supported.", gr.Checkbox, {}).info("Requires ffmpeg in PATH. Also available via env CODEX_EXPORT_VIDEO=1."),
+}))
+
 options_templates.update(options_section(('saving-paths', "Paths for saving", "saving"), {
     "outdir_samples": OptionInfo("", "Output directory for images; if empty, defaults to three directories below", component_args=hide_dirs),
     "outdir_txt2img_samples": OptionInfo(util.truncate_path(os.path.join(default_output_dir, 'txt2img-images')), 'Output directory for txt2img images', component_args=hide_dirs),
@@ -431,6 +436,10 @@ options_templates.update(options_section((None, "Hidden options"), {
     "disable_all_extensions": OptionInfo("none", "Disable all extensions (preserves the list of disabled extensions)", gr.Radio, {"choices": ["none", "extra", "all"]}),
     "restore_config_state_file": OptionInfo("", "Config state file to restore from, under 'config-states/' folder"),
     "sd_checkpoint_hash": OptionInfo("", "SHA256 hash of the current checkpoint"),
+    # Managed by Codex (new engine dropdown in Quicksettings)
+    "codex_engine": OptionInfo("sd15", "(Managed by Codex)", gr.State),
+    # Managed by Codex (mode dropdown in Quicksettings)
+    "codex_mode": OptionInfo("Normal", "(Managed by Codex)", gr.State),
 }))
 
 forge_shared_options.register(options_templates, options_section, OptionInfo)

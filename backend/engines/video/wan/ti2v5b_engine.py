@@ -241,7 +241,13 @@ class WanTI2V5BEngine(DiffusionEngine):
         try:
             if not images:
                 return {}
-            if os.environ.get("CODEX_EXPORT_VIDEO", "0") != "1":
+            # Engine option takes precedence; environment remains as override path
+            opt_flag = False
+            try:
+                opt_flag = bool(self._load_options.get("export_video"))  # type: ignore[union-attr]
+            except Exception:
+                opt_flag = False
+            if not opt_flag and os.environ.get("CODEX_EXPORT_VIDEO", "0") != "1":
                 return {}
             if shutil.which("ffmpeg") is None:
                 self._logger.warning("ffmpeg not found; skipping video export")
