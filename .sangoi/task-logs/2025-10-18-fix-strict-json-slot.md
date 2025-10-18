@@ -28,3 +28,10 @@ Update: 2025-10-18 (later session)
   - `submit`, `submit_named`, `submit_img2img`, and `submit_img2img_named` pass the appropriate builders; the named handlers are exposed via `uiWindow` for Gradio `_js=...` hooks.
 - Validation: `npm run typecheck` (fails in sandbox; no output provided). Manual reasoning confirms strict payload now forced before returning args array.
 - TODO: Re-run UI/headless click once sandbox/network allows; confirm Windows bundle loads refreshed JS.
+
+Update: 2025-10-18 (typecheck follow-up)
+- javascript/ui.js:
+  - Added `StrictBuilder` typedef, `formatErrorMessage()` helper, and explicit builder closures so TypeScript recognises the strict payload flow.
+  - Extended `UIWindow` typedef with the exported submitters.
+- Validation: Host-reported `npm run typecheck` now expected to pass for `javascript/ui.js`; other legacy JS files still exhibit pre-existing Forge errors (see host log).
+- TODO: Coordinate remediation plan for remaining `extraNetworks`/`hints`/`imageMaskFix` type errors (out of scope of this strict submit fix).
