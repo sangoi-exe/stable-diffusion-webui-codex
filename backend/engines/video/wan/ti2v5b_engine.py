@@ -26,6 +26,7 @@ from backend.core.presets import apply_preset_to_request
 
 from ...base import DiffusionEngine
 from .loader import WanLoader, WanComponents
+from .schedulers import apply_sampler_scheduler, allowed_samplers_for_engine
 
 
 class WanTI2V5BEngine(DiffusionEngine):
@@ -58,6 +59,10 @@ class WanTI2V5BEngine(DiffusionEngine):
             )
 
         pipe = comp.pipeline
+        # Apply sampler/scheduler mapping (with warnings if unsupported)
+        outcome = apply_sampler_scheduler(pipe, str(getattr(params, "sampler", "Automatic")), str(getattr(params, "scheduler", "Automatic")))
+        for w in outcome.warnings:
+            self._logger.warning("wan_ti2v_5b: %s", w)
         try:
             # Map parameters
             num_steps = int(getattr(params, "steps", 12) or 12)
@@ -96,6 +101,10 @@ class WanTI2V5BEngine(DiffusionEngine):
                 "height": height,
                 "steps": num_steps,
                 "num_frames": num_frames,
+                "sampler_in": outcome.sampler_in,
+                "scheduler_in": outcome.scheduler_in,
+                "sampler_effective": outcome.sampler_effective,
+                "scheduler_effective": outcome.scheduler_effective,
             }
             yield ResultEvent(payload={"images": images, "info": self._to_json(info)})
         except Exception as exc:  # noqa: BLE001
@@ -119,6 +128,9 @@ class WanTI2V5BEngine(DiffusionEngine):
             )
 
         pipe = comp.pipeline
+        outcome = apply_sampler_scheduler(pipe, str(getattr(params, "sampler", "Automatic")), str(getattr(params, "scheduler", "Automatic")))
+        for w in outcome.warnings:
+            self._logger.warning("wan_ti2v_5b: %s", w)
         try:
             start = time.perf_counter()
             num_steps = int(getattr(params, "steps", 12) or 12)
@@ -158,6 +170,10 @@ class WanTI2V5BEngine(DiffusionEngine):
                 "height": height,
                 "steps": num_steps,
                 "num_frames": num_frames,
+                "sampler_in": outcome.sampler_in,
+                "scheduler_in": outcome.scheduler_in,
+                "sampler_effective": outcome.sampler_effective,
+                "scheduler_effective": outcome.scheduler_effective,
             }
             yield ResultEvent(payload={"images": images, "info": self._to_json(info)})
         except Exception as exc:  # noqa: BLE001

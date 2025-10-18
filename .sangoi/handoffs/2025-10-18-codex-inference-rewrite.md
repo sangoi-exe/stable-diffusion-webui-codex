@@ -105,6 +105,22 @@ Intended Solution (before implementation)
 - Metrics: time each stage (tokenize/denoise/decode); VRAM peak via `torch.cuda.max_memory_allocated()` when GPU visible; include `mode_ignored_reason` if Mode not supported.
 - UI: no new widgets; use existing Video tabs; ensure strict JSON examples in docs.
 
+Sampler/Scheduler Mapping
+- Allowed (WAN TI2V‑5B): `Euler a`, `Euler`, `DDIM`, `DPM++ 2M`, `DPM++ 2M SDE`, `PLMS`.
+- Mapping → Diffusers scheduler classes with optional flags:
+  - `Euler a` → `EulerAncestralDiscreteScheduler`
+  - `Euler` → `EulerDiscreteScheduler`
+  - `DDIM` → `DDIMScheduler`
+  - `DPM++ 2M` → `DPMSolverMultistepScheduler(algorithm_type='dpmsolver++', solver_order=2)`
+  - `DPM++ 2M SDE` → `DPMSolverMultistepScheduler(algorithm_type='sde-dpmsolver++', solver_order=2)`
+  - `PLMS` → `PNDMScheduler(skip_prk_steps=True)`
+- Scheduler (UI) → flags:
+  - `Karras` → `use_karras_sigmas=True` (quando suportado pela classe)
+  - `Simple` → `timestep_spacing='trailing'`
+  - `Exponential` → `use_exponential_sigmas=True`
+  - `Automatic` → sem alterações
+- Comportamento: Avisos explícitos no log quando uma opção não for suportada; resposta inclui `sampler_in`, `scheduler_in`, `sampler_effective`, `scheduler_effective` no `info` JSON.
+
 MVP Deliverables (TI2V‑5B)
 
 - Loader + forward usando Diffusers `WanPipeline` (local-only) com presets e progress events.

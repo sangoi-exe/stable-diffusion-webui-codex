@@ -49,4 +49,6 @@
 
 - Engine(wan_ti2v_5b): Loader attempts Diffusers `WanPipeline`/`AutoencoderKLWan` (local-only by default). Engine wired to call pipeline for txt2vid/img2vid, returning frames + `info` JSON, with prepare/run progress and VRAM metrics. If pipeline is unavailable or weights missing, raises explicit `EngineExecutionError` with upgrade/instructions.
 
+- Engine(wan_ti2v_5b): Added sampler/scheduler mapping and per-engine limits. Allowed samplers: Euler a, Euler, DDIM, DPM++ 2M, DPM++ 2M SDE, PLMS. Scheduler flags: Karras → `use_karras_sigmas`, Simple → `timestep_spacing='trailing'`, Exponential → `use_exponential_sigmas`. Warnings emitted when unsupported.
+
 - Docs: Updated handoff `.sangoi/handoffs/2025-10-18-codex-inference-rewrite.md` with 6 solution paths for WAN 2.2 integration, selected Path A (Native PyTorch) as intended approach, and added MVP/validation/risks sections. Validation is UI-first; smoke script now optional. No user-facing changes yet.
