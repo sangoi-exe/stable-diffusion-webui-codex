@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequ
 import gradio as gr
 
 from modules import call_queue, shared, ui_tempdir, util
+from modules.ui_gradio_extensions import webpath as _webpath
 import modules.images
 from modules.ui_components import ToolButton
 import modules.infotext_utils as parameters_copypaste
@@ -43,6 +44,31 @@ def plaintext_to_html(text: str, classname: Optional[str] = None) -> str:
     content = "<br>\n".join(html.escape(x) for x in text.split('\n'))
 
     return f"<p class='{classname}'>{content}</p>" if classname else f"<p>{content}</p>"
+
+
+def video_link_from_generation_info(generation_info: str) -> str:
+    """Return HTML with links to exported video files, if present.
+
+    Accepts the raw generation_info JSON string produced by video tabs.
+    """
+    try:
+        data = json.loads(generation_info or "{}")
+        vid = data.get("video") if isinstance(data, dict) else None
+        if not isinstance(vid, dict):
+            return plaintext_to_html("No exported video found for last run.")
+        links = []
+        mp4 = vid.get("mp4")
+        webm = vid.get("webm")
+        for path in (mp4, webm):
+            if isinstance(path, str) and os.path.isfile(path):
+                href = _webpath(path)
+                name = os.path.basename(path)
+                links.append(f'<a href="{href}" target="_blank" rel="noopener">{html.escape(name)}</a>')
+        if not links:
+            return plaintext_to_html("Exported video metadata present but files not found.")
+        return "<div>" + " &nbsp;|&nbsp; ".join(links) + "</div>"
+    except Exception:
+        return plaintext_to_html("No exported video available or malformed generation info.")
 
 
 def update_logfile(logfile_path: str, fields: Sequence[str]) -> None:

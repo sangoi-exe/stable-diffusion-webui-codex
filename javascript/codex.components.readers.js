@@ -57,6 +57,12 @@
     for (let i = 0; i < radios.length; i += 1) if (radios[i].checked) { idx = i; break; }
     return idx;
   }
+  function readCheckbox(id) {
+    const el = $id(id);
+    if (!el) return false;
+    const cb = el.querySelector('input[type="checkbox"]');
+    return !!(cb && cb.checked);
+  }
   function readSeedValue(id) {
     const el = $id(id);
     const num = el && el.querySelector('input');
@@ -65,6 +71,5 @@
     return Number.isNaN(v) ? -1 : v;
   }
 
-  C.Readers = { $id, readText, readDropdownValue, readDropdownOrRadioValue, readInt, readFloat, readRadioValue, readRadioIndex, readSeedValue };
+  C.Readers = { $id, readText, readDropdownValue, readDropdownOrRadioValue, readInt, readFloat, readRadioValue, readRadioIndex, readSeedValue, readCheckbox };
 })();
-

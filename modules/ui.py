@@ -1558,6 +1558,10 @@ def create_ui():
                 with gr.Row():
                     txt2vid_seed = gr.Number(label='Seed', value=-1, elem_id="txt2vid_seed")
         output_panel_vtxt = create_output_panel("txt2vid", opts.outdir_txt2img_samples, toprow)
+        txt2vid_video_link = gr.HTML(elem_id="txt2vid_video_link")
+        btn_txt2vid_open_video = gr.Button("Open video", elem_id="txt2vid_open_video")
+        from modules.ui_common import video_link_from_generation_info as _video_link
+        btn_txt2vid_open_video.click(fn=_video_link, inputs=[output_panel_vtxt.generation_info], outputs=[txt2vid_video_link], show_progress=False)
         named_active_txt2vid = gr.Textbox(value="", visible=False, elem_id="txt2vid_named_active")
         submit_txt2vid_inputs = [
             output_panel_vtxt.gallery_index,  # dummy id_task
@@ -1646,6 +1650,10 @@ def create_ui():
                 with gr.Row():
                     img2vid_seed = gr.Number(label='Seed', value=-1, elem_id="img2vid_seed")
         output_panel_vimg = create_output_panel("img2vid", opts.outdir_img2img_samples, toprow)
+        img2vid_video_link = gr.HTML(elem_id="img2vid_video_link")
+        btn_img2vid_open_video = gr.Button("Open video", elem_id="img2vid_open_video")
+        from modules.ui_common import video_link_from_generation_info as _video_link2
+        btn_img2vid_open_video.click(fn=_video_link2, inputs=[output_panel_vimg.generation_info], outputs=[img2vid_video_link], show_progress=False)
         named_active_img2vid = gr.Textbox(value="", visible=False, elem_id="img2vid_named_active")
         submit_img2vid_inputs = [
             output_panel_vimg.gallery_index,

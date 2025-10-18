@@ -538,7 +538,8 @@ function buildNamedTxt2img(_args) {
     }
     named['txt2img_height'] = rInt('txt2img_height'); active.push('txt2img_height');
     named['txt2img_width'] = rInt('txt2img_width'); active.push('txt2img_width');
-    const hrEnabled = readCheckbox('txt2img_hr_enable');
+    const rCB = R ? R.readCheckbox : readCheckbox;
+    const hrEnabled = rCB('txt2img_hr_enable');
     named['txt2img_hr_enable'] = hrEnabled; active.push('txt2img_hr_enable');
     if (hrEnabled) {
         named['txt2img_denoising_strength'] = rFloat('txt2img_denoising_strength'); active.push('txt2img_denoising_strength');
@@ -564,7 +565,7 @@ function buildNamedTxt2img(_args) {
     named['txt2img_scheduler'] = rDD('txt2img_scheduler'); active.push('txt2img_scheduler');
     // Seed + variation (only include extras if enabled)
     named['txt2img_seed'] = rSeed('txt2img_seed'); active.push('txt2img_seed');
-    const showVar = readCheckbox('txt2img_subseed_show');
+    const showVar = rCB('txt2img_subseed_show');
     if (showVar) {
         named['txt2img_subseed_show'] = true; active.push('txt2img_subseed_show');
         named['txt2img_subseed'] = rInt('txt2img_subseed'); active.push('txt2img_subseed');
@@ -575,7 +576,7 @@ function buildNamedTxt2img(_args) {
     named['__active_ids'] = active;
     // Dynamic Thresholding (always-on extension). Only include if enabled.
     try {
-        const dynEnabled = readCheckbox('dynthres_enabled');
+        const dynEnabled = rCB('dynthres_enabled');
         if (dynEnabled) {
             named['dynthres_enabled'] = true; active.push('dynthres_enabled');
             named['dynthres_mimic_scale'] = readFloat('dynthres_mimic_scale'); active.push('dynthres_mimic_scale');
@@ -669,7 +670,7 @@ function buildNamedImg2img(_args) {
     named['img2img_scheduler'] = r2DD('img2img_scheduler'); active.push('img2img_scheduler');
     // Seed + variation
     named['img2img_seed'] = r2Seed('img2img_seed'); active.push('img2img_seed');
-    const showVarI2I = readCheckbox('img2img_subseed_show');
+    const showVarI2I = (R2 ? R2.readCheckbox : readCheckbox)('img2img_subseed_show');
     if (showVarI2I) {
         named['img2img_subseed_show'] = true; active.push('img2img_subseed_show');
         named['img2img_subseed'] = r2Int('img2img_subseed'); active.push('img2img_subseed');
