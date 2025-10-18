@@ -10,7 +10,18 @@ if exist webui.settings.bat (
 )
 
 if not defined PYTHON (set PYTHON=python)
-if not defined VENV_DIR (set "VENV_DIR=%~dp0.venv")
+REM Resolve VENV_DIR: prefer existing 'venv', then '.venv', else default to 'venv'
+if not defined VENV_DIR (
+  if exist "%~dp0venv\Scripts\Python.exe" (
+    set "VENV_DIR=%~dp0venv"
+  ) else (
+    if exist "%~dp0.venv\Scripts\Python.exe" (
+      set "VENV_DIR=%~dp0.venv"
+    ) else (
+      set "VENV_DIR=%~dp0venv"
+    )
+  )
+)
 
 echo.
 echo [Codex] Stable Diffusion WebUI launcher (Windows)
@@ -44,7 +55,7 @@ dir "%VENV_DIR%\Scripts\Python.exe" >NUL 2>&1
 if %ERRORLEVEL% == 0 goto :venv_activate
 
 for /f "delims=" %%i in ('CALL %PYTHON% -c "import sys; print(sys.executable)"') do set PYTHON_FULLNAME="%%i"
-echo [2/7] Creating venv in %VENV_DIR% using %PYTHON_FULLNAME%
+echo [2/7] Creating venv in %VENV_DIR% using %PYTHON_FULLNAME% (this may take a while...)
 %PYTHON_FULLNAME% -m venv "%VENV_DIR%"
 if errorlevel 1 (
   echo [ERROR] Unable to create venv at %VENV_DIR%
