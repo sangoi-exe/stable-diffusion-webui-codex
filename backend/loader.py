@@ -140,7 +140,7 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
             from transformers import CLIPTextConfig, CLIPTextModel
             config = CLIPTextConfig.from_pretrained(config_path)
 
-            to_args = dict(device=memory_management.cpu, dtype=memory_management.text_encoder_dtype())
+            to_args = dict(device=memory_management.cpu, dtype=memory_management.text_encoder_dtype(device=memory_management.cpu))
 
             with modeling_utils.no_init_weights():
                 with using_forge_operations(**to_args, manual_cast_enabled=True):
@@ -608,7 +608,8 @@ def split_state_dict(sd, additional_state_dicts: list = None):
 
     _trace.event("filter_clip_start")
     for k, v in guess.clip_target.items():
-        state_dict[v] = try_filter_state_dict(sd, [k + '.'])
+        # CLIP weights in our IntegratedCLIP expect keys prefixed with 'transformer.'
+        state_dict[v] = try_filter_state_dict(sd, [k + '.'], new_prefix='transformer.')
     _trace.event("filter_clip_done")
 
     state_dict['ignore'] = sd
