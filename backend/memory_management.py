@@ -9,6 +9,9 @@ import platform
 from enum import Enum
 from backend import stream, utils
 from backend.args import args
+import logging
+
+_log = logging.getLogger("backend.memory")
 
 
 cpu = torch.device('cpu')
@@ -115,13 +118,13 @@ def get_total_memory(dev=None, torch_total_too=False):
         elif is_intel_xpu():
             stats = torch.xpu.memory_stats(dev)
             mem_reserved = stats['reserved_bytes.all.current']
-            mem_total_torch = mem_reserved
+            mem_total_torch = max(0, mem_reserved)
             mem_total = torch.xpu.get_device_properties(dev).total_memory
         else:
             stats = torch.cuda.memory_stats(dev)
             mem_reserved = stats['reserved_bytes.all.current']
             _, mem_total_cuda = torch.cuda.mem_get_info(dev)
-            mem_total_torch = mem_reserved
+            mem_total_torch = max(0, mem_reserved)
             mem_total = mem_total_cuda
 
     if torch_total_too:
@@ -245,16 +248,19 @@ if cpu_state == CPUState.MPS:
     vram_state = VRAMState.SHARED
 
 print(f"Set vram state to: {vram_state.name}")
+_log.debug("init: vram_state=%s cpu_state=%s directml=%s xpu=%s", vram_state.name, cpu_state.name, directml_enabled, xpu_available)
 
 ALWAYS_VRAM_OFFLOAD = args.always_offload_from_vram
 
 if ALWAYS_VRAM_OFFLOAD:
     print("Always offload VRAM")
+    _log.info("ALWAYS_VRAM_OFFLOAD enabled")
 
 PIN_SHARED_MEMORY = args.pin_shared_memory
 
 if PIN_SHARED_MEMORY:
     print("Always pin shared GPU memory")
+    _log.info("PIN_SHARED_MEMORY enabled")
 
 
 def get_torch_device_name(device):
@@ -276,6 +282,7 @@ def get_torch_device_name(device):
 try:
     torch_device_name = get_torch_device_name(get_torch_device())
     print("Device: {}".format(torch_device_name))
+    _log.debug("device=%s", torch_device_name)
 except:
     torch_device_name = ''
     print("Could not pick default device.")
@@ -286,6 +293,7 @@ if 'rtx' in torch_device_name.lower():
 
 
 current_loaded_models = []
+_log.debug("memory tracker ready: current_loaded_models=%d", len(current_loaded_models))
 
 
 def state_dict_size(sd, exclude_device=None):
@@ -561,13 +569,28 @@ def unload_model_clones(model):
 
 def free_memory(memory_required, device, keep_loaded=[], free_all=False):
     # this check fully unloads any 'abandoned' models
+    _log.debug(
+        "free_memory enter: req=%.2fMB device=%s keep=%d free_all=%s tracked=%d",
+        memory_required / (1024 * 1024),
+        get_torch_device_name(device),
+        len(keep_loaded) if keep_loaded is not None else 0,
+        free_all,
+        len(current_loaded_models),
+    )
     for i in range(len(current_loaded_models) - 1, -1, -1):
         if sys.getrefcount(current_loaded_models[i].model) <= 2:
             current_loaded_models.pop(i).model_unload(avoid_model_moving=True)
 
     if free_all:
         memory_required = 1e30
-        print(f"[Unload] Trying to free all memory for {device} with {len(keep_loaded)} models keep loaded ... ", end="")
+        if len(current_loaded_models) == 0:
+            print(f"[Unload] No tracked models; clearing caches for {device} ... ", end="")
+            soft_empty_cache()
+            print('Done.')
+            _log.debug("free_memory exit: nothing to unload, caches cleared")
+            return
+        else:
+            print(f"[Unload] Trying to free all memory for {device} with {len(keep_loaded)} models keep loaded ... ", end="")
     else:
         print(f"[Unload] Trying to free {memory_required / (1024 * 1024):.2f} MB for {device} with {len(keep_loaded)} models keep loaded ... ", end="")
 
@@ -575,9 +598,10 @@ def free_memory(memory_required, device, keep_loaded=[], free_all=False):
     unloaded_model = False
     for i in range(len(current_loaded_models) - 1, -1, -1):
         if not offload_everything:
-            free_memory = get_free_memory(device)
-            print(f"Current free memory is {free_memory / (1024 * 1024):.2f} MB ... ", end="")
-            if free_memory > memory_required:
+            free_mem = get_free_memory(device)
+            _log.debug("free_memory loop: free=%.2fMB target=%.2fMB", free_mem / (1024 * 1024), memory_required / (1024 * 1024))
+            print(f"Current free memory is {free_mem / (1024 * 1024):.2f} MB ... ", end="")
+            if free_mem > memory_required:
                 break
         shift_model = current_loaded_models[i]
         if shift_model.device == device:
@@ -597,6 +621,7 @@ def free_memory(memory_required, device, keep_loaded=[], free_all=False):
                 soft_empty_cache()
 
     print('Done.')
+    _log.debug("free_memory exit: tracked=%d", len(current_loaded_models))
     return
 
 
@@ -1021,7 +1046,7 @@ def get_free_memory(dev=None, torch_free_too=False):
             stats = torch.xpu.memory_stats(dev)
             mem_active = stats['active_bytes.all.current']
             mem_reserved = stats['reserved_bytes.all.current']
-            mem_free_torch = mem_reserved - mem_active
+            mem_free_torch = max(0, mem_reserved - mem_active)
             mem_free_xpu = torch.xpu.get_device_properties(dev).total_memory - mem_reserved
             mem_free_total = mem_free_xpu + mem_free_torch
         else:
@@ -1029,7 +1054,7 @@ def get_free_memory(dev=None, torch_free_too=False):
             mem_active = stats['active_bytes.all.current']
             mem_reserved = stats['reserved_bytes.all.current']
             mem_free_cuda, _ = torch.cuda.mem_get_info(dev)
-            mem_free_torch = mem_reserved - mem_active
+            mem_free_torch = max(0, mem_reserved - mem_active)
             mem_free_total = mem_free_cuda + mem_free_torch
 
     if torch_free_too:
@@ -1099,7 +1124,14 @@ def should_use_fp16(device=None, model_params=0, prioritize_performance=True, ma
     if torch.version.hip:
         return True
 
-    props = torch.cuda.get_device_properties("cuda")
+    # Resolve device for properties query
+    dev_for_props = device
+    if dev_for_props is None:
+        try:
+            dev_for_props = get_torch_device()
+        except Exception:
+            dev_for_props = torch.device("cuda")
+    props = torch.cuda.get_device_properties(dev_for_props)
     if props.major >= 8:
         return True
 
@@ -1155,7 +1187,10 @@ def should_use_bf16(device=None, model_params=0, prioritize_performance=True, ma
         return True
 
     if device is None:
-        device = torch.device("cuda")
+        try:
+            device = get_torch_device()
+        except Exception:
+            device = torch.device("cuda")
 
     props = torch.cuda.get_device_properties(device)
     if props.major >= 8:
@@ -1206,4 +1241,9 @@ def soft_empty_cache(force=False):
 
 
 def unload_all_models():
-    free_memory(1e30, get_torch_device(), free_all=True)
+    try:
+        dev = get_torch_device()
+    except Exception:
+        dev = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    _log.debug("unload_all_models: tracked=%d device=%s", len(current_loaded_models), get_torch_device_name(dev))
+    free_memory(1e30, dev, free_all=True)
