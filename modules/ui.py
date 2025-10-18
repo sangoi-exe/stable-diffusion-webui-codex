@@ -396,18 +396,74 @@ def create_ui():
 
                                     hr_checkpoint_refresh = ToolButton(value=refresh_symbol)
 
-                                    def get_additional_modules():
-                                        return ['Use same choices']
+                                    # Split legacy combined selector into dedicated Hires VAE and Hires Text Encoders.
+                                    # Keep a hidden aggregator `hr_additional_modules` for downstream compatibility.
+                                    def _hi_lists():
+                                        try:
+                                            from modules_forge import main_entry as _me
+                                            _ckpts, _vaes, _text = _me.refresh_models()
+                                            return list(_vaes), list(_text)
+                                        except Exception:
+                                            return [], []
 
-                                    modules_list = get_additional_modules()
+                                    def _union_modules():
+                                        vaes, text = _hi_lists()
+                                        u = sorted(set(list(vaes) + list(text)))
+                                        return ["Use same choices"] + u
+
+                                    hr_vae_name = gr.Dropdown(
+                                        label='Hires VAE', elem_id="hr_vae",
+                                        choices=["Use same choices"] + _hi_lists()[0],
+                                        value="Use same choices",
+                                    )
+
+                                    hr_text_encoders = gr.Dropdown(
+                                        label='Hires Text Encoder(s)', elem_id="hr_text_encoders",
+                                        choices=_hi_lists()[1],
+                                        value=[],
+                                        multiselect=True,
+                                        scale=2,
+                                    )
+
+                                    # Hidden compatibility field consumed by submit pipeline
+                                    hr_additional_modules = gr.Dropdown(
+                                        label='Hires VAE / Text Encoder (compat)', elem_id="hr_vae_te",
+                                        choices=_union_modules(),
+                                        value=["Use same choices"],
+                                        multiselect=True,
+                                        visible=False,
+                                        show_label=False,
+                                    )
+
+                                    def _assemble_hr_modules(vae, text_modules):
+                                        if vae in (None, '', 'Use same choices') and (not text_modules):
+                                            return ["Use same choices"]
+                                        out = []
+                                        if isinstance(vae, str) and vae not in ('', 'Use same choices'):
+                                            out.append(vae)
+                                        if isinstance(text_modules, (list, tuple)):
+                                            out.extend([x for x in text_modules if isinstance(x, str) and x not in ('', 'Use same choices')])
+                                        return out if out else ["Use same choices"]
+
+                                    # Wire changes: updating aggregator whenever VAE or TE selections change
+                                    hr_vae_name.change(_assemble_hr_modules, inputs=[hr_vae_name, hr_text_encoders], outputs=[hr_additional_modules], queue=False, show_progress=False)
+                                    hr_text_encoders.change(_assemble_hr_modules, inputs=[hr_vae_name, hr_text_encoders], outputs=[hr_additional_modules], queue=False, show_progress=False)
 
                                     def refresh_model_and_modules():
-                                        modules_list = get_additional_modules()
-                                        return gr.update(choices=["Use same checkpoint"] + modules.sd_models.checkpoint_tiles(use_short=True)), gr.update(choices=modules_list)
+                                        vaes, text = _hi_lists()
+                                        union_choices = ["Use same choices"] + sorted(set(list(vaes) + list(text)))
+                                        return (
+                                            gr.update(choices=["Use same checkpoint"] + modules.sd_models.checkpoint_tiles(use_short=True)),
+                                            gr.update(choices=["Use same choices"] + vaes),
+                                            gr.update(choices=text),
+                                            gr.update(choices=union_choices),
+                                        )
 
-                                    hr_additional_modules = gr.Dropdown(label='Hires VAE / Text Encoder', elem_id="hr_vae_te", choices=modules_list, value=["Use same choices"], multiselect=True, scale=3)
-
-                                    hr_checkpoint_refresh.click(fn=refresh_model_and_modules, outputs=[hr_checkpoint_name, hr_additional_modules], show_progress=False)
+                                    hr_checkpoint_refresh.click(
+                                        fn=refresh_model_and_modules,
+                                        outputs=[hr_checkpoint_name, hr_vae_name, hr_text_encoders, hr_additional_modules],
+                                        show_progress=False,
+                                    )
 
                                 with FormRow(elem_id="txt2img_hires_fix_row3b", variant="compact", visible=shared.opts.hires_fix_show_sampler) as hr_sampler_container:
                                     hr_sampler_name = gr.Dropdown(label='Hires sampling method', elem_id="hr_sampler", choices=["Use same sampler"] + sd_samplers.visible_sampler_names(), value="Use same sampler")
@@ -620,22 +676,34 @@ def create_ui():
                 except Exception:
                     return values
 
+            def _extract_strict_payload(all_args):
+                import json as _json
+                # Search from the end to handle the common 'last arg' case first
+                for idx in range(len(all_args) - 1, -1, -1):
+                    v = all_args[idx]
+                    if isinstance(v, str):
+                        try:
+                            v_loaded = _json.loads(v)
+                            v = v_loaded
+                        except Exception:
+                            pass
+                    if isinstance(v, dict) and v.get('__strict_version') == 1:
+                        return idx, v
+                return -1, None
+
             def _txt2img_submit(*args, **kwargs):
                 if not args:
                     raise RuntimeError("Missing arguments for txt2img submit")
                 id_task = args[0]
                 request = kwargs.get('request')
                 try:
-                    import json as _json
-                    payload = args[-1]
-                    if isinstance(payload, str):
-                        try:
-                            payload = _json.loads(payload)
-                        except Exception:
-                            pass
-                    if isinstance(payload, dict) and payload.get('__strict_version') == 1:
-                        # Strict JSON path
-                        script_args = tuple(args[1:-1]) if len(args) > 2 else tuple()
+                    strict_idx, payload = _extract_strict_payload(args)
+                    if payload is not None:
+                        # Strict JSON path (exclude the payload arg if it's inside args)
+                        script_seq = list(args[1:])
+                        if 1 <= strict_idx < len(args):
+                            del script_seq[strict_idx - 1]
+                        script_args = tuple(script_seq)
                         return modules.txt2img.txt2img_from_json(id_task, request, payload, *script_args)
                 except Exception:
                     pass
@@ -1053,15 +1121,14 @@ def create_ui():
                 id_task = args[0]
                 request = kwargs.get('request')
                 try:
-                    import json as _json
-                    payload = args[-1]
-                    if isinstance(payload, str):
-                        try:
-                            payload = _json.loads(payload)
-                        except Exception:
-                            pass
-                    if isinstance(payload, dict) and payload.get('__strict_version') == 1:
-                        return modules.img2img.img2img_from_json(*args, **kwargs)
+                    strict_idx, payload = _extract_strict_payload(args)
+                    if payload is not None:
+                        # Keep positional compatibility but exclude payload arg from script args if present
+                        script_seq = list(args[1:])
+                        if 1 <= strict_idx < len(args):
+                            del script_seq[strict_idx - 1]
+                        # img2img_from_json signature already expects *args, **kwargs; pass normalized
+                        return modules.img2img.img2img_from_json(id_task, request, payload, *tuple(script_seq))
                 except Exception:
                     pass
                 last = args[-1] if len(args) else None
