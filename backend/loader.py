@@ -527,37 +527,71 @@ def replace_state_dict(sd, asd, guess):
 
 def preprocess_state_dict(sd):
     if not any(k.startswith("model.diffusion_model") for k in sd.keys()):
+        try:
+            _trace.event("preprocess_prefix_add_start")
+        except Exception:
+            pass
         sd = {f"model.diffusion_model.{k}": v for k, v in sd.items()}
+        try:
+            _trace.event("preprocess_prefix_add_done")
+        except Exception:
+            pass
 
     return sd
 
 
 def split_state_dict(sd, additional_state_dicts: list = None):
+    try:
+        _trace.event("load_torch_file_start", path=str(sd))
+    except Exception:
+        pass
     sd = load_torch_file(sd)
+    try:
+        _trace.event("load_torch_file_done", type=type(sd).__name__)
+    except Exception:
+        pass
+
+    _trace.event("preprocess_start")
     sd = preprocess_state_dict(sd)
+    _trace.event("preprocess_done")
+
+    _trace.event("guess_start")
     guess = huggingface_guess.guess(sd)
+    _trace.event("guess_done")
 
     if isinstance(additional_state_dicts, list):
+        _trace.event("replace_additional_start", count=len(additional_state_dicts))
         for asd in additional_state_dicts:
             asd = load_torch_file(asd)
             sd = replace_state_dict(sd, asd, guess)
             del asd
+        _trace.event("replace_additional_done")
 
+    _trace.event("guess_targets_start")
     guess.clip_target = guess.clip_target(sd)
     guess.model_type = guess.model_type(sd)
     guess.ztsnr = 'ztsnr' in sd
+    _trace.event("guess_targets_done")
 
+    _trace.event("process_vae_start")
     sd = guess.process_vae_state_dict(sd)
+    _trace.event("process_vae_done")
 
+    _trace.event("build_unet_vae_start")
     state_dict = {
         guess.unet_target: try_filter_state_dict(sd, guess.unet_key_prefix),
         guess.vae_target: try_filter_state_dict(sd, guess.vae_key_prefix)
     }
+    _trace.event("build_unet_vae_done")
 
+    _trace.event("process_clip_start")
     sd = guess.process_clip_state_dict(sd)
+    _trace.event("process_clip_done")
 
+    _trace.event("filter_clip_start")
     for k, v in guess.clip_target.items():
         state_dict[v] = try_filter_state_dict(sd, [k + '.'])
+    _trace.event("filter_clip_done")
 
     state_dict['ignore'] = sd
 
@@ -565,6 +599,7 @@ def split_state_dict(sd, additional_state_dicts: list = None):
     print(f'StateDict Keys: {print_dict}')
 
     del state_dict['ignore']
+    _trace.event("split_state_dict_return", parts=list(state_dict.keys()))
 
     return state_dict, guess
 

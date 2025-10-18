@@ -64,6 +64,13 @@
   - Startup: `backend/__init__.py` initializes logging early for consistent verbosity.
   - Windows: `run-webui.bat` inclui bloco de config inline para `CODEX_*` (nível de log e dtypes). Arquivo externo `webui.settings.bat` é opcional.
 
+- Fix(Memory): audit and harden memory manager
+  - `backend/memory_management.py`: logger `backend.memory` e logs de entrada/saída no `free_memory`.
+  - Early-return no `free_all` quando não há modelos rastreados (evita mensagem confusa de unload com 0 modelos).
+  - Clamp de valores livres (reserved-active) para evitar negativos.
+  - Consulta de propriedades da GPU corrigida (usa `torch.device` real, não string).
+  - `unload_all_models` robusto na resolução do device e com logs.
+
 - Deps: Add `colorama==0.4.6` and `rich==13.9.2` to enable colored console/logging; logging setup already uses Rich/Colorama with tqdm-aware handler and safe fallback.
 - Deps: Pin `torch==2.7.1` and `torchvision==0.22.0` for Windows stability (recreate venv recommended).
 
