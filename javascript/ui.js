@@ -322,7 +322,7 @@ function submitWithProgress(args, galleryContainerId, galleryId, strictBuilder) 
         }
     );
 
-    const res = normalizeSubmitArgs(tabname, create_submit_args(args));
+    let res = normalizeSubmitArgs(tabname, create_submit_args(args));
     res[0] = id;
     if (typeof strictBuilder === 'function' && Array.isArray(res) && res.length > 0) {
         /** @type {Record<string, unknown> | null | undefined} */
@@ -348,6 +348,17 @@ function submitWithProgress(args, galleryContainerId, galleryId, strictBuilder) 
         } else {
             console.warn('submitWithProgress(): strict builder returned invalid payload', strictPayload);
         }
+    }
+    // Sanitize positional scalars: for txt2img we don't need any; keep only id_task and last JSON slot
+    try {
+        if (tabname === 'txt2img' && Array.isArray(res) && res.length > 2) {
+            const last = res.length - 1;
+            for (let i = 1; i < last; i += 1) {
+                res[i] = null;
+            }
+        }
+    } catch (e) {
+        console.warn('submitWithProgress(): sanitize failed', e);
     }
     return res;
 }
@@ -400,6 +411,15 @@ function readNumber(id) {
 function readFloat(id) { return Number(readNumber(id)); }
 /** @param {string} id */
 function readInt(id) { return Math.trunc(Number(readNumber(id))); }
+/** @param {string} id */
+function isInteractive(id) {
+    const root = getAppElementById(id);
+    if (!root) return false;
+    if (root instanceof HTMLElement && root.offsetParent === null) return false; // hidden
+    const disabledInput = root.querySelector('input[disabled], select[disabled], textarea[disabled]');
+    if (disabledInput) return false;
+    return true;
+}
 /** @param {string} id */
 function readCheckbox(id) {
     const root = getAppElementById(id);
@@ -476,7 +496,9 @@ function buildNamedTxt2img(_args) {
     named['txt2img_batch_count'] = readInt('txt2img_batch_count'); active.push('txt2img_batch_count');
     named['txt2img_batch_size'] = readInt('txt2img_batch_size'); active.push('txt2img_batch_size');
     named['txt2img_cfg_scale'] = readFloat('txt2img_cfg_scale'); active.push('txt2img_cfg_scale');
-    named['txt2img_distilled_cfg_scale'] = readFloat('txt2img_distilled_cfg_scale'); active.push('txt2img_distilled_cfg_scale');
+    if (isInteractive('txt2img_distilled_cfg_scale')) {
+        named['txt2img_distilled_cfg_scale'] = readFloat('txt2img_distilled_cfg_scale'); active.push('txt2img_distilled_cfg_scale');
+    }
     named['txt2img_height'] = readInt('txt2img_height'); active.push('txt2img_height');
     named['txt2img_width'] = readInt('txt2img_width'); active.push('txt2img_width');
     const hrEnabled = readCheckbox('txt2img_hr_enable');
@@ -495,7 +517,9 @@ function buildNamedTxt2img(_args) {
         named['txt2img_hr_prompt'] = readText('hires_prompt'); active.push('txt2img_hr_prompt');
         named['txt2img_hr_neg_prompt'] = readText('hires_neg_prompt'); active.push('txt2img_hr_neg_prompt');
         named['txt2img_hr_cfg'] = readFloat('txt2img_hr_cfg'); active.push('txt2img_hr_cfg');
-        named['txt2img_hr_distilled_cfg'] = readFloat('txt2img_hr_distilled_cfg'); active.push('txt2img_hr_distilled_cfg');
+        if (isInteractive('txt2img_hr_distilled_cfg')) {
+            named['txt2img_hr_distilled_cfg'] = readFloat('txt2img_hr_distilled_cfg'); active.push('txt2img_hr_distilled_cfg');
+        }
     }
     // Sampler & Scheduler (required)
     named['txt2img_steps'] = readInt('txt2img_steps'); active.push('txt2img_steps');
