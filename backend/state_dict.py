@@ -1,4 +1,8 @@
 import torch
+import logging
+from . import torch_trace as _trace
+
+_log = logging.getLogger("backend.state_dict")
 
 
 def load_state_dict(model, sd, ignore_errors=[], log_name=None, ignore_start=None):
@@ -13,8 +17,11 @@ def load_state_dict(model, sd, ignore_errors=[], log_name=None, ignore_start=Non
     log_name = log_name or type(model).__name__
     if len(missing) > 0:
         print(f'{log_name} Missing: {missing}')
+        _log.debug("%s missing_count=%d", log_name, len(missing))
     if len(unexpected) > 0:
         print(f'{log_name} Unexpected: {unexpected}')
+        _log.debug("%s unexpected_count=%d", log_name, len(unexpected))
+    _trace.event("load_state_dict_done", name=log_name, missing=len(missing), unexpected=len(unexpected))
     return
 
 

@@ -477,6 +477,19 @@ def forge_model_reload():
         return model_data.sd_model, False
 
     print('Loading Model: ' + str(model_data.forge_loading_parameters))
+    try:
+        from backend.torch_trace import event, trace_section
+    except Exception:
+        # tracing is optional
+        class _Null:
+            def __enter__(self):
+                return None
+            def __exit__(self, *a):
+                return False
+        def event(*a, **k):
+            return None
+        def trace_section(name):
+            return _Null()
 
     timer = Timer()
 
@@ -501,7 +514,9 @@ def forge_model_reload():
     dynamic_args['forge_unet_storage_dtype'] = model_data.forge_loading_parameters.get('unet_storage_dtype', None)
     dynamic_args['embedding_dir'] = cmd_opts.embeddings_dir
     dynamic_args['emphasis_name'] = opts.emphasis
-    sd_model = forge_loader(state_dict, additional_state_dicts=additional_state_dicts)
+    with trace_section("forge_loader"):
+        event("split_state_dict_done", keys=len(state_dict.keys()), add=len(additional_state_dicts or []))
+        sd_model = forge_loader(state_dict, additional_state_dicts=additional_state_dicts)
     timer.record("forge model load")
 
     sd_model.extra_generation_params = {}

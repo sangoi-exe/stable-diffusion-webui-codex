@@ -3,6 +3,7 @@ import shutil
 import json
 import torch
 import logging
+from . import torch_trace as _trace
 import importlib
 
 import backend.args
@@ -109,10 +110,12 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
     if lib_name in ['transformers', 'diffusers']:
         if component_name in ['scheduler']:
             cls = getattr(importlib.import_module(lib_name), cls_name)
+            _trace.event("component_from_pretrained", name=component_name, lib=lib_name, cls=cls_name)
             return cls.from_pretrained(os.path.join(repo_path, component_name))
         if component_name.startswith('tokenizer'):
             cls = getattr(importlib.import_module(lib_name), cls_name)
             # Align with master: delegate to transformers/diffusers to resolve local or Hub
+            _trace.event("component_from_pretrained", name=component_name, lib=lib_name, cls=cls_name)
             comp = cls.from_pretrained(os.path.join(repo_path, component_name))
             if hasattr(comp, "_eventual_warn_about_too_long_sequence"):
                 comp._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None
@@ -223,12 +226,25 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                     model = model_loader(unet_config)
             else:
                 initial_device = memory_management.unet_inital_load_device(parameters=state_dict_parameters, dtype=storage_dtype)
-                need_manual_cast = storage_dtype != computation_dtype
-                to_args = dict(device=initial_device, dtype=storage_dtype)
+                # Enforce: never bf16/fp16 on CPU at construction time
+                construct_dtype = storage_dtype
+                construct_device = initial_device
+                if memory_management.is_device_cpu(initial_device):
+                    if construct_dtype in (torch.bfloat16, torch.float16):
+                        _trace.event("construct_cpu_cast_override", dtype=str(construct_dtype), to="torch.float32")
+                        construct_dtype = torch.float32
+                else:
+                    # If GPU available and dtype is low precision, prefer constructing directly on GPU
+                    if construct_dtype in (torch.bfloat16, torch.float16):
+                        construct_device = load_device
+                need_manual_cast = construct_dtype != computation_dtype
+                to_args = dict(device=construct_device, dtype=construct_dtype)
 
+                _trace.event("unet_construct", device=str(construct_device), storage=str(construct_dtype), compute=str(computation_dtype))
                 with using_forge_operations(**to_args, manual_cast_enabled=need_manual_cast):
                     model = model_loader(unet_config).to(**to_args)
 
+            _trace.event("load_state_dict", module="unet", tensors=len(state_dict))
             load_state_dict(model, state_dict)
 
             if hasattr(model, '_internal_dict'):

@@ -44,6 +44,7 @@ if defined CODEX_LOG_LEVEL (
 if defined CODEX_UNET_DTYPE echo [log] UNet dtype=%CODEX_UNET_DTYPE%
 if defined CODEX_VAE_DTYPE  echo [log] VAE dtype=%CODEX_VAE_DTYPE%
 if defined CODEX_VAE_IN_CPU echo [log] VAE on CPU=%CODEX_VAE_IN_CPU%
+if defined CODEX_TRACE_TORCH echo [log] TRACE_TORCH=%CODEX_TRACE_TORCH% (limit=%CODEX_TRACE_LIMIT%)
 
 REM 1) Check Python availability
 echo [1/4] Checking Python...

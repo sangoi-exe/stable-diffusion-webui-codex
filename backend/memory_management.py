@@ -836,9 +836,9 @@ def text_encoder_dtype(device=None):
     elif args.clip_in_fp32:
         return torch.float32
 
+    # Do not use bf16/fp16 on CPU; prefer fp32 for stability
     if is_device_cpu(device):
-        return torch.float16
-
+        return torch.float32
     return torch.float16
 
 

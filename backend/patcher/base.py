@@ -10,6 +10,7 @@ import inspect
 
 from backend import memory_management, utils
 from backend.patcher.lora import LoraLoader
+from backend import torch_trace as _trace
 
 
 def set_model_options_patch_replace(model_options, patch, name, block_name, number, transformer_index=None):
@@ -214,6 +215,7 @@ class ModelPatcher:
                 patch_list = patches[name]
                 for i in range(len(patch_list)):
                     if hasattr(patch_list[i], "to"):
+                        _trace.event("patch_to", name=name, idx=i, device=str(device))
                         patch_list[i] = patch_list[i].to(device)
         if "patches_replace" in to:
             patches = to["patches_replace"]
@@ -221,10 +223,12 @@ class ModelPatcher:
                 patch_list = patches[name]
                 for k in patch_list:
                     if hasattr(patch_list[k], "to"):
+                        _trace.event("patch_replace_to", name=name, key=str(k), device=str(device))
                         patch_list[k] = patch_list[k].to(device)
         if "model_function_wrapper" in self.model_options:
             wrap_func = self.model_options["model_function_wrapper"]
             if hasattr(wrap_func, "to"):
+                _trace.event("wrapper_to", device=str(device))
                 self.model_options["model_function_wrapper"] = wrap_func.to(device)
 
     def model_dtype(self):

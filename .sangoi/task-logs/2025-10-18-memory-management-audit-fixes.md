@@ -18,3 +18,7 @@ Changes
 Expected Impact
 - Clearer unload behavior; fewer confusing messages; robust dtype/device checks; avoids potential errors when querying device properties; more actionable logs for VRAM.
 
+Follow-ups (stack trace / construction safety)
+- Added `backend/torch_trace.py` with env-controlled tracing (CODEX_TRACE_TORCH=1, CODEX_TRACE_LIMIT).
+- Instrumented `modules/sd_models.forge_model_reload()` and `backend/loader.py` to emit section/events and component build details.
+- Enforced: no bf16/fp16 on CPU during UNet construction; override to fp32 or construct on GPU, then manual-cast during compute.
