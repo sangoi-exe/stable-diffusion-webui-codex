@@ -93,6 +93,47 @@ class FilterPrefixView(MutableMapping):
         return c
 
 
+class CastOnGetView(MutableMapping):
+    """Mapping view that casts tensor values on CPU to a target dtype on access.
+
+    Useful to avoid fragile CPU bf16/fp16 ops during preprocessing. Only casts
+    floating tensors matching `from_dtypes` and `device_type`.
+    """
+
+    def __init__(self, base: MutableMapping, *, device_type: str = "cpu", from_dtypes=None, to_dtype=None):
+        import torch as _torch
+        self._base = base
+        self._device_type = device_type
+        self._from = tuple(from_dtypes) if from_dtypes is not None else (_torch.bfloat16, _torch.float16)
+        self._to = to_dtype or _torch.float32
+
+    def __getitem__(self, k: str):
+        import torch as _torch
+        v = self._base[k]
+        if isinstance(v, _torch.Tensor):
+            try:
+                if v.device.type == self._device_type and v.dtype in self._from:
+                    return v.to(self._to)
+            except Exception:
+                return v
+        return v
+
+    def __setitem__(self, k: str, v):
+        self._base[k] = v
+
+    def __delitem__(self, k: str):
+        del self._base[k]
+
+    def __iter__(self):
+        return iter(self._base.keys())
+
+    def __len__(self) -> int:
+        try:
+            return len(self._base.keys())
+        except Exception:
+            return sum(1 for _ in self.__iter__())
+
+
 def read_arbitrary_config(directory):
     config_path = os.path.join(directory, 'config.json')
 

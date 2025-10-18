@@ -14,7 +14,7 @@ from transformers import modeling_utils
 
 from backend import memory_management
 from backend.args import args
-from backend.utils import read_arbitrary_config, load_torch_file, beautiful_print_gguf_state_dict_statics, KeyPrefixView
+from backend.utils import read_arbitrary_config, load_torch_file, beautiful_print_gguf_state_dict_statics, KeyPrefixView, CastOnGetView
 from backend.state_dict import try_filter_state_dict, load_state_dict
 from backend.operations import using_forge_operations
 from backend.nn.vae import IntegratedAutoencoderKL
@@ -580,7 +580,16 @@ def split_state_dict(sd, additional_state_dicts: list = None):
     _trace.event("build_unet_vae_done")
 
     _trace.event("process_clip_start")
-    sd = guess.process_clip_state_dict(sd)
+    # Wrap with cast-on-get to avoid bf16/fp16 CPU ops during preprocessing
+    try:
+        sd_cast = CastOnGetView(sd)
+        _trace.event("process_clip_cast_view")
+        sd2 = guess.process_clip_state_dict(sd_cast)
+        if sd2 is not None:
+            sd = sd2
+    except Exception:
+        # Fallback to original mapping if the view misbehaves
+        sd = guess.process_clip_state_dict(sd)
     _trace.event("process_clip_done")
 
     _trace.event("filter_clip_start")
