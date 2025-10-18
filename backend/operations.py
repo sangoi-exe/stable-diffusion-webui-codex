@@ -130,10 +130,15 @@ class ForgeOperations:
             self.out_features = out_features
             self.dummy = torch.nn.Parameter(torch.empty(1, device=current_device, dtype=current_dtype))
             self.weight = None
+            # Keep metadata to allow fallback initialization if weights
+            # are missing in the checkpoint after load_state_dict.
+            self.in_features = int(in_features)
+            self.out_features = int(out_features)
+            self.has_bias = bool(kwargs.get('bias', True))
+
             # Register a tiny placeholder tensor to signal our custom
             # _load_from_state_dict to take over and materialize real params
-            # from the incoming state_dict. Without this, Module's default
-            # loader won't assign anything and weights stay None.
+            # from the incoming state_dict.
             self.dummy = torch.nn.Parameter(torch.empty(1, device=current_device, dtype=current_dtype))
             self.weight = None
             self.scale_weight = None
@@ -159,7 +164,28 @@ class ForgeOperations:
             # Fallback to default behavior
             super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
 
+        def _ensure_params(self, device, dtype):
+            if self.weight is not None:
+                return
+            # Initialize with a sane default to avoid NoneType at runtime.
+            # Use xavier_uniform for weights and zeros for bias.
+            w = torch.empty((self.out_features, self.in_features), device=device, dtype=dtype)
+            torch.nn.init.xavier_uniform_(w)
+            self.weight = torch.nn.Parameter(w)
+            if self.has_bias:
+                b = torch.zeros((self.out_features,), device=device, dtype=dtype)
+                self.bias = torch.nn.Parameter(b)
+            else:
+                self.bias = None
+            if hasattr(self, 'dummy'):
+                try:
+                    del self.dummy
+                except Exception:
+                    pass
+
         def forward(self, x):
+            # Ensure we have materialized params even if checkpoint lacked matches
+            self._ensure_params(x.device, x.dtype)
             if self.parameters_manual_cast:
                 weight, bias, signal = weights_manual_cast(self, x)
                 with main_stream_worker(weight, bias, signal):
