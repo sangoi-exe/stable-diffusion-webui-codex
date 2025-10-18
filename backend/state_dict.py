@@ -105,3 +105,55 @@ def state_dict_prefix_replace(state_dict, replace_prefix, filter_keys=False):
             w = state_dict.pop(x[0])
             out[x[1]] = w
     return out
+
+
+def safe_load_state_dict(model, sd, *, log_name=None):
+    """Conservative loader: iterates model keys and copies tensors one by one.
+
+    Avoids materializing all tensors and reduces device/dtype edge cases.
+    Emits periodic trace events. Returns (missing, unexpected) like nn.Module.load_state_dict.
+    """
+    import torch
+    from collections.abc import Mapping
+    log_name = log_name or type(model).__name__
+
+    model_state = model.state_dict()
+    model_keys = list(model_state.keys())
+    sd_keys = list(sd.keys()) if isinstance(sd, Mapping) and hasattr(sd, 'keys') else []
+
+    missing = []
+    loaded = 0
+    for k in model_keys:
+        try:
+            t = sd[k]
+        except Exception:
+            missing.append(k)
+            continue
+        p = model_state.get(k)
+        if not isinstance(t, torch.Tensor) or p is None:
+            missing.append(k)
+            continue
+        try:
+            if t.device.type != 'cpu':
+                t_cpu = t.detach().to('cpu')
+            else:
+                t_cpu = t
+            t_cast = t_cpu.to(dtype=p.dtype)
+            p.copy_(t_cast.to(device=p.device))
+        except Exception:
+            _log.exception("safe_load_state_dict: failed key=%s", k)
+            missing.append(k)
+            continue
+        loaded += 1
+        if loaded % 200 == 0:
+            _trace.event("load_state_dict_progress", name=log_name, loaded=loaded)
+
+    unexpected = [k for k in sd_keys if k not in model_keys]
+    if missing:
+        print(f'{log_name} Missing: {missing}')
+        _log.debug("%s missing_count=%d", log_name, len(missing))
+    if unexpected:
+        print(f'{log_name} Unexpected: {unexpected}')
+        _log.debug("%s unexpected_count=%d", log_name, len(unexpected))
+    _trace.event("load_state_dict_done", name=log_name, missing=len(missing), unexpected=len(unexpected))
+    return missing, unexpected
