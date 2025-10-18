@@ -582,14 +582,23 @@ def create_ui():
                     # Find named override JSON (last element in our inputs)
                     named = None
                     for i, comp in enumerate(components):
-                        if isinstance(comp, gr.JSON):
-                            eid = str(getattr(comp, 'elem_id', ''))
-                            if not (eid.endswith('_named_override') or eid.endswith('_named_active')):
-                                continue
-                            cand = values[i] if i < len(values) else None
-                            if isinstance(cand, dict):
-                                named = cand
+                        eid = str(getattr(comp, 'elem_id', ''))
+                        if not (eid.endswith('_named_override') or eid.endswith('_named_active')):
+                            continue
+                        cand = values[i] if i < len(values) else None
+                        # Accept either dict (from gr.JSON) or JSON string (from hidden Textbox)
+                        if isinstance(cand, dict):
+                            named = cand
                             break
+                        if isinstance(cand, str):
+                            try:
+                                import json as _json
+                                loaded = _json.loads(cand)
+                                if isinstance(loaded, dict):
+                                    named = loaded
+                                    break
+                            except Exception:
+                                pass
 
                     strict = bool(isinstance(named, dict) and named.get('__strict_version'))
                     # Do not attempt to preserve legacy positional values when not strict.
