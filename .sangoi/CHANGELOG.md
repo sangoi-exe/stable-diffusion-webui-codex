@@ -47,6 +47,8 @@
 
 - UI: Filter sampler/scheduler choices per engine using backend policy. Image sampler (ScriptSampler) and video tabs (Txt2Vid/Img2Vid) now update when `Engine` changes. Introduced JS components namespace (`codex.components.*`) for modular front-end.
 
+- UI: Added component skeletons for Prompt/Hires/Canvas under `javascript/codex.components.*` and wired injection allowlist. These are helpers only (no behavior change) and will host future UI logic; strict JSON and server contracts remain the source of truth.
+
 - Deps: Add `colorama==0.4.6` and `rich==13.9.2` to enable colored console/logging; logging setup already uses Rich/Colorama with tqdm-aware handler and safe fallback.
 
 - Engine(wan_ti2v_5b): Loader attempts Diffusers `WanPipeline`/`AutoencoderKLWan` (local-only by default). Engine wired to call pipeline for txt2vid/img2vid, returning frames + `info` JSON, with prepare/run progress and VRAM metrics. If pipeline is unavailable or weights missing, raises explicit `EngineExecutionError` with upgrade/instructions.
