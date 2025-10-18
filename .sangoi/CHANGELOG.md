@@ -53,6 +53,10 @@
 
 - DX: Add `run-webui.bat` (Windows launcher) — checks Python 3.10, creates/activates `.venv`, installs requirements, verifies core libs, warns on missing ffmpeg, and launches `webui.py`.
 
+- DX(Windows): Split installer and launcher
+  - New `install-webui.bat`: creates/activates venv, upgrades pip toolchain, installs Torch CUDA 12.8 pinned (torch==2.7.1, torchvision==0.22.1, torchaudio==2.7.1) and project requirements, then verifies core libs.
+  - `run-webui.bat` is now verify-only: ativa venv existente e verifica dependências; em caso de falha, aborta com instruções para rodar `install-webui.bat`.
+
 - Feat(Logging): centralized logging + SDXL debug instrumentation
   - New: `backend/logging_utils.py` configures logging once (default DEBUG). Level via `CODEX_LOG_LEVEL` (or `SDWEBUI_LOG_LEVEL`/`WEBUI_LOG_LEVEL`). Optional `CODEX_LOG_FILE` adds file handler.
   - SDXL: Detailed DEBUG logs in `backend/engines/sdxl/engine.py` (request summary, device/dtypes, lifecycle around `process_images`).
