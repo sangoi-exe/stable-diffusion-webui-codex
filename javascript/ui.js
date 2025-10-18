@@ -324,6 +324,7 @@ function submitWithProgress(args, galleryContainerId, galleryId, strictBuilder) 
 
     let res = normalizeSubmitArgs(tabname, create_submit_args(args));
     res[0] = id;
+    let strictPayloadString = null;
     if (typeof strictBuilder === 'function' && Array.isArray(res) && res.length > 0) {
         /** @type {Record<string, unknown> | null | undefined} */
         let strictPayload;
@@ -339,35 +340,52 @@ function submitWithProgress(args, galleryContainerId, galleryId, strictBuilder) 
         }
         if (strictPayload && typeof strictPayload === 'object') {
             try {
-                // Prefer string to maximize compatibility with Gradio JSON input transport
-                const asString = JSON.stringify(strictPayload);
-                res[res.length - 1] = asString;
-                try {
-                    const hiddenRoot = getAppElementById(`${tabname}_named_active`);
-                    if (hiddenRoot) {
-                        const field = hiddenRoot.querySelector('textarea, input');
-                        if (field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement) {
-                            field.value = asString;
-                            updateInput(field);
-                        }
-                    }
-                } catch (err) {
-                    console.warn('submitWithProgress(): failed to sync hidden strict textbox', err);
-                }
-            } catch {
-                res[res.length - 1] = strictPayload;
+                strictPayloadString = JSON.stringify(strictPayload);
+            } catch (err) {
+                console.warn('submitWithProgress(): JSON.stringify failed, sending object literal', err, strictPayload);
+                strictPayloadString = null;
             }
         } else {
             console.warn('submitWithProgress(): strict builder returned invalid payload', strictPayload);
+            try {
+                strictPayloadString = JSON.stringify({
+                    __strict_version: 1,
+                    __source: tabname,
+                    __builder_error: 'strict builder returned invalid payload',
+                });
+            } catch {
+                strictPayloadString = null;
+            }
+        }
+        if (strictPayloadString !== null) {
+            try {
+                const hiddenRoot = getAppElementById(`${tabname}_named_active`);
+                if (hiddenRoot) {
+                    const field = hiddenRoot.querySelector('textarea, input');
+                    if (field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement) {
+                        field.value = strictPayloadString;
+                        updateInput(field);
+                    }
+                }
+            } catch (err) {
+                console.warn('submitWithProgress(): failed to sync hidden strict textbox', err);
+            }
+        }
+        if (tabname !== 'txt2img' && Array.isArray(res) && res.length > 0 && strictPayloadString !== null) {
+            res[res.length - 1] = strictPayloadString;
         }
     }
-    // Sanitize positional scalars: for txt2img we don't need any; keep only id_task and last JSON slot
+    // Sanitize positional scalars: for txt2img we don't need any; keep only id_task and strict payload string
     try {
-        if (tabname === 'txt2img' && Array.isArray(res) && res.length > 2) {
-            const last = res.length - 1;
-            for (let i = 1; i < last; i += 1) {
-                res[i] = null;
-            }
+        if (tabname === 'txt2img' && Array.isArray(res) && res.length > 0) {
+            const idTask = res[0];
+            const payload = strictPayloadString !== null ? strictPayloadString : JSON.stringify({
+                __strict_version: 1,
+                __source: tabname,
+                __builder_error: 'strict payload unavailable',
+            });
+            res = [idTask, payload];
+            return res;
         }
     } catch (e) {
         console.warn('submitWithProgress(): sanitize failed', e);
