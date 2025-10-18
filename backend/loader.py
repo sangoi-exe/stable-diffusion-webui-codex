@@ -235,6 +235,7 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                     construct_device = load_device
                 else:
                     construct_device = memory_management.unet_inital_load_device(parameters=state_dict_parameters, dtype=storage_dtype)
+                initial_device = construct_device
                 construct_dtype = storage_dtype
                 if memory_management.is_device_cpu(construct_device) and construct_dtype in (torch.bfloat16, torch.float16):
                     _trace.event("construct_cpu_cast_override", dtype=str(construct_dtype), to="torch.float32")
