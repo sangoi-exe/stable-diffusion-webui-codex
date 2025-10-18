@@ -17,5 +17,8 @@ Validation
 - Grep confirms `_js` hooks use only `submit_named` / `submit_img2img_named`.
 - JS exports no longer expose legacy names on `window`.
 
+2025-10-18 (appendix)
+- Added strict-only legacy aliases in JS so any lingering `_js="submit"` or `_js="submit_img2img"` calls route to named strict submitters. This preserves strict JSON requirement while making older hooks harmless.
+
 Notes
 - No fallback introduced. Errors are explicit, aiding extension authors to fix input ordering.
