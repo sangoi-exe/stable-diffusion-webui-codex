@@ -1,0 +1,9 @@
+schema_version: 1
+defaults:
+  steps: 12
+  fps: 24
+  num_frames: 16
+  sampler: Euler a
+  scheduler: Automatic
+  guidance_scale: 6.5
+  motion_strength: 0.5
