@@ -27,6 +27,11 @@ from backend.core.presets import apply_preset_to_request
 from ...base import DiffusionEngine
 from .loader import WanLoader, WanComponents
 from .schedulers import apply_sampler_scheduler, allowed_samplers_for_engine
+import os
+import io
+import shutil
+import subprocess
+from datetime import datetime
 
 
 class WanTI2V5BEngine(DiffusionEngine):
@@ -84,6 +89,7 @@ class WanTI2V5BEngine(DiffusionEngine):
             )
 
             images = list(out.frames[0]) if hasattr(out, "frames") else []
+            video_meta = self._maybe_export_video(images, fps=int(getattr(request, "fps", 24) or 24))
             elapsed = time.perf_counter() - start
             vram = 0
             if torch is not None and torch.cuda.is_available():  # pragma: no cover
@@ -105,6 +111,7 @@ class WanTI2V5BEngine(DiffusionEngine):
                 "scheduler_in": outcome.scheduler_in,
                 "sampler_effective": outcome.sampler_effective,
                 "scheduler_effective": outcome.scheduler_effective,
+                "video": video_meta,
             }
             yield ResultEvent(payload={"images": images, "info": self._to_json(info)})
         except Exception as exc:  # noqa: BLE001
@@ -153,6 +160,7 @@ class WanTI2V5BEngine(DiffusionEngine):
             )
 
             images = list(out.frames[0]) if hasattr(out, "frames") else []
+            video_meta = self._maybe_export_video(images, fps=int(getattr(request, "fps", 24) or 24))
             elapsed = time.perf_counter() - start
             vram = 0
             if torch is not None and torch.cuda.is_available():  # pragma: no cover
@@ -174,6 +182,7 @@ class WanTI2V5BEngine(DiffusionEngine):
                 "scheduler_in": outcome.scheduler_in,
                 "sampler_effective": outcome.sampler_effective,
                 "scheduler_effective": outcome.scheduler_effective,
+                "video": video_meta,
             }
             yield ResultEvent(payload={"images": images, "info": self._to_json(info)})
         except Exception as exc:  # noqa: BLE001
@@ -223,3 +232,66 @@ class WanTI2V5BEngine(DiffusionEngine):
             return json.dumps(obj, ensure_ascii=False)
         except Exception:
             return "{}"
+
+    def _maybe_export_video(self, images: List[object], *, fps: int) -> dict:
+        """Optionally export frames to mp4/webm using ffmpeg. Controlled via env CODEX_EXPORT_VIDEO=1.
+
+        Returns metadata dict; does not raise if ffmpeg is missing or export disabled.
+        """
+        try:
+            if not images:
+                return {}
+            if os.environ.get("CODEX_EXPORT_VIDEO", "0") != "1":
+                return {}
+            if shutil.which("ffmpeg") is None:
+                self._logger.warning("ffmpeg not found; skipping video export")
+                return {"export": False, "reason": "ffmpeg_missing"}
+
+            root = os.path.abspath(os.path.join("artifacts", "videos"))
+            os.makedirs(root, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            workdir = os.path.join(root, f"wan_{stamp}")
+            os.makedirs(workdir, exist_ok=True)
+
+            # Write numbered PNG frames
+            for i, img in enumerate(images):
+                try:
+                    fp = os.path.join(workdir, f"{i:05d}.png")
+                    img.save(fp, format="PNG")  # type: ignore[attr-defined]
+                except Exception:
+                    # If non-PIL, skip export silently
+                    return {"export": False, "reason": "non_pil_frames"}
+
+            mp4_path = os.path.join(workdir, "out.mp4")
+            webm_path = os.path.join(workdir, "out.webm")
+
+            # Encode mp4
+            cmd_mp4 = [
+                "ffmpeg", "-y",
+                "-framerate", str(max(1, int(fps))),
+                "-i", os.path.join(workdir, "%05d.png"),
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                mp4_path,
+            ]
+            subprocess.run(cmd_mp4, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            # Encode webm (vp9)
+            cmd_webm = [
+                "ffmpeg", "-y",
+                "-framerate", str(max(1, int(fps))),
+                "-i", os.path.join(workdir, "%05d.png"),
+                "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "30",
+                webm_path,
+            ]
+            subprocess.run(cmd_webm, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            return {
+                "export": True,
+                "dir": workdir,
+                "mp4": mp4_path,
+                "webm": webm_path,
+                "fps": int(fps),
+            }
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("video export failed: %s", exc)
+            return {"export": False, "reason": "exception"}

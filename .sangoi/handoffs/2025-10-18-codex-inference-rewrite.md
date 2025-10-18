@@ -121,6 +121,15 @@ Sampler/Scheduler Mapping
   - `Automatic` → sem alterações
 - Comportamento: Avisos explícitos no log quando uma opção não for suportada; resposta inclui `sampler_in`, `scheduler_in`, `sampler_effective`, `scheduler_effective` no `info` JSON.
 
+Front Modularization (C+D)
+- JS components namespace `window.Codex.Components` com módulos: core (bus), sampler, prompt, hires, canvas.
+- ui.js permanece orquestrador; componentes expõem helpers read/write e keybinds (Ctrl+Enter gerar, Alt+Enter skip, Esc interrupt) idempotentes.
+- Política de sampler/scheduler vem do back (`backend/core/sampler_policy.py`); UI só reflete e aplica.
+
+Vídeo opcional (export)
+- Exportação opcional para mp4/webm via `ffmpeg` quando `CODEX_EXPORT_VIDEO=1` e ffmpeg disponível. Diretório: `artifacts/videos/<run>/`.
+- `info` JSON inclui `video` com meta (caminhos, fps). Frames continuam retornados normalmente.
+
 MVP Deliverables (TI2V‑5B)
 
 - Loader + forward usando Diffusers `WanPipeline` (local-only) com presets e progress events.

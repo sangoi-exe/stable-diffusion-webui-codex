@@ -55,4 +55,6 @@
 
 - Engine(wan_ti2v_5b): Added sampler/scheduler mapping and per-engine limits. Allowed samplers: Euler a, Euler, DDIM, DPM++ 2M, DPM++ 2M SDE, PLMS. Scheduler flags: Karras → `use_karras_sigmas`, Simple → `timestep_spacing='trailing'`, Exponential → `use_exponential_sigmas`. Warnings emitted when unsupported.
 
+- Engine(wan_ti2v_5b): Optional video export to mp4/webm via ffmpeg when `CODEX_EXPORT_VIDEO=1`. Paths under `artifacts/videos/`. Payload still returns frames; `info.video` carries metadata.
+
 - Docs: Updated handoff `.sangoi/handoffs/2025-10-18-codex-inference-rewrite.md` with 6 solution paths for WAN 2.2 integration, selected Path A (Native PyTorch) as intended approach, and added MVP/validation/risks sections. Validation is UI-first; smoke script now optional. No user-facing changes yet.
