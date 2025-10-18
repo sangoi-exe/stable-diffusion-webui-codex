@@ -16,14 +16,15 @@ echo.
 echo [Codex] Stable Diffusion WebUI launcher (Windows)
 echo ---------------------------------------------------
 
-REM 1) Python availability
-echo [1/7] Checking Python in PATH...
-where %PYTHON% >NUL 2>&1
-if errorlevel 1 (
-  echo [ERROR] Python not found in PATH. Install Python 3.10 (64-bit) and re-run.
-  exit /b 1
-)
+REM 1) Python availability (use upstream-safe check)
+echo [1/7] Checking Python...
+mkdir tmp 2>NUL
+%PYTHON% -c "" >tmp\stdout.txt 2>tmp\stderr.txt
+if %ERRORLEVEL% == 0 goto :pyver
+echo Couldn't launch python
+goto :show_stdout_stderr
 
+:pyver
 REM 2) Python version (expect 3.10.x)
 set "_TMPVER=%TEMP%\codex_pyver_%RANDOM%.txt"
 %PYTHON% -c "import sys;print(str(sys.version_info.major)+'.'+str(sys.version_info.minor))" > "%_TMPVER%" 2>NUL
@@ -112,3 +113,21 @@ echo [7/7] Starting WebUI ...
 %PYTHON% launch.py %*
 if exist tmp\restart goto :venv_done
 exit /b %ERRORLEVEL%
+
+:show_stdout_stderr
+echo.
+echo exit code: %errorlevel%
+for /f %%i in ("tmp\stdout.txt") do set size=%%~zi
+if %size% equ 0 goto :show_stderr
+echo.
+echo stdout:
+type tmp\stdout.txt
+
+:show_stderr
+for /f %%i in ("tmp\stderr.txt") do set size=%%~zi
+if %size% equ 0 goto :end
+echo.
+echo stderr:
+type tmp\stderr.txt
+
+:end
