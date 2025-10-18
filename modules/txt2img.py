@@ -56,6 +56,12 @@ def _as_list(payload: dict, key: str):
     raise ValueError(f"Field {key} must be list, got {type(v).__name__}")
 
 
+def _as_float_optional(payload: dict, key: str, default: float) -> float:
+    if key not in payload:
+        return default
+    return _as_float(payload, key)
+
+
 def _txt2img_from_payload(id_task: str, request: gr.Request, payload: dict, *script_args):
     # Accept JSON string payload from hidden textbox and parse
     if isinstance(payload, str):
@@ -71,7 +77,7 @@ def _txt2img_from_payload(id_task: str, request: gr.Request, payload: dict, *scr
     required_keys = [
         'txt2img_prompt', 'txt2img_neg_prompt', 'txt2img_styles',
         'txt2img_batch_count', 'txt2img_batch_size',
-        'txt2img_cfg_scale', 'txt2img_distilled_cfg_scale',
+        'txt2img_cfg_scale',
         'txt2img_height', 'txt2img_width', 'txt2img_hr_enable',
         'txt2img_steps', 'txt2img_sampling', 'txt2img_scheduler', 'txt2img_seed',
     ]
@@ -86,7 +92,7 @@ def _txt2img_from_payload(id_task: str, request: gr.Request, payload: dict, *scr
     n_iter = _as_int(payload, 'txt2img_batch_count')
     batch_size = _as_int(payload, 'txt2img_batch_size')
     cfg_scale = _as_float(payload, 'txt2img_cfg_scale')
-    distilled_cfg_scale = _as_float(payload, 'txt2img_distilled_cfg_scale')
+    distilled_cfg_scale = _as_float_optional(payload, 'txt2img_distilled_cfg_scale', 3.5)
     height = _as_int(payload, 'txt2img_height')
     width = _as_int(payload, 'txt2img_width')
     enable_hr = _as_bool(payload, 'txt2img_hr_enable')
