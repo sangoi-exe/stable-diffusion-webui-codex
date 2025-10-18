@@ -746,10 +746,10 @@ def dtype_size(dtype):
 
 
 def unet_offload_device():
-    if vram_state == VRAMState.HIGH_VRAM:
+    policy = getattr(args, 'swap_policy', 'cpu')
+    if policy == 'never':
         return get_torch_device()
-    else:
-        return torch.device("cpu")
+    return torch.device("cpu")
 
 
 def unet_inital_load_device(parameters, dtype):
@@ -808,10 +808,10 @@ def get_computation_dtype(inference_device, parameters=0, supported_dtypes=[torc
 
 
 def text_encoder_offload_device():
-    if args.always_gpu:
+    policy = getattr(args, 'swap_policy', 'cpu')
+    if policy == 'never':
         return get_torch_device()
-    else:
-        return torch.device("cpu")
+    return torch.device("cpu")
 
 
 def text_encoder_device():
@@ -856,10 +856,10 @@ def vae_device():
 
 
 def vae_offload_device():
-    if args.always_gpu:
+    policy = getattr(args, 'swap_policy', 'cpu')
+    if policy == 'never':
         return get_torch_device()
-    else:
-        return torch.device("cpu")
+    return torch.device("cpu")
 
 
 def vae_dtype(device=None, allowed_dtypes=[]):

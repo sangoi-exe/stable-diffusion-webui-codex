@@ -81,3 +81,8 @@
 - Engine(wan_ti2v_5b): Optional video export to mp4/webm via ffmpeg when `CODEX_EXPORT_VIDEO=1`. Paths under `artifacts/videos/`. Payload still returns frames; `info.video` carries metadata.
 
 - Docs: Updated handoff `.sangoi/handoffs/2025-10-18-codex-inference-rewrite.md` with 6 solution paths for WAN 2.2 integration, selected Path A (Native PyTorch) as intended approach, and added MVP/validation/risks sections. Validation is UI-first; smoke script now optional. No user-facing changes yet.
+- Feat(Policy): GPU-first load + explicit swap policy/method
+  - Args/env: `--swap-policy {never,cpu,shared}` (env `CODEX_SWAP_POLICY`), `--swap-method {blocked,async}` (env `CODEX_SWAP_METHOD`), `--gpu-prefer-construct` (env `CODEX_GPU_PREFER_CONSTRUCT`).
+  - Loader: constrói UNet preferencialmente no GPU; em OOM, fallback condicionado à policy (never aborta; cpu/shared permite CPU).
+  - Memory: offload devices respeitam policy (never => GPU; cpu/shared => CPU). Streams controladas por `swap-method` (async tenta CUDA streams até no Windows; fallback se falhar).
+  - Windows launcher: bloco inline com CODEX_* para policy e método; logs de policy no boot.

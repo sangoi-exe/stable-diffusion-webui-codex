@@ -14,8 +14,8 @@ def stream_context():
 
 
 def get_current_stream():
-    # Avoid CUDA stream setup on unsupported platforms (Windows) or when disabled.
-    if platform.system() == "Windows" or not args.cuda_stream:
+    # Use swap-method policy: async -> attempt streams even on Windows.
+    if args.swap_method != "async":
         return None
     try:
         if torch.cuda.is_available():
@@ -37,8 +37,7 @@ def get_current_stream():
 
 
 def get_new_stream():
-    # Avoid CUDA stream setup on unsupported platforms (Windows) or when disabled.
-    if platform.system() == "Windows" or not args.cuda_stream:
+    if args.swap_method != "async":
         return None
     try:
         if torch.cuda.is_available():
@@ -63,6 +62,6 @@ def should_use_stream():
     return stream_activated and current_stream is not None and mover_stream is not None
 
 
-stream_activated = args.cuda_stream and platform.system() != "Windows"
+stream_activated = args.swap_method == "async"
 current_stream = get_current_stream()
 mover_stream = get_new_stream()

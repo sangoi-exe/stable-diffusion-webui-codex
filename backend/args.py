@@ -62,6 +62,14 @@ parser.add_argument("--disable-gpu-warning", action="store_true")
 # Online resolution for tokenizer assets (enabled by default). Use this flag to force strict offline mode.
 parser.add_argument("--disable-online-tokenizer", action="store_true")
 
+# Swap / device policy
+parser.add_argument("--swap-policy", choices=["never", "cpu", "shared"], default="cpu",
+                    help="Offload policy when VRAM is insufficient: never (abort), cpu (host), shared (pinned host)")
+parser.add_argument("--swap-method", choices=["blocked", "async"], default="blocked",
+                    help="Data transfer mode: blocked (no CUDA streams) or async (CUDA streams)")
+parser.add_argument("--gpu-prefer-construct", action="store_true",
+                    help="Prefer constructing models directly on GPU (fallback to policy on OOM)")
+
 args = parser.parse_known_args()[0]
 
 # Environment overrides (webui.settings.bat or process env)
@@ -126,6 +134,18 @@ _set_vae_dtype(_env.get("CODEX_VAE_DTYPE") or _env.get("WEBUI_VAE_DTYPE"))
 # Global all-fp32 override if user insists
 if _truthy(_env.get("CODEX_ALL_IN_FP32")):
     args.all_in_fp32 = True
+
+# Swap/device policy overrides via env
+_sp = (_env.get("CODEX_SWAP_POLICY") or _env.get("WEBUI_SWAP_POLICY") or "").lower()
+if _sp in ("never", "cpu", "shared"):
+    args.swap_policy = _sp
+
+_sm = (_env.get("CODEX_SWAP_METHOD") or _env.get("WEBUI_SWAP_METHOD") or "").lower()
+if _sm in ("blocked", "async"):
+    args.swap_method = _sm
+
+if _truthy(_env.get("CODEX_GPU_PREFER_CONSTRUCT")):
+    args.gpu_prefer_construct = True
 
 # Some dynamic args that may be changed by webui rather than cmd flags.
 dynamic_args = dict(

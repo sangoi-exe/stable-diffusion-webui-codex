@@ -14,6 +14,9 @@ set CODEX_VAE_IN_CPU=0
 set CODEX_ALL_IN_FP32=0
 set CODEX_TRACE_TORCH=1
 set CODEX_TRACE_LIMIT=1000
+set CODEX_SWAP_POLICY=never
+set CODEX_SWAP_METHOD=blocked
+set CODEX_GPU_PREFER_CONSTRUCT=1
 
 REM Note: You can still use an external 'webui.settings.bat' if you prefer.
 if exist webui.settings.bat (
@@ -46,6 +49,10 @@ if defined CODEX_LOG_LEVEL (
 if defined CODEX_UNET_DTYPE echo [log] UNet dtype=%CODEX_UNET_DTYPE%
 if defined CODEX_VAE_DTYPE  echo [log] VAE dtype=%CODEX_VAE_DTYPE%
 if defined CODEX_VAE_IN_CPU echo [log] VAE on CPU=%CODEX_VAE_IN_CPU%
+if defined CODEX_TRACE_TORCH echo [log] TRACE_TORCH=%CODEX_TRACE_TORCH% (limit=%CODEX_TRACE_LIMIT%)
+if defined CODEX_SWAP_POLICY echo [log] swap policy=%CODEX_SWAP_POLICY%
+if defined CODEX_SWAP_METHOD echo [log] swap method=%CODEX_SWAP_METHOD%
+if defined CODEX_GPU_PREFER_CONSTRUCT echo [log] prefer construct on GPU=%CODEX_GPU_PREFER_CONSTRUCT%
 
 REM 1) Check Python availability
 echo [1/4] Checking Python...

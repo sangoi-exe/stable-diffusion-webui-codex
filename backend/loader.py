@@ -225,24 +225,34 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                 with using_forge_operations(device=initial_device, dtype=computation_dtype, manual_cast_enabled=False, bnb_dtype=storage_dtype):
                     model = model_loader(unet_config)
             else:
-                initial_device = memory_management.unet_inital_load_device(parameters=state_dict_parameters, dtype=storage_dtype)
-                # Enforce: never bf16/fp16 on CPU at construction time
-                construct_dtype = storage_dtype
-                construct_device = initial_device
-                if memory_management.is_device_cpu(initial_device):
-                    if construct_dtype in (torch.bfloat16, torch.float16):
-                        _trace.event("construct_cpu_cast_override", dtype=str(construct_dtype), to="torch.float32")
-                        construct_dtype = torch.float32
+                # Prefer constructing on GPU (policy), fallback per swap policy
+                prefer_gpu = getattr(memory_management.args, 'gpu_prefer_construct', False)
+                if prefer_gpu:
+                    construct_device = load_device
                 else:
-                    # If GPU available and dtype is low precision, prefer constructing directly on GPU
-                    if construct_dtype in (torch.bfloat16, torch.float16):
-                        construct_device = load_device
+                    construct_device = memory_management.unet_inital_load_device(parameters=state_dict_parameters, dtype=storage_dtype)
+                construct_dtype = storage_dtype
+                if memory_management.is_device_cpu(construct_device) and construct_dtype in (torch.bfloat16, torch.float16):
+                    _trace.event("construct_cpu_cast_override", dtype=str(construct_dtype), to="torch.float32")
+                    construct_dtype = torch.float32
+
                 need_manual_cast = construct_dtype != computation_dtype
                 to_args = dict(device=construct_device, dtype=construct_dtype)
-
                 _trace.event("unet_construct", device=str(construct_device), storage=str(construct_dtype), compute=str(computation_dtype))
-                with using_forge_operations(**to_args, manual_cast_enabled=need_manual_cast):
-                    model = model_loader(unet_config).to(**to_args)
+                try:
+                    with using_forge_operations(**to_args, manual_cast_enabled=need_manual_cast):
+                        model = model_loader(unet_config).to(**to_args)
+                except memory_management.OOM_EXCEPTION as e:
+                    # Fallback if policy allows offload
+                    policy = getattr(memory_management.args, 'swap_policy', 'cpu')
+                    _trace.event("construct_oom", policy=policy)
+                    if policy == 'never':
+                        raise
+                    construct_device = torch.device('cpu')
+                    construct_dtype = torch.float32 if construct_dtype in (torch.bfloat16, torch.float16) else construct_dtype
+                    to_args = dict(device=construct_device, dtype=construct_dtype)
+                    with using_forge_operations(**to_args, manual_cast_enabled=True):
+                        model = model_loader(unet_config).to(**to_args)
 
             _trace.event("load_state_dict", module="unet", tensors=len(state_dict))
             load_state_dict(model, state_dict)
