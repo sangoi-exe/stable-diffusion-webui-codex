@@ -520,7 +520,7 @@ def create_ui():
             # Use hidden Textbox to carry strict JSON as a string for maximum transport compatibility.
             named_active_txt2img = gr.Textbox(value="", visible=False, elem_id="txt2img_named_active")
 
-            # Legacy-compatible positional inputs + strict JSON at the end
+            # Legacy-compatible positional inputs + strict JSON at the end (for non-Generate flows like upscale)
             txt2img_inputs = [
                 dummy_component,
                 toprow.prompt,
@@ -549,6 +549,12 @@ def create_ui():
                 hr_distilled_cfg,
                 override_settings,
             ] + [named_active_txt2img]
+
+            # Minimal submit inputs for Generate: id_task + strict JSON only
+            submit_txt2img_inputs = [
+                dummy_component,
+                named_active_txt2img,
+            ]
 
             txt2img_outputs = [
                 output_panel.gallery,
@@ -853,7 +859,7 @@ def create_ui():
 
             txt2img_args = dict(
                 fn=wrap_gradio_gpu_call(_txt2img_submit, extra_outputs=[None, '', '']),
-                inputs=txt2img_inputs,
+                inputs=submit_txt2img_inputs,
                 outputs=txt2img_outputs,
                 show_progress='hidden',
                 concurrency_limit=1,

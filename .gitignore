@@ -71,3 +71,6 @@ codex/reports/pyright/
 /.npm-cache/
 /.typecheck.out
 /.ts-out/
+/.puppeteer-cache
+/.pw-browsers
+/artifacts
