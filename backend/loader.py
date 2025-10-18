@@ -126,12 +126,22 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
 
             config = IntegratedAutoencoderKL.load_config(config_path)
 
-            with using_forge_operations(device=memory_management.cpu, dtype=memory_management.vae_dtype()):
+            # Prefer constructing VAE on GPU when policy allows
+            vae_dev = memory_management.vae_device()
+            vae_dtype = memory_management.vae_dtype(device=vae_dev)
+            _trace.event("vae_construct", device=str(vae_dev), dtype=str(vae_dtype))
+            with using_forge_operations(device=vae_dev, dtype=vae_dtype, manual_cast_enabled=True):
                 model = IntegratedAutoencoderKL.from_config(config)
 
-            if 'decoder.up_blocks.0.resnets.0.norm1.weight' in state_dict.keys(): #diffusers format
+            if 'decoder.up_blocks.0.resnets.0.norm1.weight' in state_dict.keys(): # diffusers format
                 state_dict = huggingface_guess.diffusers_convert.convert_vae_state_dict(state_dict)
-            load_state_dict(model, state_dict, ignore_start='loss.')
+
+            _trace.event("load_state_dict", module="vae", tensors=len(state_dict))
+            try:
+                from .state_dict import safe_load_state_dict as _safe_load
+                _safe_load(model, state_dict, log_name="VAE")
+            except Exception:
+                load_state_dict(model, state_dict, ignore_start='loss.', log_name="VAE")
             return model
         if component_name.startswith('text_encoder') and cls_name in ['CLIPTextModel', 'CLIPTextModelWithProjection']:
             from collections.abc import Mapping
