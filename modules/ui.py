@@ -708,15 +708,91 @@ def create_ui():
                         return modules.txt2img.txt2img_from_json(id_task, request, payload, *script_args)
                 except Exception:
                     pass
-                # Strict mode: reject legacy positional payloads with diagnostics
+                # Strict mode: reject legacy positional payloads with deep diagnostics
+                import inspect, datetime, json as _json
                 last = args[-1] if len(args) else None
+                # Search for any strict json elsewhere (diagnostics only; we still reject)
+                found_idx = -1
+                found_keys = None
+                for i, a in enumerate(args):
+                    try:
+                        cand = _json.loads(a) if isinstance(a, str) else a
+                        if isinstance(cand, dict) and cand.get('__strict_version') == 1:
+                            found_idx = i
+                            found_keys = list(cand.keys())[:16]
+                            break
+                    except Exception:
+                        pass
+                # Component metadata (expected last elem_id)
+                expected_last_eid = None
+                actual_last_eid = None
+                try:
+                    expected_last_eid = getattr(named_active_txt2img, 'elem_id', None)
+                    if isinstance(txt2img_inputs, (list, tuple)) and len(txt2img_inputs) > 0:
+                        actual_last_eid = getattr(txt2img_inputs[-1], 'elem_id', None)
+                except Exception:
+                    pass
+                # Tail signature of args (type + quick json/len info)
+                tail = []
+                try:
+                    start = max(0, len(args) - 6)
+                    for i in range(start, len(args)):
+                        v = args[i]
+                        sig = {
+                            'idx': i,
+                            'type': type(v).__name__,
+                        }
+                        if isinstance(v, str):
+                            sig['len'] = len(v)
+                            try:
+                                _ = _json.loads(v)
+                                sig['json_parse_ok'] = True
+                            except Exception as e:
+                                sig['json_parse_ok'] = False
+                                sig['json_error'] = str(e)[:120]
+                        elif isinstance(v, dict):
+                            sig['keys_sample'] = list(v.keys())[:16]
+                            sig['has_strict_version'] = (v.get('__strict_version') == 1)
+                        tail.append(sig)
+                except Exception:
+                    pass
+                # Request info
+                client = None
+                ua = None
+                try:
+                    if request is not None:
+                        client = getattr(getattr(request, 'client', None), 'host', None)
+                        ua = request.headers.get('user-agent')
+                except Exception:
+                    pass
+                # Code location
+                loc = None
+                try:
+                    frame = inspect.currentframe()
+                    if frame is not None:
+                        info = inspect.getframeinfo(frame)
+                        loc = f"{info.filename}:{info.lineno}"
+                except Exception:
+                    pass
                 detail = {
+                    'error_code': 'SDWUI_STRICT_JSON_MISSING',
+                    'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
                     'args_len': len(args),
                     'last_type': type(last).__name__,
                     'last_is_dict': isinstance(last, dict),
                     'last_keys': list(last.keys())[:8] if isinstance(last, dict) else None,
+                    'found_strict_json_elsewhere': (found_idx != -1),
+                    'found_strict_json_idx': found_idx,
+                    'found_strict_json_keys_sample': found_keys,
+                    'args_tail_signature': tail,
+                    'expected_last_elem_id': expected_last_eid,
+                    'actual_last_elem_id': actual_last_eid,
                     'hint_js': 'Front-end must call _js="submit_named" on Generate.',
                     'hint_slot': 'Hidden JSON slot (txt2img_named_active) must be last input.',
+                    'client_host': client,
+                    'user_agent': ua,
+                    'code_location': loc,
+                    'strict_mode_enforced_since': '2025-10-17',
                 }
                 raise ValueError(f"Invalid or missing __strict_version in payload; frontend must send strict JSON | details={detail}")
 
@@ -1132,14 +1208,83 @@ def create_ui():
                         return modules.img2img.img2img_from_json(id_task, request, payload, *tuple(script_seq))
                 except Exception:
                     pass
+                import inspect, datetime, json as _json
                 last = args[-1] if len(args) else None
+                # Search for strict JSON elsewhere (diagnostics only)
+                found_idx = -1
+                found_keys = None
+                for i, a in enumerate(args):
+                    try:
+                        cand = _json.loads(a) if isinstance(a, str) else a
+                        if isinstance(cand, dict) and cand.get('__strict_version') == 1:
+                            found_idx = i
+                            found_keys = list(cand.keys())[:16]
+                            break
+                    except Exception:
+                        pass
+                expected_last_eid = None
+                actual_last_eid = None
+                try:
+                    expected_last_eid = getattr(named_active_img2img, 'elem_id', None)
+                    if isinstance(submit_img2img_inputs, (list, tuple)) and len(submit_img2img_inputs) > 0:
+                        actual_last_eid = getattr(submit_img2img_inputs[-1], 'elem_id', None)
+                except Exception:
+                    pass
+                tail = []
+                try:
+                    start = max(0, len(args) - 6)
+                    for i in range(start, len(args)):
+                        v = args[i]
+                        sig = {'idx': i, 'type': type(v).__name__}
+                        if isinstance(v, str):
+                            sig['len'] = len(v)
+                            try:
+                                _ = _json.loads(v)
+                                sig['json_parse_ok'] = True
+                            except Exception as e:
+                                sig['json_parse_ok'] = False
+                                sig['json_error'] = str(e)[:120]
+                        elif isinstance(v, dict):
+                            sig['keys_sample'] = list(v.keys())[:16]
+                            sig['has_strict_version'] = (v.get('__strict_version') == 1)
+                        tail.append(sig)
+                except Exception:
+                    pass
+                client = None
+                ua = None
+                try:
+                    if request is not None:
+                        client = getattr(getattr(request, 'client', None), 'host', None)
+                        ua = request.headers.get('user-agent')
+                except Exception:
+                    pass
+                loc = None
+                try:
+                    frame = inspect.currentframe()
+                    if frame is not None:
+                        info = inspect.getframeinfo(frame)
+                        loc = f"{info.filename}:{info.lineno}"
+                except Exception:
+                    pass
                 detail = {
+                    'error_code': 'SDWUI_STRICT_JSON_MISSING',
+                    'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
                     'args_len': len(args),
                     'last_type': type(last).__name__,
                     'last_is_dict': isinstance(last, dict),
                     'last_keys': list(last.keys())[:8] if isinstance(last, dict) else None,
+                    'found_strict_json_elsewhere': (found_idx != -1),
+                    'found_strict_json_idx': found_idx,
+                    'found_strict_json_keys_sample': found_keys,
+                    'args_tail_signature': tail,
+                    'expected_last_elem_id': expected_last_eid,
+                    'actual_last_elem_id': actual_last_eid,
                     'hint_js': 'Front-end must call _js="submit_img2img_named" on Generate.',
                     'hint_slot': 'Hidden JSON slot (img2img_named_active) must be last input.',
+                    'client_host': client,
+                    'user_agent': ua,
+                    'code_location': loc,
+                    'strict_mode_enforced_since': '2025-10-17',
                 }
                 raise ValueError(f"Invalid or missing __strict_version in payload; frontend must send strict JSON | details={detail}")
 

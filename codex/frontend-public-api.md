@@ -23,8 +23,8 @@ Core helpers (defined in first‑party JS)
 - localSet(key: string, value: string), localGet(key: string, fallback?: string|null): string|null, localRemove(key: string): void
 
 Common UI hooks (globals on window)
-- submit(...): unknown[]
-- submit_img2img(...): unknown[]
+- submit_named(...): unknown[]
+- submit_img2img_named(...): unknown[]
 - submit_txt2img_upscale(...): unknown[]
 - submit_extras(...): unknown[]
 - restoreProgressTxt2img(): string | null
@@ -44,6 +44,7 @@ Strict Submit JSON (Generate flows)
 - Servidor: ignora escalares posicionais quando `__strict_version==1` está presente; apenas o JSON é fonte‑de‑verdade.
 - Requisito de ordem: o JSON estrito DEVE ser o último input enviado no array; o servidor não escaneia mais outras posições.
 - Erros são “fail‑fast”: campos ausentes ou tipo errado levantam `ValueError` com mensagem clara; sliders fora de faixa levantam `gradio.exceptions.Error` enriquecida com label/elem_id e bounds.
+ - JS legados: `submit()` e `submit_img2img()` foram removidos. Use sempre `submit_named()` e `submit_img2img_named()`.
 
 Extensions page hooks
 - extensions_apply(disableList: unknown, updateList: unknown, disableAll: boolean): [string, string, boolean]

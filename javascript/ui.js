@@ -561,33 +561,13 @@ function submit_named() {
 }
 
 function submit_txt2img_upscale() {
-    const res = submit(...arguments);
+    // Use strict-named path; legacy `submit()` was removed.
+    const res = submit_named(...arguments);
     res[2] = selected_gallery_index();
     return res;
 }
 
-function submit_img2img() {
-    /** @type {StrictBuilder} */
-    const builder = (submitArgs) => {
-        try {
-            const strict = buildNamedImg2img(submitArgs);
-            if (strict && typeof strict === 'object') {
-                return strict;
-            }
-            console.warn('submit_img2img(): builder returned invalid payload', strict);
-        } catch (error) {
-            console.warn('submit_img2img(): builder failed, sending minimal strict JSON for diagnostics', error);
-            return { __strict_version: 1, __source: 'img2img', __builder_error: formatErrorMessage(error) };
-        }
-        return { __strict_version: 1, __source: 'img2img', __builder_error: 'builder returned non-object' };
-    };
-    return submitWithProgress(
-        arguments,
-        'img2img_gallery_container',
-        'img2img_gallery',
-        builder
-    );
-}
+// Removed legacy submit_img2img(); use submit_img2img_named.
 
 /** @param {IArguments} _args */
 function buildNamedImg2img(_args) {
@@ -714,12 +694,11 @@ function restoreProgressImg2img() {
     return restoreProgress('img2img');
 }
 
-uiWindow.submit = submit;
+// Export only strict-named submitters
 uiWindow.submit_txt2img_upscale = submit_txt2img_upscale;
 uiWindow.submit_named = submit_named;
 uiWindow.restoreProgressTxt2img = restoreProgressTxt2img;
 uiWindow.restoreProgressImg2img = restoreProgressImg2img;
-uiWindow.submit_img2img = submit_img2img;
 uiWindow.submit_img2img_named = submit_img2img_named;
 
 /**
@@ -744,6 +723,28 @@ function setupResolutionPasting(tabname) {
         });
     });
 }
+
+// ---- Self-checks for strict submit wiring ----
+onUiLoaded(() => {
+    try {
+        const hasTxt = !!getAppElementById('txt2img_named_active');
+        const hasImg = !!getAppElementById('img2img_named_active');
+        const hasNamed = (typeof uiWindow.submit_named === 'function');
+        const hasImgNamed = (typeof uiWindow.submit_img2img_named === 'function');
+        if (!hasTxt || !hasImg || !hasNamed || !hasImgNamed) {
+            console.warn('[StrictSubmitCheck] Missing pieces', {
+                txt2img_named_active_present: hasTxt,
+                img2img_named_active_present: hasImg,
+                submit_named_exported: hasNamed,
+                submit_img2img_named_exported: hasImgNamed,
+            });
+        } else {
+            console.info('[StrictSubmitCheck] OK: strict submit handlers and hidden JSON slots detected.');
+        }
+    } catch (e) {
+        console.warn('[StrictSubmitCheck] Failed to run startup checks', e);
+    }
+});
 
 onUiLoaded(() => {
     showRestoreProgressButton('txt2img', Boolean(restoreProgressTxt2img()));
