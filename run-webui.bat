@@ -7,11 +7,12 @@ REM ----------------------------------------------------
 REM User configuration (edit lines below as needed)
 REM Leave commented to keep defaults/heuristics
 REM ----------------------------------------------------
-REM set CODEX_LOG_LEVEL=DEBUG
-REM set CODEX_UNET_DTYPE=bf16    REM options: bf16|fp16|fp32|fp8_e4m3fn|fp8_e5m2
-REM set CODEX_VAE_DTYPE=bf16     REM options: bf16|fp16|fp32
-REM set CODEX_VAE_IN_CPU=0       REM 1 to force VAE on CPU
-REM set CODEX_ALL_IN_FP32=0      REM 1 to force all ops in fp32
+set CODEX_LOG_LEVEL=DEBUG
+set CODEX_UNET_DTYPE=bf16
+set CODEX_VAE_DTYPE=fp32
+set CODEX_VAE_IN_CPU=0
+set CODEX_ALL_IN_FP32=0
+set CODEX_TRACE_TORCH=1
 
 REM Note: You can still use an external 'webui.settings.bat' if you prefer.
 if exist webui.settings.bat (
@@ -44,7 +45,6 @@ if defined CODEX_LOG_LEVEL (
 if defined CODEX_UNET_DTYPE echo [log] UNet dtype=%CODEX_UNET_DTYPE%
 if defined CODEX_VAE_DTYPE  echo [log] VAE dtype=%CODEX_VAE_DTYPE%
 if defined CODEX_VAE_IN_CPU echo [log] VAE on CPU=%CODEX_VAE_IN_CPU%
-if defined CODEX_TRACE_TORCH echo [log] TRACE_TORCH=%CODEX_TRACE_TORCH% (limit=%CODEX_TRACE_LIMIT%)
 
 REM 1) Check Python availability
 echo [1/4] Checking Python...
