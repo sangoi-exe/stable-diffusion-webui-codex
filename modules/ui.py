@@ -774,6 +774,23 @@ def create_ui():
                         loc = f"{info.filename}:{info.lineno}"
                 except Exception:
                     pass
+                # Likely root cause heuristics + component tail mapping
+                likely = None
+                if expected_last_eid == actual_last_eid and not isinstance(last, dict):
+                    likely = 'Hidden JSON slot present but empty; front-end did not attach strict JSON (submit_named not bound or builder not executed; cache or extension interference).'
+                comp_tail = []
+                try:
+                    src = list(txt2img_inputs) if isinstance(txt2img_inputs, (list, tuple)) else []
+                    start = max(0, len(src) - 6)
+                    for i in range(start, len(src)):
+                        c = src[i]
+                        comp_tail.append({
+                            'idx': i,
+                            'elem_id': getattr(c, 'elem_id', None),
+                            'comp_type': type(c).__name__,
+                        })
+                except Exception:
+                    pass
                 detail = {
                     'error_code': 'SDWUI_STRICT_JSON_MISSING',
                     'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
@@ -792,6 +809,9 @@ def create_ui():
                     'client_host': client,
                     'user_agent': ua,
                     'code_location': loc,
+                    'component_tail': comp_tail,
+                    'likely_root_cause': likely,
+                    'remediation': 'Ensure Generate is bound with _js="submit_named" and that javascript/ui.js attaches strict JSON into the hidden slot; clear browser cache and disable extensions that add inputs after the named slot.',
                     'strict_mode_enforced_since': '2025-10-17',
                 }
                 raise ValueError(f"Invalid or missing __strict_version in payload; frontend must send strict JSON | details={detail}")
@@ -1266,6 +1286,22 @@ def create_ui():
                         loc = f"{info.filename}:{info.lineno}"
                 except Exception:
                     pass
+                likely = None
+                if expected_last_eid == actual_last_eid and not isinstance(last, dict):
+                    likely = 'Hidden JSON slot present but empty; front-end did not attach strict JSON (submit_img2img_named not bound or builder not executed; cache or extension interference).'
+                comp_tail = []
+                try:
+                    src = list(submit_img2img_inputs) if isinstance(submit_img2img_inputs, (list, tuple)) else []
+                    start = max(0, len(src) - 6)
+                    for i in range(start, len(src)):
+                        c = src[i]
+                        comp_tail.append({
+                            'idx': i,
+                            'elem_id': getattr(c, 'elem_id', None),
+                            'comp_type': type(c).__name__,
+                        })
+                except Exception:
+                    pass
                 detail = {
                     'error_code': 'SDWUI_STRICT_JSON_MISSING',
                     'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
@@ -1284,6 +1320,9 @@ def create_ui():
                     'client_host': client,
                     'user_agent': ua,
                     'code_location': loc,
+                    'component_tail': comp_tail,
+                    'likely_root_cause': likely,
+                    'remediation': 'Ensure Generate is bound with _js="submit_img2img_named" and that javascript/ui.js attaches strict JSON into the hidden slot; clear browser cache and disable extensions that add inputs after the named slot.',
                     'strict_mode_enforced_since': '2025-10-17',
                 }
                 raise ValueError(f"Invalid or missing __strict_version in payload; frontend must send strict JSON | details={detail}")
