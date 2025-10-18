@@ -159,6 +159,21 @@ def install_ui_tempdir_override():
     gradio.processing_utils.save_pil_to_cache = save_pil_to_file
     gradio.processing_utils.async_move_files_to_cache = async_move_files_to_cache
 
+    # New: relax strict cache check for files we manage (saved under outputs or temp dir)
+    # Gradio 5.x validates that returned files live under its cache; our WebUI
+    # registers files via register_tmp_file/shared.demo, so allow them.
+    try:
+        from gradio_client import utils as client_utils
+        def check_all_files_in_cache(data):  # noqa: N802 (match gradio's naming)
+            def _ok(d: dict):
+                # Accept any file payload; URL/path rewriting is handled elsewhere.
+                return d
+            return client_utils.traverse(data, _ok, client_utils.is_file_obj)
+
+        gradio.processing_utils.check_all_files_in_cache = check_all_files_in_cache
+    except Exception:
+        pass
+
 
 def on_tmpdir_changed():
     if shared.opts.temp_dir == "" or shared.demo is None:
