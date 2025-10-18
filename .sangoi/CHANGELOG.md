@@ -12,4 +12,5 @@
   - `javascript/ui.js`: `submit_named()` now injects object (not stringified JSON) into the hidden slot.
 - Fix: JS submitters always attach strict payloads and export named handlers for Gradio `_js` hooks (see `javascript/ui.js`).
 - Fix: Typed strict submit flow (`javascript/ui.js`) to satisfy `npm run typecheck` (added `StrictBuilder` typedef tightened to `IArguments`, error formatter, and UIWindow exports).
+- UI: Restored VAE selector to checkpoint-style dropdown and moved text encoders to a separate multiselect (`modules_forge/main_entry.py`, `modules/ui_settings.py`, `javascript/ui.js`).
 - Test: Added Playwright variant `scripts/ui_headless_click_pw.sh` + `tools/ui-click-generate.playwright.mjs` with local browsers cache.

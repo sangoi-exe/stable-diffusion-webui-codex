@@ -48,8 +48,8 @@ class CheckpointUserMetadataEditor(ui_extra_networks_user_metadata.UserMetadataE
     def create_editor(self):    #happens before main_entry.modules_list is filled
         modules_list = ['Built in']
         if main_entry.module_list == {}:
-            _, modules = main_entry.refresh_models()
-            modules_list += list(modules)
+            _, vaes, text_encoders = main_entry.refresh_models()
+            modules_list += list(vaes) + list(text_encoders)
         else:
             modules_list += list(main_entry.module_list.keys())
         

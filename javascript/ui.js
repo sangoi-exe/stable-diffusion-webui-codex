@@ -21,6 +21,8 @@
  *   restoreProgressTxt2img?: () => string | null;
  *   restoreProgressImg2img?: () => string | null;
  *   args_to_array?: typeof Array.from;
+ *   selectCheckpoint?: (name: string) => void;
+ *   selectVAE?: (value: unknown) => void;
  * }} UIWindow */
 
 /** @typedef {(args: IArguments) => Record<string, unknown> | null | undefined} StrictBuilder */
@@ -866,11 +868,35 @@ function selectCheckpoint(name) {
     getAppElementById('change_checkpoint')?.click();
 }
 
-/** @type {string | number} */
-let desiredVAEName = 0;
-/** @param {string | number} vae */
+/** @type {string | null} */
+let desiredVAEName = null;
+/** @type {string[] | null} */
+let desiredVAEExtras = null;
+/** @param {unknown} vae */
 function selectVAE(vae) {
-    desiredVAEName = vae;
+    let selected = null;
+    let extras = [];
+
+    if (Array.isArray(vae)) {
+        const first = vae.length > 0 ? vae[0] : null;
+        selected = typeof first === 'string' ? first : null;
+        extras = vae.slice(1).filter((item) => typeof item === 'string');
+    } else if (vae && typeof vae === 'object') {
+        const obj = /** @type {{ vae?: unknown, modules?: unknown }} */ (vae);
+        selected = typeof obj.vae === 'string' ? obj.vae : null;
+        if (Array.isArray(obj.modules)) {
+            extras = obj.modules.filter((item) => typeof item === 'string');
+        }
+    } else if (typeof vae === 'string') {
+        selected = vae;
+    }
+
+    if (selected === 'Built in') {
+        selected = 'Automatic';
+    }
+
+    desiredVAEName = selected;
+    desiredVAEExtras = extras;
 }
 
 /** @param {number} w @param {number} h @param {number} r */

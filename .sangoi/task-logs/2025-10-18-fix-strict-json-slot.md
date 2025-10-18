@@ -36,3 +36,9 @@ Update: 2025-10-18 (typecheck follow-up)
 - 2025-10-18b: Tightened `StrictBuilder` to accept `IArguments`, removing the last `javascript/ui.js` complaints from `npm run typecheck`.
 - Validation: Host-reported `npm run typecheck` now expected to pass for `javascript/ui.js`; other legacy JS files still exhibit pre-existing Forge errors (see host log).
 - TODO: Coordinate remediation plan for remaining `extraNetworks`/`hints`/`imageMaskFix` type errors (out of scope of this strict submit fix).
+
+Update: 2025-10-18 (VAE dropdown parity)
+- modules_forge/main_entry.py / shared_options.py: Introduced `forge_selected_vae` option, split quicksettings into single-select VAE and multiselect text encoder list, migrated legacy stored values, and ensured backend loading combines the selected VAE with additional modules.
+- modules/ui_settings.py & javascript/ui.js: wired the “Change checkpoint” button and `selectVAE()` helper to drive the new components (VAE dropdown + text encoder multiselect) with clear fallbacks.
+- modules/ui_extra_networks_checkpoints_user_metadata.py: refreshed module list retrieval to match the updated `refresh_models()` contract.
+- Validation: `npm run typecheck` (blocked in sandbox; host run shows only legacy errors).

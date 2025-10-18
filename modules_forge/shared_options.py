@@ -5,6 +5,7 @@ def register(options_templates, options_section, OptionInfo):
         "forge_async_loading": OptionInfo('Queue'),
         "forge_pin_shared_memory": OptionInfo('CPU'),
         "forge_preset": OptionInfo('sd'),
+        "forge_selected_vae": OptionInfo('Automatic'),
         "forge_additional_modules": OptionInfo([]),
     }))
     options_templates.update(options_section(('ui_alternatives', "UI alternatives", "ui"), {

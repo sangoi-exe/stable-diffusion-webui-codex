@@ -393,18 +393,22 @@ class UiSettings:
         try:
             from modules_forge import main_entry
 
-            def button_set_checkpoint_change(model, vae, dummy):
-                if 'Built in' in vae:
-                    vae.remove('Built in')
+            def button_set_checkpoint_change(model, vae, text_modules, dummy):
                 model = sd_models.match_checkpoint_to_name(model)
-                return model, vae, opts.dumpjson()
+                if isinstance(vae, list):
+                    vae = vae[0] if vae else 'Automatic'
+                if vae == 'Built in':
+                    vae = 'Automatic'
+                if isinstance(text_modules, str):
+                    text_modules = [text_modules]
+                return model, vae, text_modules or [], opts.dumpjson()
 
             button_set_checkpoint = gr.Button('Change checkpoint', elem_id='change_checkpoint', visible=False)
             button_set_checkpoint.click(
                 fn=button_set_checkpoint_change,
-                js="function(c, v, n){ var ckpt = desiredCheckpointName; var vae = desiredVAEName; if (ckpt == null) ckpt = c; if (vae == 0) vae = v; desiredCheckpointName = null; desiredVAEName = 0; return [ckpt, vae, null]; }",
-                inputs=[main_entry.ui_checkpoint, main_entry.ui_vae, self.dummy_component],
-                outputs=[main_entry.ui_checkpoint, main_entry.ui_vae, self.text_settings],
+                js="function(c, v, te, n){ var ckpt = (desiredCheckpointName !== null && desiredCheckpointName !== undefined) ? desiredCheckpointName : c; var vae = (desiredVAEName !== null && desiredVAEName !== undefined) ? desiredVAEName : v; var modules = Array.isArray(desiredVAEExtras) ? desiredVAEExtras : te; desiredCheckpointName = null; desiredVAEName = null; desiredVAEExtras = null; return [ckpt, vae, modules, null]; }",
+                inputs=[main_entry.ui_checkpoint, main_entry.ui_vae, main_entry.ui_text_encoders, self.dummy_component],
+                outputs=[main_entry.ui_checkpoint, main_entry.ui_vae, main_entry.ui_text_encoders, self.text_settings],
             )
         except Exception:
             pass
