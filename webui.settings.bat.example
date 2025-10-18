@@ -1,0 +1,13 @@
+@echo off
+REM Example user settings for WebUI Codex (Windows)
+REM Copy this file to webui.settings.bat and edit values as needed.
+
+REM Logging level for backend (used by backend/logging_utils.py)
+REM Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+set CODEX_LOG_LEVEL=DEBUG
+
+REM Optional: write logs to a file in addition to console
+REM set CODEX_LOG_FILE=.webui-codex.log
+
+REM You can also use SDWEBUI_LOG_LEVEL or WEBUI_LOG_LEVEL if preferred
+REM set SDWEBUI_LOG_LEVEL=INFO

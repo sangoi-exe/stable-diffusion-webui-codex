@@ -25,6 +25,11 @@ if not defined VENV_DIR (
 echo.
 echo [Codex] Stable Diffusion WebUI launcher (Windows)
 echo ---------------------------------------------------
+if defined CODEX_LOG_LEVEL (
+  echo [log] CODEX_LOG_LEVEL=%CODEX_LOG_LEVEL%
+) else (
+  echo [log] CODEX_LOG_LEVEL not set; defaulting to DEBUG
+)
 
 REM 1) Python availability (use upstream-safe check)
 echo [1/7] Checking Python...

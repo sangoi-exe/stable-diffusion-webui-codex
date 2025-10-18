@@ -1,14 +1,28 @@
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
+import logging
 
 from modules import processing as _processing
 from modules import shared as _shared
 
 from backend.core.requests import Img2ImgRequest, Txt2ImgRequest
 
+_log = logging.getLogger(__name__)
+
 
 def build_txt2img_processing(req: Txt2ImgRequest) -> _processing.StableDiffusionProcessingTxt2Img:
+    _log.debug(
+        "build_txt2img_processing: size=%dx%d steps=%s sampler=%s scheduler=%s cfg=%s seed=%s hr=%s",
+        req.width,
+        req.height,
+        req.steps,
+        req.sampler,
+        req.scheduler,
+        req.guidance_scale,
+        req.seed,
+        bool(req.highres_fix),
+    )
     opts = _shared.opts
     p = _processing.StableDiffusionProcessingTxt2Img(
         outpath_samples=opts.outdir_samples or opts.outdir_txt2img_samples,
@@ -47,10 +61,31 @@ def build_txt2img_processing(req: Txt2ImgRequest) -> _processing.StableDiffusion
     p.scheduler = req.scheduler or None
     p.seed = -1 if req.seed is None else int(req.seed)
     p.user = "engine"
+    _log.debug(
+        "processing_txt2img: enable_hr=%s hr_scale=%s hr_upscaler=%s hr_steps=%s hr_resize=(%s,%s)",
+        bool(p.enable_hr),
+        getattr(p, "hr_scale", None),
+        getattr(p, "hr_upscaler", None),
+        getattr(p, "hr_second_pass_steps", None),
+        getattr(p, "hr_resize_x", None),
+        getattr(p, "hr_resize_y", None),
+    )
     return p
 
 
 def build_img2img_processing(req: Img2ImgRequest) -> _processing.StableDiffusionProcessingImg2Img:
+    _log.debug(
+        "build_img2img_processing: size=%sx%s steps=%s sampler=%s scheduler=%s cfg=%s denoise=%s has_init=%s has_mask=%s",
+        req.width,
+        req.height,
+        req.steps,
+        req.sampler,
+        req.scheduler,
+        req.guidance_scale,
+        getattr(req, "denoise_strength", None),
+        bool(getattr(req, "init_image", None)),
+        bool(getattr(req, "mask", None)),
+    )
     opts = _shared.opts
     width = req.width
     height = req.height
@@ -91,5 +126,10 @@ def build_img2img_processing(req: Img2ImgRequest) -> _processing.StableDiffusion
     p.scheduler = req.scheduler or None
     p.seed = -1 if req.seed is None else int(req.seed)
     p.user = "engine"
+    _log.debug(
+        "processing_img2img: denoise=%s init_images=%s mask=%s",
+        getattr(p, "denoising_strength", None),
+        bool(getattr(p, "init_images", None)),
+        bool(getattr(p, "mask", None)),
+    )
     return p
-

@@ -53,6 +53,13 @@
 
 - DX: Add `run-webui.bat` (Windows launcher) — checks Python 3.10, creates/activates `.venv`, installs requirements, verifies core libs, warns on missing ffmpeg, and launches `webui.py`.
 
+- Feat(Logging): centralized logging + SDXL debug instrumentation
+  - New: `backend/logging_utils.py` configures logging once (default DEBUG). Level via `CODEX_LOG_LEVEL` (or `SDWEBUI_LOG_LEVEL`/`WEBUI_LOG_LEVEL`). Optional `CODEX_LOG_FILE` adds file handler.
+  - SDXL: Detailed DEBUG logs in `backend/engines/sdxl/engine.py` (request summary, device/dtypes, lifecycle around `process_images`).
+  - Builders: DEBUG summaries in `backend/engines/util/adapters.py` for txt2img/img2img (hr, denoise, sizes, samplers, seed).
+  - Startup: `backend/__init__.py` initializes logging early for consistent verbosity.
+  - Windows: `webui.settings.bat.example` shows how to set `CODEX_LOG_LEVEL`; `run-webui.bat` echoes the active level.
+
 - Deps: Add `colorama==0.4.6` and `rich==13.9.2` to enable colored console/logging; logging setup already uses Rich/Colorama with tqdm-aware handler and safe fallback.
 - Deps: Pin `torch==2.7.1` and `torchvision==0.22.0` for Windows stability (recreate venv recommended).
 
