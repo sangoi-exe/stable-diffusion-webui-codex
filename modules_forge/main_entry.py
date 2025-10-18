@@ -6,6 +6,7 @@ import gradio as gr
 
 from gradio.context import Context
 from modules import shared, ui_common, sd_models, processing, infotext_utils, paths, sd_vae
+from modules import hashes as _hashes
 from backend import memory_management, stream
 from backend.args import dynamic_args
 
@@ -91,6 +92,17 @@ def refresh_models():
     for p in text_encoder_dirs:
         text_encoder_module_list.update(_find_files_with_extensions(p, exts))
 
+    # Also merge A1111's canonical VAE dict for robustness (keeps parity with master behavior)
+    try:
+        sd_vae.refresh_vae_list()
+        # sd_vae.vae_dict maps filename -> absolute path; keep our keys as basenames to avoid path noise in UI
+        for name, fullpath in getattr(sd_vae, 'vae_dict', {}).items():
+            if isinstance(name, str) and isinstance(fullpath, str):
+                vae_module_list[name] = fullpath
+    except Exception:
+        # keep graceful degradation; discovery via os.walk above already populated a baseline
+        pass
+
     # Union for compatibility APIs
     module_list.clear()
     module_list.update(vae_module_list)
@@ -104,14 +116,45 @@ def _resolve_module_path(name: str | None) -> str | None:
         return None
     if name in ('Automatic', 'Built in', 'None', ''):
         return None
+    # Accept labels with appended short hashes like "foo.safetensors [abc123]"
+    base_label = name.split(' [')[0]
     if name in module_list:
         return module_list[name]
-    base = os.path.basename(name)
+    base = os.path.basename(base_label)
     if base in module_list:
         return module_list[base]
+    # Fallback to canonical sd_vae.vae_dict mapping (if present)
+    try:
+        vae_dict = getattr(sd_vae, 'vae_dict', {})
+        if base in vae_dict:
+            return vae_dict[base]
+        if name in vae_dict:
+            return vae_dict[name]
+    except Exception:
+        pass
     if os.path.isfile(name):
         return os.path.abspath(name)
     return None
+
+
+def _dropdown_model_selector(*, label: str, value, choices, elem_id: str | None = None, multiselect: bool = False):
+    """Build a consistent dropdown for model selection in Quicksettings.
+
+    Ensures identical UX between Checkpoint and VAE selectors (size, search, refresh placement).
+    """
+    kwargs = {
+        'label': label,
+        'value': value,
+        'choices': choices,
+        'elem_classes': ['model_selection'],
+        'interactive': True,
+        'allow_custom_value': False,
+    }
+    if elem_id:
+        kwargs['elem_id'] = elem_id
+    if multiselect:
+        kwargs['multiselect'] = True
+    return gr.Dropdown(**kwargs)
 
 
 def make_checkpoint_manager_ui():
@@ -178,32 +221,26 @@ def make_checkpoint_manager_ui():
 
     _migrate_legacy_selection()
 
-    ui_checkpoint = gr.Dropdown(
-        value=lambda: shared.opts.sd_model_checkpoint or "(no checkpoints found)",
+    ui_checkpoint = _dropdown_model_selector(
         label="Checkpoint",
-        elem_classes=['model_selection'],
-        choices=ckpt_list
+        value=lambda: shared.opts.sd_model_checkpoint or "(no checkpoints found)",
+        choices=ckpt_list,
+        elem_id="sd_checkpoint",
     )
 
-    ui_vae = gr.Dropdown(
-        value=_current_vae_value,
+    ui_vae = _dropdown_model_selector(
         label="VAE",
-        elem_classes=['model_selection'],
-        elem_id="sd_vae",
+        value=_current_vae_value,
         choices=_compose_vae_choices(),
-        interactive=True,
-        allow_custom_value=False,
+        elem_id="sd_vae",
     )
 
-    ui_text_encoders = gr.Dropdown(
-        value=_current_text_encoder_values,
-        multiselect=True,
+    ui_text_encoders = _dropdown_model_selector(
         label="Text Encoder(s)",
+        value=_current_text_encoder_values,
         choices=sorted(text_encoder_module_list.keys()),
-        elem_classes=['model_selection'],
         elem_id="sd_text_encoders",
-        interactive=True,
-        allow_custom_value=False,
+        multiselect=True,
     )
 
     def gr_refresh():
