@@ -193,6 +193,8 @@ def make_checkpoint_manager_ui():
         interactive=True,
         allow_custom_value=False,
     )
+    # Ensure immediate render here to avoid odd SSR placement inside quicksettings
+    ui_vae.render()
 
     ui_text_encoders = gr.Dropdown(
         value=_current_text_encoder_values,
