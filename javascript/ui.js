@@ -756,6 +756,21 @@ onUiLoaded(() => {
             console.info('[StrictSubmitCheck] OK: strict submit handlers and hidden JSON slots detected.');
             try { uiWindow.__STRICT_CHECK_OK__ = true; uiWindow.__STRICT_CHECK_REASON__ = ''; } catch {}
         }
+        // Harden legacy hook names to strict submitters and freeze them
+        try {
+            const bindStrict = (name, fn) => {
+                const desc = Object.getOwnPropertyDescriptor(uiWindow, name);
+                const same = !!desc && typeof desc.value === 'function' && desc.value === fn;
+                if (!same) {
+                    Object.defineProperty(uiWindow, name, { value: fn, writable: false, configurable: false });
+                    console.info(`[StrictSubmitCheck] Bound and froze window.${name} -> strict submitter.`);
+                }
+            };
+            if (typeof uiWindow.submit_named === 'function') bindStrict('submit', uiWindow.submit_named);
+            if (typeof uiWindow.submit_img2img_named === 'function') bindStrict('submit_img2img', uiWindow.submit_img2img_named);
+        } catch (e) {
+            console.warn('[StrictSubmitCheck] Failed to freeze legacy hook aliases', e);
+        }
     } catch (e) {
         console.warn('[StrictSubmitCheck] Failed to run startup checks', e);
         try { uiWindow.__STRICT_CHECK_OK__ = false; uiWindow.__STRICT_CHECK_REASON__ = String(e); } catch {}

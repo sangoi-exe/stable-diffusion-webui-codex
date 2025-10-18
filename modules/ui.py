@@ -791,25 +791,11 @@ def create_ui():
                         })
                 except Exception:
                     pass
-                # Build a narrative route script (human-friendly)
+                # Build a narrative route script (human-friendly) for txt2img
                 route_lines = []
                 try:
                     route_lines.append("1) Client action: Generate clicked (inferred)")
                     route_lines.append("2) Server handler: modules/ui.py::_txt2img_submit")
-                    route_lines.append(f"3) Args received: len={len(args)}; last_idx={len(args)-1}")
-                    ltype = type(last).__name__
-                    route_lines.append(f"4) Last arg type: {ltype}; JSON parse: {'ok' if (tail and tail[-1].get('json_parse_ok')) else 'fail' if isinstance(last, str) else 'n/a'}")
-                    route_lines.append(f"5) Strict JSON found elsewhere: {found_idx != -1} (idx={found_idx})")
-                    route_lines.append(f"6) Component tail: {[x.get('elem_id') for x in comp_tail]}")
-                    route_lines.append(f"7) Expected last elem_id: {expected_last_eid}; actual: {actual_last_eid}")
-                    route_lines.append("8) Verdict: missing strict JSON in last slot → reject")
-                except Exception:
-                    pass
-
-                route_lines = []
-                try:
-                    route_lines.append("1) Client action: Generate clicked (inferred)")
-                    route_lines.append("2) Server handler: modules/ui.py::_img2img_submit")
                     route_lines.append(f"3) Args received: len={len(args)}; last_idx={len(args)-1}")
                     ltype = type(last).__name__
                     route_lines.append(f"4) Last arg type: {ltype}; JSON parse: {'ok' if (tail and tail[-1].get('json_parse_ok')) else 'fail' if isinstance(last, str) else 'n/a'}")
@@ -845,7 +831,15 @@ def create_ui():
                     'route_script': "\n".join(route_lines),
                     'strict_mode_enforced_since': '2025-10-17',
                 }
-                raise ValueError(f"Invalid or missing __strict_version in payload; frontend must send strict JSON | details={detail}")
+                # Pretty-print detail for log readability
+                def _pp(d):
+                    try:
+                        import json as _json
+                        return _json.dumps(d, indent=2, ensure_ascii=False)
+                    except Exception:
+                        return str(d)
+                pretty = _pp(detail)
+                raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON\n" + pretty)
 
             txt2img_args = dict(
                 fn=wrap_gradio_gpu_call(_txt2img_submit, extra_outputs=[None, '', '']),
@@ -1358,7 +1352,14 @@ def create_ui():
                     'route_script': "\n".join(route_lines),
                     'strict_mode_enforced_since': '2025-10-17',
                 }
-                raise ValueError(f"Invalid or missing __strict_version in payload; frontend must send strict JSON | details={detail}")
+                def _pp(d):
+                    try:
+                        import json as _json
+                        return _json.dumps(d, indent=2, ensure_ascii=False)
+                    except Exception:
+                        return str(d)
+                pretty = _pp(detail)
+                raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON\n" + pretty)
 
             img2img_args = dict(
                 fn=wrap_gradio_gpu_call(_img2img_submit, extra_outputs=[None, '', '']),
