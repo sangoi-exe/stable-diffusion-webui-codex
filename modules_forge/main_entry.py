@@ -13,7 +13,9 @@ from backend.args import dynamic_args
 
 total_vram = int(memory_management.total_vram)
 
-ui_forge_preset: gr.Radio | None = None
+# Engine/type selector (replaces previous Forge UI preset radio)
+ui_codex_engine: gr.Dropdown | None = None
+ui_codex_mode: gr.Dropdown | None = None
 
 ui_checkpoint: gr.Dropdown | None = None
 ui_vae: gr.Dropdown | None = None
@@ -159,7 +161,8 @@ def _dropdown_model_selector(*, label: str, value, choices, elem_id: str | None 
 
 def make_checkpoint_manager_ui():
     global ui_checkpoint, ui_vae, ui_text_encoders, ui_clip_skip
-    global ui_forge_unet_storage_dtype_options, ui_forge_async_loading, ui_forge_pin_shared_memory, ui_forge_inference_memory, ui_forge_preset
+    global ui_forge_unet_storage_dtype_options, ui_forge_async_loading, ui_forge_pin_shared_memory, ui_forge_inference_memory
+    global ui_codex_engine
 
     if shared.opts.sd_model_checkpoint in [None, 'None', 'none', '']:
         if len(sd_models.checkpoints_list) == 0:
@@ -167,11 +170,40 @@ def make_checkpoint_manager_ui():
         if len(sd_models.checkpoints_list) > 0:
             shared.opts.set('sd_model_checkpoint', next(iter(sd_models.checkpoints_list.values())).name)
 
-    ui_forge_preset = gr.Radio(
-        label="UI",
-        value=lambda: getattr(shared.opts, 'forge_preset', 'all'),
-        choices=['sd', 'xl', 'flux', 'all'],
-        elem_id="forge_ui_preset",
+    # Engine dropdown (model family) shown to the left of Checkpoint
+    try:
+        # Defer imports to UI build time
+        from backend.core.registry import registry as _engine_registry
+        from backend.engines import register_default_engines as _register_default_engines
+        _register_default_engines(replace=False)
+        engine_choices = sorted(list(_engine_registry.list()))
+        if not engine_choices:
+            engine_choices = ["sd15", "sdxl", "flux"]
+    except Exception:
+        engine_choices = ["sd15", "sdxl", "flux"]
+
+    def _engine_default_value():
+        val = getattr(shared.opts, 'codex_engine', None)
+        return val if isinstance(val, str) and val in engine_choices else (engine_choices[0] if engine_choices else 'sd15')
+
+    ui_codex_engine = gr.Dropdown(
+        label="Engine",
+        value=_engine_default_value,
+        choices=engine_choices,
+        elem_id="codex_engine",
+        interactive=True,
+    )
+
+    # Mode dropdown (Normal/LCM/Turbo/Lightning)
+    def _mode_default_value():
+        val = getattr(shared.opts, 'codex_mode', None)
+        return val if isinstance(val, str) and val in ["Normal", "LCM", "Turbo", "Lightning"] else "Normal"
+
+    ui_codex_mode = gr.Dropdown(
+        label="Mode",
+        value=_mode_default_value,
+        choices=["Normal", "LCM", "Turbo", "Lightning"],
+        elem_id="codex_mode",
         interactive=True,
     )
 
@@ -291,6 +323,128 @@ def make_checkpoint_manager_ui():
 
     # Ensure initial model loading params exist to avoid KeyError during first gen
     refresh_model_loading_parameters()
+
+    # Engine change handler: set defaults similarly to the previous preset radio
+    try:
+        def on_engine_change(v):
+            # Persist selection only in codex_engine (no legacy mirroring)
+            shared.opts.set('codex_engine', v)
+            try:
+                shared.opts.save(shared.config_filename)
+            except Exception:
+                pass
+
+            # Choose per-engine defaults
+            if v == 'sd15':
+                t2i_wh = (512, 512)
+                i2i_wh = (512, 512)
+                t2i_cfg, t2i_dcfg = (7.0, 3.5)
+                i2i_cfg, i2i_dcfg = (7.0, 3.5)
+                t2i_sampler = getattr(shared.opts, 'sd_t2i_sampler', 'Euler a')
+                t2i_scheduler = getattr(shared.opts, 'sd_t2i_scheduler', 'Automatic')
+                i2i_sampler = getattr(shared.opts, 'sd_i2i_sampler', 'Euler a')
+                i2i_scheduler = getattr(shared.opts, 'sd_i2i_scheduler', 'Automatic')
+            elif v == 'sdxl':
+                t2i_wh = (1024, 1024)
+                i2i_wh = (1024, 1024)
+                t2i_cfg, t2i_dcfg = (7.0, 3.5)
+                i2i_cfg, i2i_dcfg = (7.0, 3.5)
+                t2i_sampler = getattr(shared.opts, 'xl_t2i_sampler', 'DPM++ 2M SDE')
+                t2i_scheduler = getattr(shared.opts, 'xl_t2i_scheduler', 'Karras')
+                i2i_sampler = getattr(shared.opts, 'xl_i2i_sampler', 'DPM++ 2M SDE')
+                i2i_scheduler = getattr(shared.opts, 'xl_i2i_scheduler', 'Karras')
+            elif v == 'flux':
+                t2i_wh = (896, 1152)
+                i2i_wh = (1024, 1024)
+                t2i_cfg, t2i_dcfg = (1.0, 3.5)
+                i2i_cfg, i2i_dcfg = (1.0, 3.5)
+                t2i_sampler = getattr(shared.opts, 'flux_t2i_sampler', 'Euler')
+                t2i_scheduler = getattr(shared.opts, 'flux_t2i_scheduler', 'Simple')
+                i2i_sampler = getattr(shared.opts, 'flux_i2i_sampler', 'Euler')
+                i2i_scheduler = getattr(shared.opts, 'flux_i2i_scheduler', 'Simple')
+            else:
+                # Unknown/new engine: leave unchanged
+                return [gr.update() for _ in outputs]
+
+            (t2i_w, t2i_h) = t2i_wh
+            (i2i_w, i2i_h) = i2i_wh
+            flux_interactive = (v == 'flux')
+            return [
+                gr.update(),  # ui_vae
+                gr.update(),  # ui_clip_skip
+                gr.update(),  # ui_forge_unet_storage_dtype_options
+                gr.update(),  # ui_forge_async_loading
+                gr.update(),  # ui_forge_pin_shared_memory
+                gr.update(),  # ui_forge_inference_memory
+                gr.update(value=t2i_w),   # ui_txt2img_width
+                gr.update(value=i2i_w),   # ui_img2img_width
+                gr.update(value=t2i_h),   # ui_txt2img_height
+                gr.update(value=i2i_h),   # ui_img2img_height
+                gr.update(value=t2i_cfg), # ui_txt2img_cfg
+                gr.update(value=i2i_cfg), # ui_img2img_cfg
+                gr.update(value=t2i_dcfg, interactive=flux_interactive), # ui_txt2img_distilled_cfg
+                gr.update(interactive=flux_interactive), # ui_txt2img_hr_distilled_cfg
+                gr.update(value=i2i_dcfg, interactive=flux_interactive), # ui_img2img_distilled_cfg
+                gr.update(value=t2i_sampler),    # ui_txt2img_sampler
+                gr.update(value=i2i_sampler),    # ui_img2img_sampler
+                gr.update(value=t2i_scheduler),  # ui_txt2img_scheduler
+                gr.update(value=i2i_scheduler),  # ui_img2img_scheduler
+            ]
+
+        # Outputs list used above (same as in forge_main_entry defaults wiring)
+        from modules.ui import parameters_copypaste
+        ui_txt2img_width = get_a1111_ui_component('txt2img', 'Size-1')
+        ui_txt2img_height = get_a1111_ui_component('txt2img', 'Size-2')
+        ui_txt2img_cfg = get_a1111_ui_component('txt2img', 'CFG scale')
+        ui_txt2img_distilled_cfg = get_a1111_ui_component('txt2img', 'Distilled CFG Scale')
+        ui_txt2img_hr_distilled_cfg = get_a1111_ui_component('txt2img', 'Hires Distilled CFG Scale')
+        ui_txt2img_sampler = get_a1111_ui_component('txt2img', 'sampler_name')
+        ui_txt2img_scheduler = get_a1111_ui_component('txt2img', 'scheduler')
+
+        ui_img2img_width = get_a1111_ui_component('img2img', 'Size-1')
+        ui_img2img_height = get_a1111_ui_component('img2img', 'Size-2')
+        ui_img2img_cfg = get_a1111_ui_component('img2img', 'CFG scale')
+        ui_img2img_distilled_cfg = get_a1111_ui_component('img2img', 'Distilled CFG Scale')
+        ui_img2img_sampler = get_a1111_ui_component('img2img', 'sampler_name')
+        ui_img2img_scheduler = get_a1111_ui_component('img2img', 'scheduler')
+
+        outputs = [
+            ui_vae,
+            ui_clip_skip,
+            ui_forge_unet_storage_dtype_options,
+            ui_forge_async_loading,
+            ui_forge_pin_shared_memory,
+            ui_forge_inference_memory,
+            ui_txt2img_width,
+            ui_img2img_width,
+            ui_txt2img_height,
+            ui_img2img_height,
+            ui_txt2img_cfg,
+            ui_img2img_cfg,
+            ui_txt2img_distilled_cfg,
+            ui_txt2img_hr_distilled_cfg,
+            ui_img2img_distilled_cfg,
+            ui_txt2img_sampler,
+            ui_img2img_sampler,
+            ui_txt2img_scheduler,
+            ui_img2img_scheduler,
+        ]
+
+        ui_codex_engine.change(on_engine_change, inputs=[ui_codex_engine], outputs=outputs, queue=False, show_progress=False)
+
+        def on_mode_change(v):
+            # Persist mode without forcing UI defaults; engines interpret mode.
+            shared.opts.set('codex_mode', v)
+            try:
+                shared.opts.save(shared.config_filename)
+            except Exception:
+                pass
+            # No-op updates (keep UI stable); engines will adapt internally.
+            return [gr.update() for _ in outputs]
+
+        ui_codex_mode.change(on_mode_change, inputs=[ui_codex_mode], outputs=outputs, queue=False, show_progress=False)
+    except Exception:
+        pass
     return
 
 
@@ -470,71 +624,7 @@ def forge_main_entry():
             ui_txt2img_scheduler,
             ui_img2img_scheduler,
         ]
-        if ui_forge_preset is not None:
-            def on_preset_change(v):
-                shared.opts.set('forge_preset', v)
-                try:
-                    shared.opts.save(shared.config_filename)
-                except Exception:
-                    pass
-
-                # Choose per-preset defaults
-                if v == 'sd':
-                    t2i_wh = (512, 512)
-                    i2i_wh = (512, 512)
-                    t2i_cfg, t2i_dcfg = (7.0, 3.5)
-                    i2i_cfg, i2i_dcfg = (7.0, 3.5)
-                    t2i_sampler = getattr(shared.opts, 'sd_t2i_sampler', 'Euler a')
-                    t2i_scheduler = getattr(shared.opts, 'sd_t2i_scheduler', 'Automatic')
-                    i2i_sampler = getattr(shared.opts, 'sd_i2i_sampler', 'Euler a')
-                    i2i_scheduler = getattr(shared.opts, 'sd_i2i_scheduler', 'Automatic')
-                elif v == 'xl':
-                    t2i_wh = (1024, 1024)
-                    i2i_wh = (1024, 1024)
-                    t2i_cfg, t2i_dcfg = (7.0, 3.5)
-                    i2i_cfg, i2i_dcfg = (7.0, 3.5)
-                    t2i_sampler = getattr(shared.opts, 'xl_t2i_sampler', 'DPM++ 2M SDE')
-                    t2i_scheduler = getattr(shared.opts, 'xl_t2i_scheduler', 'Karras')
-                    i2i_sampler = getattr(shared.opts, 'xl_i2i_sampler', 'DPM++ 2M SDE')
-                    i2i_scheduler = getattr(shared.opts, 'xl_i2i_scheduler', 'Karras')
-                elif v == 'flux':
-                    t2i_wh = (896, 1152)
-                    i2i_wh = (1024, 1024)
-                    t2i_cfg, t2i_dcfg = (1.0, 3.5)
-                    i2i_cfg, i2i_dcfg = (1.0, 3.5)
-                    t2i_sampler = getattr(shared.opts, 'flux_t2i_sampler', 'Euler')
-                    t2i_scheduler = getattr(shared.opts, 'flux_t2i_scheduler', 'Simple')
-                    i2i_sampler = getattr(shared.opts, 'flux_i2i_sampler', 'Euler')
-                    i2i_scheduler = getattr(shared.opts, 'flux_i2i_scheduler', 'Simple')
-                else:
-                    # 'all' preset leaves values unchanged
-                    return [gr.update() for _ in outputs]
-
-                (t2i_w, t2i_h) = t2i_wh
-                (i2i_w, i2i_h) = i2i_wh
-                flux_interactive = (v == 'flux')
-                return [
-                    gr.update(),  # ui_vae
-                    gr.update(),  # ui_clip_skip
-                    gr.update(),  # ui_forge_unet_storage_dtype_options
-                    gr.update(),  # ui_forge_async_loading
-                    gr.update(),  # ui_forge_pin_shared_memory
-                    gr.update(),  # ui_forge_inference_memory
-                    gr.update(value=t2i_w),   # ui_txt2img_width
-                    gr.update(value=i2i_w),   # ui_img2img_width
-                    gr.update(value=t2i_h),   # ui_txt2img_height
-                    gr.update(value=i2i_h),   # ui_img2img_height
-                    gr.update(value=t2i_cfg), # ui_txt2img_cfg
-                    gr.update(value=i2i_cfg), # ui_img2img_cfg
-                    gr.update(value=t2i_dcfg, interactive=flux_interactive), # ui_txt2img_distilled_cfg
-                    gr.update(interactive=flux_interactive), # ui_txt2img_hr_distilled_cfg
-                    gr.update(value=i2i_dcfg, interactive=flux_interactive), # ui_img2img_distilled_cfg
-                    gr.update(value=t2i_sampler),    # ui_txt2img_sampler
-                    gr.update(value=i2i_sampler),    # ui_img2img_sampler
-                    gr.update(value=t2i_scheduler),  # ui_txt2img_scheduler
-                    gr.update(value=i2i_scheduler),  # ui_img2img_scheduler
-                ]
-            ui_forge_preset.change(on_preset_change, inputs=[ui_forge_preset], outputs=outputs, queue=False, show_progress=False)
+        # Engine dropdown now owns the defaults wiring. No action needed here.
     except Exception:
         pass
     refresh_model_loading_parameters()

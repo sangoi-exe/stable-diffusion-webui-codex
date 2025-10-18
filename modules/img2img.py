@@ -16,6 +16,12 @@ from modules.ui import plaintext_to_html
 import modules.scripts
 from modules_forge import main_thread
 
+# New modular pipeline imports (Codex)
+from backend.core.engine_interface import TaskType
+from backend.core.orchestrator import InferenceOrchestrator
+from backend.core.requests import Img2ImgRequest
+from backend.core.requests import ProgressEvent, ResultEvent
+
 
 def process_batch(proc, input, output_dir, inpaint_mask_dir, args, to_scale=False, scale_by=1.0, use_png_info=False, png_info_props=None, png_info_dir=None):
     output_dir = output_dir.strip()
@@ -386,51 +392,98 @@ def img2img_from_json(id_task: str,
         present = sorted([k for k in payload.keys() if not k.startswith('__')])[:16]
         raise ValueError(f"Strict JSON is missing required fields: {missing} | present_keys(sample)={present}")
 
-    # Build script args from payload for img2img pipeline
-    script_args_payload = modules.scripts.build_script_args_from_payload(modules.scripts.scripts_img2img, payload)
+    # Build Codex Img2ImgRequest (no legacy processing path)
+    # Choose the best available source image/mask from the provided UI inputs
+    base_image = None
+    mask_image = None
+    try:
+        if init_img is not None:
+            base_image = init_img
+        elif sketch is not None:
+            try:
+                base_image = Image.alpha_composite(sketch, sketch_fg) if sketch_fg is not None else sketch
+            except Exception:
+                base_image = sketch
+        elif init_img_with_mask is not None:
+            base_image = init_img_with_mask
+            if init_img_with_mask_fg is not None and isinstance(init_img_with_mask_fg, Image.Image):
+                try:
+                    m = init_img_with_mask_fg.getchannel('A').convert('L')
+                    mask_image = m
+                except Exception:
+                    mask_image = None
+        elif inpaint_color_sketch is not None:
+            try:
+                base_image = Image.alpha_composite(inpaint_color_sketch, inpaint_color_sketch_fg) if inpaint_color_sketch_fg is not None else inpaint_color_sketch
+                if inpaint_color_sketch_fg is not None and isinstance(inpaint_color_sketch_fg, Image.Image):
+                    mask_image = inpaint_color_sketch_fg.getchannel('A').convert('L')
+            except Exception:
+                base_image = inpaint_color_sketch
+        elif init_img_inpaint is not None:
+            base_image = init_img_inpaint
+            if init_mask_inpaint is not None:
+                mask_image = init_mask_inpaint
+    except Exception:
+        # Keep going; orchestrator will error with full context if inputs are invalid
+        pass
 
-    return main_thread.run_and_wait_result(
-        img2img_function,
-        id_task,
-        request,
-        0,  # mode is unused in processing path
-        prompt,
-        negative_prompt,
-        prompt_styles,
-        init_img,
-        sketch,
-        sketch_fg,
-        init_img_with_mask,
-        init_img_with_mask_fg,
-        inpaint_color_sketch,
-        inpaint_color_sketch_fg,
-        init_img_inpaint,
-        init_mask_inpaint,
-        mask_blur,
-        mask_alpha,
-        inpainting_fill,
-        n_iter,
-        batch_size,
-        cfg_scale,
-        distilled_cfg_scale,
-        image_cfg_scale,
-        denoising_strength,
-        selected_scale_tab,
-        height,
-        width,
-        scale_by,
-        resize_mode,
-        inpaint_full_res,
-        inpaint_full_res_padding,
-        inpainting_mask_invert,
-        img2img_batch_input_dir,
-        img2img_batch_output_dir,
-        img2img_batch_inpaint_mask_dir,
-        override_settings_texts,
-        img2img_batch_use_png_info,
-        img2img_batch_png_info_props,
-        img2img_batch_png_info_dir,
-        img2img_batch_source_type,
-        img2img_batch_upload,
-        *script_args_payload,
+    # Fall back to first non-null among upload lists if base_image is still None
+    if base_image is None and isinstance(img2img_batch_upload, list) and img2img_batch_upload:
+        try:
+            p = img2img_batch_upload[0]
+            if hasattr(p, 'name'):
+                base_image = images.read(p.name)
+        except Exception:
+            base_image = None
+
+    # Compose request
+    req = Img2ImgRequest(
+        task=TaskType.IMG2IMG,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        init_image=base_image,
+        mask=mask_image,
+        denoise_strength=denoising_strength,
+        width=width,
+        height=height,
+        steps=int(payload.get('img2img_steps', 20)),
+        guidance_scale=cfg_scale,
+        sampler=str(payload.get('img2img_sampling')),
+        scheduler=str(payload.get('img2img_scheduler')),
+        seed=int(payload.get('img2img_seed', -1)),
+        batch_size=batch_size,
+        metadata={
+            "mode": getattr(shared.opts, 'codex_mode', 'Normal'),
+            "styles": prompt_styles,
+            "distilled_cfg_scale": distilled_cfg_scale,
+            "image_cfg_scale": image_cfg_scale,
+            "resize_mode": resize_mode,
+            "scale_by": scale_by,
+            "selected_scale_tab": selected_scale_tab,
+            "inpaint_full_res": inpaint_full_res,
+            "inpaint_full_res_padding": inpaint_full_res_padding,
+            "inpainting_mask_invert": inpainting_mask_invert,
+            "mask_blur": mask_blur,
+            "mask_alpha": mask_alpha,
+            "inpainting_fill": inpainting_fill,
+        },
+        extras={},
     )
+
+    # Resolve engine/model from Quicksettings
+    engine_key = getattr(shared.opts, 'codex_engine', 'sd15')
+    model_ref = getattr(shared.opts, 'sd_model_checkpoint', None)
+
+    orch = InferenceOrchestrator()
+    images_out = []
+    info_js = "{}"
+    for ev in orch.run(TaskType.IMG2IMG, str(engine_key), req, model_ref=model_ref):
+        if isinstance(ev, ResultEvent):
+            payload = ev.payload or {}
+            images_out = payload.get("images", [])
+            info_js = payload.get("info", "{}")
+
+    if opts.do_not_show_images:
+        images_out = []
+
+    return images_out, info_js, plaintext_to_html(""), plaintext_to_html("", classname="comments")

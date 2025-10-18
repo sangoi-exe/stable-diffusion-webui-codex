@@ -2,7 +2,7 @@ import json
 from contextlib import closing
 
 import modules.scripts
-from modules import processing, infotext_utils
+from modules import infotext_utils
 from modules.infotext_utils import create_override_settings_dict, parse_generation_parameters
 from modules.shared import opts
 import modules.shared as shared
@@ -10,6 +10,12 @@ from modules.ui import plaintext_to_html
 from PIL import Image
 import gradio as gr
 from modules_forge import main_thread
+
+# New modular pipeline imports
+from backend.core.engine_interface import TaskType
+from backend.core.orchestrator import InferenceOrchestrator
+from backend.core.requests import Txt2ImgRequest
+from backend.core.requests import ProgressEvent, ResultEvent
 
 
 def _require(payload: dict, key: str):
@@ -140,58 +146,63 @@ def _txt2img_from_payload(id_task: str, request: gr.Request, payload: dict, *scr
     # Build script args from named payload (ignores positional script_args to avoid mismatches)
     script_args_payload = modules.scripts.build_script_args_from_payload(modules.scripts.scripts_txt2img, payload)
 
-    proc = txt2img_create_processing(
-        id_task,
-        request,
-        prompt,
-        negative_prompt,
-        prompt_styles,
-        n_iter,
-        batch_size,
-        cfg_scale,
-        distilled_cfg_scale,
-        height,
-        width,
-        enable_hr,
-        denoising_strength,
-        hr_scale,
-        hr_upscaler,
-        hr_second_pass_steps,
-        hr_resize_x,
-        hr_resize_y,
-        hr_checkpoint_name,
-        hr_additional_modules,
-        hr_sampler_name,
-        hr_scheduler,
-        hr_prompt,
-        hr_negative_prompt,
-        hr_cfg,
-        hr_distilled_cfg,
-        override_settings_texts,
-        *script_args_payload,
+    # Build Codex request (no legacy processing path)
+    req = Txt2ImgRequest(
+        task=TaskType.TXT2IMG,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        width=width,
+        height=height,
+        steps=steps,
+        guidance_scale=cfg_scale,
+        sampler=str(sampler_name),
+        scheduler=str(scheduler_name),
+        seed=seed,
+        batch_size=batch_size,
+        metadata={
+            "mode": getattr(shared.opts, 'codex_mode', 'Normal'),
+            "styles": prompt_styles,
+            "distilled_cfg_scale": distilled_cfg_scale,
+            "hr": bool(enable_hr),
+        },
+        highres_fix={
+            "enable": bool(enable_hr),
+            "denoise": denoising_strength,
+            "scale": hr_scale,
+            "upscaler": hr_upscaler,
+            "steps": hr_second_pass_steps,
+            "resize_x": hr_resize_x,
+            "resize_y": hr_resize_y,
+            "hr_checkpoint_name": hr_checkpoint_name,
+            "hr_additional_modules": hr_additional_modules,
+            "hr_sampler_name": hr_sampler_name,
+            "hr_scheduler": hr_scheduler,
+            "hr_prompt": hr_prompt,
+            "hr_negative_prompt": hr_negative_prompt,
+            "hr_cfg": hr_cfg,
+            "hr_distilled_cfg": hr_distilled_cfg,
+        },
+        extras={},
     )
 
-    # Apply sampler core onto processing object
-    proc.steps = steps
-    proc.sampler_name = sampler_name
-    proc.scheduler = scheduler_name
-    proc.seed = seed
+    # Resolve engine/model from Quicksettings
+    engine_key = getattr(shared.opts, 'codex_engine', 'sd15')
+    model_ref = getattr(shared.opts, 'sd_model_checkpoint', None)
 
-    with closing(proc):
-        processed = modules.scripts.scripts_txt2img.run(proc, *proc.script_args)
-        if processed is None:
-            processed = processing.process_images(proc)
+    orch = InferenceOrchestrator()
+    images = []
+    info_js = "{}"
+    for ev in orch.run(TaskType.TXT2IMG, str(engine_key), req, model_ref=model_ref):
+        if isinstance(ev, ResultEvent):
+            payload = ev.payload or {}
+            images = payload.get("images", [])
+            info_js = payload.get("info", "{}")
 
-    shared.total_tqdm.clear()
-
-    generation_info_js = processed.js()
-    if opts.samples_log_stdout:
-        print(generation_info_js)
-
+    # Honor UI options
     if opts.do_not_show_images:
-        processed.images = []
+        images = []
 
-    return processed.images + processed.extra_images, generation_info_js, plaintext_to_html(processed.info), plaintext_to_html(processed.comments, classname="comments")
+    return images, info_js, plaintext_to_html(""), plaintext_to_html("", classname="comments")
 
 
 def txt2img_from_json(id_task: str, request: gr.Request, payload, *script_args):
