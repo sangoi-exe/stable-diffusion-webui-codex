@@ -1534,9 +1534,189 @@ def create_ui():
 
     settings.create_ui(loadsave, dummy_component)
 
+    # Video tabs (Txt2Vid / Img2Vid)
+    with gr.Blocks(analytics_enabled=False) as txt2vid_interface:
+        toprow = ui_toprow.Toprow(is_img2img=False, is_compact=shared.opts.compact_prompt_box)
+        with gr.Row(variant='compact'):
+            with gr.Column():
+                with gr.Row():
+                    txt2vid_width = gr.Slider(minimum=256, maximum=2048, step=8, label="Width", value=768, elem_id="txt2vid_width")
+                    txt2vid_height = gr.Slider(minimum=256, maximum=2048, step=8, label="Height", value=432, elem_id="txt2vid_height")
+                with gr.Row():
+                    txt2vid_steps = gr.Slider(minimum=1, maximum=100, step=1, label="Steps", value=12, elem_id="txt2vid_steps")
+                    txt2vid_fps = gr.Slider(minimum=1, maximum=60, step=1, label="FPS", value=24, elem_id="txt2vid_fps")
+                    txt2vid_num_frames = gr.Slider(minimum=8, maximum=256, step=1, label="Frames", value=16, elem_id="txt2vid_num_frames")
+            with gr.Column():
+                from backend.core.engine_interface import TaskType as _TaskType
+                from backend.core.sampler_policy import allowed_samplers as _allowed_samplers, allowed_schedulers as _allowed_schedulers
+                _engine = getattr(shared.opts, 'codex_engine', 'sd15')
+                _samplers = _allowed_samplers(str(_engine), _TaskType.TXT2VID)
+                _schedulers = _allowed_schedulers(str(_engine), _TaskType.TXT2VID)
+                with gr.Row():
+                    txt2vid_sampling = gr.Dropdown(label='Sampling method', elem_id=f"txt2vid_sampling", choices=_samplers, value=_samplers[0] if _samplers else "Euler a")
+                    txt2vid_scheduler = gr.Dropdown(label='Schedule type', elem_id=f"txt2vid_scheduler", choices=_schedulers, value=_schedulers[0] if _schedulers else "Automatic")
+                with gr.Row():
+                    txt2vid_seed = gr.Number(label='Seed', value=-1, elem_id="txt2vid_seed")
+        output_panel_vtxt = create_output_panel("txt2vid", opts.outdir_txt2img_samples, toprow)
+        named_active_txt2vid = gr.Textbox(value="", visible=False, elem_id="txt2vid_named_active")
+        submit_txt2vid_inputs = [
+            output_panel_vtxt.gallery_index,  # dummy id_task
+            toprow.prompt,
+            toprow.negative_prompt,
+            toprow.ui_styles.dropdown,
+            txt2vid_width,
+            txt2vid_height,
+            txt2vid_steps,
+            txt2vid_fps,
+            txt2vid_num_frames,
+            txt2vid_sampling,
+            txt2vid_scheduler,
+            txt2vid_seed,
+        ] + [named_active_txt2vid]
+
+        def _txt2vid_submit(*args, **kwargs):
+            if not args:
+                raise RuntimeError("Missing arguments for txt2vid submit")
+            id_task = args[0]
+            request = kwargs.get('request')
+            import json as _json
+            strict_idx = len(args) - 1
+            cand = args[strict_idx] if len(args) >= 2 else None
+            payload = _json.loads(cand) if isinstance(cand, str) else cand
+            if not (isinstance(payload, dict) and payload.get('__strict_version') == 1):
+                raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
+            return modules.txt2vid.txt2vid_from_json(id_task, request, payload)
+
+        txt2vid_args = dict(
+            fn=wrap_gradio_gpu_call(_txt2vid_submit, extra_outputs=[None, '', '']),
+            inputs=submit_txt2vid_inputs,
+            outputs=[
+                output_panel_vtxt.gallery,
+                output_panel_vtxt.generation_info,
+                output_panel_vtxt.infotext,
+                output_panel_vtxt.html_log,
+            ],
+            show_progress='hidden',
+            concurrency_limit=1,
+        )
+        toprow.prompt.submit(_js="submit_txt2vid_named", **txt2vid_args)
+        toprow.submit.click(_js="submit_txt2vid_named", **txt2vid_args)
+
+        # Filter video samplers/schedulers on engine change
+        try:
+            from modules_forge.main_entry import ui_codex_engine as _engine_dd
+            from backend.core.engine_interface import TaskType as _TaskType
+            from backend.core.sampler_policy import allowed_samplers as _allowed_samplers, allowed_schedulers as _allowed_schedulers
+
+            def _update_vtxt(engine: str):
+                ek = engine or getattr(shared.opts, 'codex_engine', 'sd15')
+                sn = _allowed_samplers(str(ek), _TaskType.TXT2VID)
+                sc = _allowed_schedulers(str(ek), _TaskType.TXT2VID)
+                return (
+                    gr.update(choices=sn, value=sn[0] if sn else None),
+                    gr.update(choices=sc, value=sc[0] if sc else None),
+                )
+
+            if _engine_dd is not None:
+                _engine_dd.change(_update_vtxt, inputs=[_engine_dd], outputs=[txt2vid_sampling, txt2vid_scheduler], queue=False, show_progress=False)
+        except Exception:
+            pass
+
+    with gr.Blocks(analytics_enabled=False) as img2vid_interface:
+        toprow = ui_toprow.Toprow(is_img2img=False, is_compact=shared.opts.compact_prompt_box)
+        with gr.Row(variant='compact'):
+            with gr.Column():
+                img2vid_init = gr.Image(label="Init image", source="upload", interactive=True, type="pil", elem_id="img2vid_image")
+                with gr.Row():
+                    img2vid_width = gr.Slider(minimum=256, maximum=2048, step=8, label="Width", value=768, elem_id="img2vid_width")
+                    img2vid_height = gr.Slider(minimum=256, maximum=2048, step=8, label="Height", value=432, elem_id="img2vid_height")
+                with gr.Row():
+                    img2vid_steps = gr.Slider(minimum=1, maximum=100, step=1, label="Steps", value=12, elem_id="img2vid_steps")
+                    img2vid_fps = gr.Slider(minimum=1, maximum=60, step=1, label="FPS", value=24, elem_id="img2vid_fps")
+                    img2vid_num_frames = gr.Slider(minimum=8, maximum=256, step=1, label="Frames", value=16, elem_id="img2vid_num_frames")
+            with gr.Column():
+                from backend.core.engine_interface import TaskType as _TaskType
+                from backend.core.sampler_policy import allowed_samplers as _allowed_samplers, allowed_schedulers as _allowed_schedulers
+                _engine = getattr(shared.opts, 'codex_engine', 'sd15')
+                _samplers = _allowed_samplers(str(_engine), _TaskType.IMG2VID)
+                _schedulers = _allowed_schedulers(str(_engine), _TaskType.IMG2VID)
+                with gr.Row():
+                    img2vid_sampling = gr.Dropdown(label='Sampling method', elem_id=f"img2vid_sampling", choices=_samplers, value=_samplers[0] if _samplers else "Euler a")
+                    img2vid_scheduler = gr.Dropdown(label='Schedule type', elem_id=f"img2vid_scheduler", choices=_schedulers, value=_schedulers[0] if _schedulers else "Automatic")
+                with gr.Row():
+                    img2vid_seed = gr.Number(label='Seed', value=-1, elem_id="img2vid_seed")
+        output_panel_vimg = create_output_panel("img2vid", opts.outdir_img2img_samples, toprow)
+        named_active_img2vid = gr.Textbox(value="", visible=False, elem_id="img2vid_named_active")
+        submit_img2vid_inputs = [
+            output_panel_vimg.gallery_index,
+            toprow.prompt,
+            toprow.negative_prompt,
+            toprow.ui_styles.dropdown,
+            img2vid_init,
+            img2vid_width,
+            img2vid_height,
+            img2vid_steps,
+            img2vid_fps,
+            img2vid_num_frames,
+            img2vid_sampling,
+            img2vid_scheduler,
+            img2vid_seed,
+        ] + [named_active_img2vid]
+
+        def _img2vid_submit(*args, **kwargs):
+            if not args:
+                raise RuntimeError("Missing arguments for img2vid submit")
+            id_task = args[0]
+            request = kwargs.get('request')
+            init_image = args[4] if len(args) > 4 else None
+            import json as _json
+            strict_idx = len(args) - 1
+            cand = args[strict_idx] if len(args) >= 2 else None
+            payload = _json.loads(cand) if isinstance(cand, str) else cand
+            if not (isinstance(payload, dict) and payload.get('__strict_version') == 1):
+                raise ValueError("Invalid or missing __strict_version in payload; frontend must send strict JSON")
+            return modules.img2vid.img2vid_from_json(id_task, request, init_image, payload)
+
+        img2vid_args = dict(
+            fn=wrap_gradio_gpu_call(_img2vid_submit, extra_outputs=[None, '', '']),
+            inputs=submit_img2vid_inputs,
+            outputs=[
+                output_panel_vimg.gallery,
+                output_panel_vimg.generation_info,
+                output_panel_vimg.infotext,
+                output_panel_vimg.html_log,
+            ],
+            show_progress='hidden',
+            concurrency_limit=1,
+        )
+        toprow.prompt.submit(_js="submit_img2vid_named", **img2vid_args)
+        toprow.submit.click(_js="submit_img2vid_named", **img2vid_args)
+
+        # Filter img2vid samplers/schedulers on engine change
+        try:
+            from modules_forge.main_entry import ui_codex_engine as _engine_dd
+            from backend.core.engine_interface import TaskType as _TaskType
+            from backend.core.sampler_policy import allowed_samplers as _allowed_samplers, allowed_schedulers as _allowed_schedulers
+
+            def _update_vimg(engine: str):
+                ek = engine or getattr(shared.opts, 'codex_engine', 'sd15')
+                sn = _allowed_samplers(str(ek), _TaskType.IMG2VID)
+                sc = _allowed_schedulers(str(ek), _TaskType.IMG2VID)
+                return (
+                    gr.update(choices=sn, value=sn[0] if sn else None),
+                    gr.update(choices=sc, value=sc[0] if sc else None),
+                )
+
+            if _engine_dd is not None:
+                _engine_dd.change(_update_vimg, inputs=[_engine_dd], outputs=[img2vid_sampling, img2vid_scheduler], queue=False, show_progress=False)
+        except Exception:
+            pass
+
     interfaces = [
         (txt2img_interface, "Txt2img", "txt2img"),
         (img2img_interface, "Img2img", "img2img"),
+        (txt2vid_interface, "Txt2Vid", "txt2vid"),
+        (img2vid_interface, "Img2Vid", "img2vid"),
         (extras_interface, "Extras", "extras"),
         (pnginfo_interface, "PNG Info", "pnginfo"),
         (modelmerger_ui.blocks, "Checkpoint Merger", "modelmerger"),

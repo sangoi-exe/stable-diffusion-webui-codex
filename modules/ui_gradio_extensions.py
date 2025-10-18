@@ -40,6 +40,8 @@ def _parse_js_allowlist():
             "progressbar.js",
             "settings.js",
             "localization.js",
+            "codex.components.core.js",
+            "codex.components.sampler.js",
             "imageviewer.js",
             "resizeHandle.js",
             "hints.js",

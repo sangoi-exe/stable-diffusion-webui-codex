@@ -1,6 +1,8 @@
 import gradio as gr
 
 from backend.diffusion_engine.flux_config import FLUX_DROPDOWN_KEYS, build_flux_option_info
+from backend.core.engine_interface import TaskType
+from backend.core.sampler_policy import allowed_samplers, allowed_schedulers
 from modules import scripts, sd_samplers, sd_schedulers, shared
 from modules.infotext_utils import PasteField
 from modules.ui_components import FormRow, FormGroup
@@ -18,8 +20,11 @@ class ScriptSampler(scripts.ScriptBuiltinUI):
         return "Sampler"
 
     def ui(self, is_img2img):
-        sampler_names = [x.name for x in sd_samplers.visible_samplers()]
-        scheduler_names = [x.label for x in sd_schedulers.schedulers]
+        engine_key = getattr(shared.opts, 'codex_engine', 'sd15')
+        task = TaskType.IMG2IMG if is_img2img else TaskType.TXT2IMG
+        # Use backend policy for UI lists; fall back to sd_* if needed
+        sampler_names = allowed_samplers(str(engine_key), task)
+        scheduler_names = allowed_schedulers(str(engine_key), task)
 
         preset = getattr(shared.opts, 'forge_preset', 'all')
         def _defaults(tab: str):
@@ -86,6 +91,25 @@ class ScriptSampler(scripts.ScriptBuiltinUI):
                 ),
             )
         )
+
+        # Bind engine change to filter choices
+        try:
+            from modules_forge.main_entry import ui_codex_engine as _engine_dd
+
+            def _update(engine: str):
+                ek = engine or getattr(shared.opts, 'codex_engine', 'sd15')
+                sn = allowed_samplers(str(ek), task)
+                sc = allowed_schedulers(str(ek), task)
+                return (
+                    gr.update(choices=sn, value=sn[0] if sn else None),
+                    gr.update(choices=sc, value=sc[0] if sc else None),
+                )
+
+            if _engine_dd is not None and self.sampler_name is not None and self.scheduler is not None:
+                _engine_dd.change(_update, inputs=[_engine_dd], outputs=[self.sampler_name, self.scheduler], queue=False, show_progress=False)
+        except Exception:
+            # If engine dropdown is not available here, UI will still honor policy at render time.
+            pass
 
         return self.steps, self.sampler_name, self.scheduler
 
