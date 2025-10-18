@@ -16,4 +16,4 @@
 - Test: Added Playwright variant `scripts/ui_headless_click_pw.sh` + `tools/ui-click-generate.playwright.mjs` with local browsers cache.
 - Fix: VAE/Text Encoder dropdown wouldn’t open due to global `.hidden { display: none !important; }` override. Removed the rule from `style.css`; dropdown overlays now render correctly under Gradio 5 while keeping overflow visible via `div.gradio-dropdown { overflow: visible !important; }`.
 - UI: Removed legacy combined selector. Split Hires selector into `Hires VAE` (single) and `Hires Text Encoder(s)` (multi); kept hidden compatibility field `hr_vae_te` to preserve payload shape (`modules/ui.py`).
- - UI: Added stable element ids `forge_vae` and `forge_text_encoders` to quicksettings controls for easier debugging/automation (`modules_forge/main_entry.py`).
+ - UI: Quicksettings VAE (`sd_vae`) and Text Encoders (`sd_text_encoders`) now render unconditionally inside Quicksettings row; removed `render=False` and explicit `.render()` calls to avoid duplicate/hidden components. Element ids updated to `sd_vae` and `sd_text_encoders`.
