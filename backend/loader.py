@@ -121,7 +121,8 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                 comp._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None
             return comp
         if cls_name in ['AutoencoderKL']:
-            assert isinstance(state_dict, dict) and len(state_dict) > 16, 'You do not have VAE state dict!'
+            from collections.abc import Mapping
+            assert isinstance(state_dict, Mapping) and len(state_dict) > 16, 'You do not have VAE state dict!'
 
             config = IntegratedAutoencoderKL.load_config(config_path)
 
@@ -133,7 +134,8 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
             load_state_dict(model, state_dict, ignore_start='loss.')
             return model
         if component_name.startswith('text_encoder') and cls_name in ['CLIPTextModel', 'CLIPTextModelWithProjection']:
-            assert isinstance(state_dict, dict) and len(state_dict) > 16, 'You do not have CLIP state dict!'
+            from collections.abc import Mapping
+            assert isinstance(state_dict, Mapping) and len(state_dict) > 16, 'You do not have CLIP state dict!'
 
             from transformers import CLIPTextConfig, CLIPTextModel
             config = CLIPTextConfig.from_pretrained(config_path)
@@ -152,7 +154,8 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
 
             return model
         if cls_name == 'T5EncoderModel':
-            assert isinstance(state_dict, dict) and len(state_dict) > 16, 'You do not have T5 state dict!'
+            from collections.abc import Mapping
+            assert isinstance(state_dict, Mapping) and len(state_dict) > 16, 'You do not have T5 state dict!'
 
             from backend.nn.t5 import IntegratedT5
             config = read_arbitrary_config(config_path)
@@ -183,7 +186,8 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
 
             return model
         if cls_name in ['UNet2DConditionModel', 'FluxTransformer2DModel', 'SD3Transformer2DModel', 'ChromaTransformer2DModel']:
-            assert isinstance(state_dict, dict) and len(state_dict) > 16, 'You do not have model state dict!'
+            from collections.abc import Mapping
+            assert isinstance(state_dict, Mapping) and len(state_dict) > 16, 'You do not have model state dict!'
 
             model_loader = None
             if cls_name == 'UNet2DConditionModel':
