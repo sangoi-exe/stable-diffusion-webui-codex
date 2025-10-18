@@ -277,8 +277,13 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                         model = model_loader(unet_config).to(**to_args)
 
             _trace.event("load_state_dict", module="unet", tensors=len(state_dict))
-            # Use the module's own _load_from_state_dict hooks (required for our patched Linear)
-            load_state_dict(model, state_dict, log_name="UNet")
+            # Use safe tensor-by-tensor loader to avoid native crashes; our
+            # patched Linear registers parameters so keys will be found.
+            try:
+                from .state_dict import safe_load_state_dict as _safe_load
+                _safe_load(model, state_dict, log_name="UNet")
+            except Exception:
+                load_state_dict(model, state_dict, log_name="UNet")
 
             if hasattr(model, '_internal_dict'):
                 model._internal_dict = unet_config

@@ -126,43 +126,20 @@ class ForgeOperations:
     class Linear(torch.nn.Module):
         def __init__(self, in_features, out_features, *args, **kwargs):
             super().__init__()
-            self.in_features = in_features
-            self.out_features = out_features
-            self.dummy = torch.nn.Parameter(torch.empty(1, device=current_device, dtype=current_dtype))
-            self.weight = None
-            # Keep metadata to allow fallback initialization if weights
-            # are missing in the checkpoint after load_state_dict.
+            # Metadata
             self.in_features = int(in_features)
             self.out_features = int(out_features)
             self.has_bias = bool(kwargs.get('bias', True))
 
-            # Register a tiny placeholder tensor to signal our custom
-            # _load_from_state_dict to take over and materialize real params
-            # from the incoming state_dict.
-            self.dummy = torch.nn.Parameter(torch.empty(1, device=current_device, dtype=current_dtype))
-            self.weight = None
+            # Register parameters so model.state_dict() can see them and loaders can populate.
+            device = current_device
+            dtype = current_dtype
+            w = torch.empty((self.out_features, self.in_features), device=device, dtype=dtype)
+            torch.nn.init.xavier_uniform_(w)
+            self.weight = torch.nn.Parameter(w)
+            self.bias = torch.nn.Parameter(torch.zeros((self.out_features,), device=device, dtype=dtype)) if self.has_bias else None
             self.scale_weight = None
-            self.bias = None
             self.parameters_manual_cast = current_manual_cast_enabled
-
-        def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-            # Always attempt explicit param assign to avoid relying on Module's default
-            # (we don't register parameters until now).
-            if prefix + 'weight' in state_dict:
-                w = state_dict[prefix + 'weight']
-                device = getattr(self.dummy, 'device', current_device)
-                dtype = getattr(self.dummy, 'dtype', current_dtype)
-                self.weight = torch.nn.Parameter(w.to(device=device, dtype=dtype))
-                if prefix + 'scale_weight' in state_dict:
-                    self.scale_weight = torch.nn.Parameter(state_dict[prefix + 'scale_weight'].to(device=device))
-                if prefix + 'bias' in state_dict:
-                    b = state_dict[prefix + 'bias']
-                    self.bias = torch.nn.Parameter(b.to(device=device, dtype=dtype))
-                if hasattr(self, 'dummy'):
-                    del self.dummy
-                return
-            # Fallback to default behavior
-            super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
 
         def _ensure_params(self, device, dtype):
             if self.weight is not None:
@@ -177,11 +154,6 @@ class ForgeOperations:
                 self.bias = torch.nn.Parameter(b)
             else:
                 self.bias = None
-            if hasattr(self, 'dummy'):
-                try:
-                    del self.dummy
-                except Exception:
-                    pass
 
         def forward(self, x):
             # Ensure we have materialized params even if checkpoint lacked matches
