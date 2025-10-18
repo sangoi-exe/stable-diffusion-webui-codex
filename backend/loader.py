@@ -584,6 +584,14 @@ if not chroma_is_in_huggingface_guess:
 def forge_loader(sd, additional_state_dicts=None):
     try:
         state_dicts, estimated_config = split_state_dict(sd, additional_state_dicts=additional_state_dicts)
+        try:
+            _trace.event(
+                "split_state_dict_done",
+                parts=list(state_dicts.keys()),
+                sizes={k: (len(v) if hasattr(v, "__len__") else -1) for k, v in state_dicts.items()},
+            )
+        except Exception:
+            pass
     except:
         raise ValueError('Failed to recognize model type!')
     

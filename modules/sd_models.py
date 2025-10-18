@@ -515,7 +515,8 @@ def forge_model_reload():
     dynamic_args['embedding_dir'] = cmd_opts.embeddings_dir
     dynamic_args['emphasis_name'] = opts.emphasis
     with trace_section("forge_loader"):
-        event("split_state_dict_done", keys=len(state_dict.keys()), add=len(additional_state_dicts or []))
+        # 'state_dict' aqui é um caminho (str). Apenas sinalize início.
+        event("split_state_dict_start", path=str(state_dict), add=len(additional_state_dicts or []))
         sd_model = forge_loader(state_dict, additional_state_dicts=additional_state_dicts)
     timer.record("forge model load")
 
