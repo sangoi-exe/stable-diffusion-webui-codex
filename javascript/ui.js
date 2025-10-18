@@ -520,50 +520,57 @@ function buildNamedTxt2img(_args) {
     /** @type {string[]} */
     const active = [];
     // Core
-    named['txt2img_prompt'] = readText('txt2img_prompt'); active.push('txt2img_prompt');
-    named['txt2img_neg_prompt'] = readText('txt2img_neg_prompt'); active.push('txt2img_neg_prompt');
-    named['txt2img_styles'] = readDropdownValue('txt2img_styles') || []; active.push('txt2img_styles');
-    named['txt2img_batch_count'] = readInt('txt2img_batch_count'); active.push('txt2img_batch_count');
-    named['txt2img_batch_size'] = readInt('txt2img_batch_size'); active.push('txt2img_batch_size');
-    named['txt2img_cfg_scale'] = readFloat('txt2img_cfg_scale'); active.push('txt2img_cfg_scale');
+    const R = (window.Codex && window.Codex.Components && window.Codex.Components.Readers) || null;
+    const rText = R ? R.readText : readText;
+    const rDD = R ? R.readDropdownValue : readDropdownValue;
+    const rDDR = R ? R.readDropdownOrRadioValue : readDropdownOrRadioValue;
+    const rInt = R ? R.readInt : readInt;
+    const rFloat = R ? R.readFloat : readFloat;
+    const rSeed = R ? R.readSeedValue : readSeedValue;
+    named['txt2img_prompt'] = rText('txt2img_prompt'); active.push('txt2img_prompt');
+    named['txt2img_neg_prompt'] = rText('txt2img_neg_prompt'); active.push('txt2img_neg_prompt');
+    named['txt2img_styles'] = rDD('txt2img_styles') || []; active.push('txt2img_styles');
+    named['txt2img_batch_count'] = rInt('txt2img_batch_count'); active.push('txt2img_batch_count');
+    named['txt2img_batch_size'] = rInt('txt2img_batch_size'); active.push('txt2img_batch_size');
+    named['txt2img_cfg_scale'] = rFloat('txt2img_cfg_scale'); active.push('txt2img_cfg_scale');
     if (isInteractive('txt2img_distilled_cfg_scale')) {
-        named['txt2img_distilled_cfg_scale'] = readFloat('txt2img_distilled_cfg_scale'); active.push('txt2img_distilled_cfg_scale');
+        named['txt2img_distilled_cfg_scale'] = rFloat('txt2img_distilled_cfg_scale'); active.push('txt2img_distilled_cfg_scale');
     }
-    named['txt2img_height'] = readInt('txt2img_height'); active.push('txt2img_height');
-    named['txt2img_width'] = readInt('txt2img_width'); active.push('txt2img_width');
+    named['txt2img_height'] = rInt('txt2img_height'); active.push('txt2img_height');
+    named['txt2img_width'] = rInt('txt2img_width'); active.push('txt2img_width');
     const hrEnabled = readCheckbox('txt2img_hr_enable');
     named['txt2img_hr_enable'] = hrEnabled; active.push('txt2img_hr_enable');
     if (hrEnabled) {
-        named['txt2img_denoising_strength'] = readFloat('txt2img_denoising_strength'); active.push('txt2img_denoising_strength');
-        named['txt2img_hr_scale'] = readFloat('txt2img_hr_scale'); active.push('txt2img_hr_scale');
-        named['txt2img_hr_upscaler'] = readDropdownValue('txt2img_hr_upscaler'); active.push('txt2img_hr_upscaler');
-        named['txt2img_hires_steps'] = readInt('txt2img_hires_steps'); active.push('txt2img_hires_steps');
-        named['txt2img_hr_resize_x'] = readInt('txt2img_hr_resize_x'); active.push('txt2img_hr_resize_x');
-        named['txt2img_hr_resize_y'] = readInt('txt2img_hr_resize_y'); active.push('txt2img_hr_resize_y');
-        named['hr_checkpoint'] = readDropdownValue('hr_checkpoint'); active.push('hr_checkpoint');
-        named['hr_vae_te'] = readDropdownValue('hr_vae_te') || []; active.push('hr_vae_te');
-        named['hr_sampler'] = readDropdownValue('hr_sampler'); active.push('hr_sampler');
-        named['hr_scheduler'] = readDropdownValue('hr_scheduler'); active.push('hr_scheduler');
-        named['txt2img_hr_prompt'] = readText('hires_prompt'); active.push('txt2img_hr_prompt');
-        named['txt2img_hr_neg_prompt'] = readText('hires_neg_prompt'); active.push('txt2img_hr_neg_prompt');
-        named['txt2img_hr_cfg'] = readFloat('txt2img_hr_cfg'); active.push('txt2img_hr_cfg');
+        named['txt2img_denoising_strength'] = rFloat('txt2img_denoising_strength'); active.push('txt2img_denoising_strength');
+        named['txt2img_hr_scale'] = rFloat('txt2img_hr_scale'); active.push('txt2img_hr_scale');
+        named['txt2img_hr_upscaler'] = rDD('txt2img_hr_upscaler'); active.push('txt2img_hr_upscaler');
+        named['txt2img_hires_steps'] = rInt('txt2img_hires_steps'); active.push('txt2img_hires_steps');
+        named['txt2img_hr_resize_x'] = rInt('txt2img_hr_resize_x'); active.push('txt2img_hr_resize_x');
+        named['txt2img_hr_resize_y'] = rInt('txt2img_hr_resize_y'); active.push('txt2img_hr_resize_y');
+        named['hr_checkpoint'] = rDD('hr_checkpoint'); active.push('hr_checkpoint');
+        named['hr_vae_te'] = rDD('hr_vae_te') || []; active.push('hr_vae_te');
+        named['hr_sampler'] = rDD('hr_sampler'); active.push('hr_sampler');
+        named['hr_scheduler'] = rDD('hr_scheduler'); active.push('hr_scheduler');
+        named['txt2img_hr_prompt'] = rText('hires_prompt'); active.push('txt2img_hr_prompt');
+        named['txt2img_hr_neg_prompt'] = rText('hires_neg_prompt'); active.push('txt2img_hr_neg_prompt');
+        named['txt2img_hr_cfg'] = rFloat('txt2img_hr_cfg'); active.push('txt2img_hr_cfg');
         if (isInteractive('txt2img_hr_distilled_cfg')) {
-            named['txt2img_hr_distilled_cfg'] = readFloat('txt2img_hr_distilled_cfg'); active.push('txt2img_hr_distilled_cfg');
+            named['txt2img_hr_distilled_cfg'] = rFloat('txt2img_hr_distilled_cfg'); active.push('txt2img_hr_distilled_cfg');
         }
     }
     // Sampler & Scheduler (required)
-    named['txt2img_steps'] = readInt('txt2img_steps'); active.push('txt2img_steps');
-    named['txt2img_sampling'] = readDropdownOrRadioValue('txt2img_sampling'); active.push('txt2img_sampling');
-    named['txt2img_scheduler'] = readDropdownValue('txt2img_scheduler'); active.push('txt2img_scheduler');
+    named['txt2img_steps'] = rInt('txt2img_steps'); active.push('txt2img_steps');
+    named['txt2img_sampling'] = rDDR('txt2img_sampling'); active.push('txt2img_sampling');
+    named['txt2img_scheduler'] = rDD('txt2img_scheduler'); active.push('txt2img_scheduler');
     // Seed + variation (only include extras if enabled)
-    named['txt2img_seed'] = readSeedValue('txt2img_seed'); active.push('txt2img_seed');
+    named['txt2img_seed'] = rSeed('txt2img_seed'); active.push('txt2img_seed');
     const showVar = readCheckbox('txt2img_subseed_show');
     if (showVar) {
         named['txt2img_subseed_show'] = true; active.push('txt2img_subseed_show');
-        named['txt2img_subseed'] = readInt('txt2img_subseed'); active.push('txt2img_subseed');
-        named['txt2img_subseed_strength'] = readFloat('txt2img_subseed_strength'); active.push('txt2img_subseed_strength');
-        named['txt2img_seed_resize_from_w'] = readInt('txt2img_seed_resize_from_w'); active.push('txt2img_seed_resize_from_w');
-        named['txt2img_seed_resize_from_h'] = readInt('txt2img_seed_resize_from_h'); active.push('txt2img_seed_resize_from_h');
+        named['txt2img_subseed'] = rInt('txt2img_subseed'); active.push('txt2img_subseed');
+        named['txt2img_subseed_strength'] = rFloat('txt2img_subseed_strength'); active.push('txt2img_subseed_strength');
+        named['txt2img_seed_resize_from_w'] = rInt('txt2img_seed_resize_from_w'); active.push('txt2img_seed_resize_from_w');
+        named['txt2img_seed_resize_from_h'] = rInt('txt2img_seed_resize_from_h'); active.push('txt2img_seed_resize_from_h');
     }
     named['__active_ids'] = active;
     // Dynamic Thresholding (always-on extension). Only include if enabled.
@@ -635,33 +642,40 @@ function buildNamedImg2img(_args) {
     const named = { __strict_version: 1, __source: 'img2img' };
     /** @type {string[]} */
     const active = [];
-    named['img2img_prompt'] = readText('img2img_prompt'); active.push('img2img_prompt');
-    named['img2img_neg_prompt'] = readText('img2img_neg_prompt'); active.push('img2img_neg_prompt');
-    named['img2img_styles'] = readDropdownValue('img2img_styles') || []; active.push('img2img_styles');
-    named['img2img_batch_count'] = readInt('img2img_batch_count'); active.push('img2img_batch_count');
-    named['img2img_batch_size'] = readInt('img2img_batch_size'); active.push('img2img_batch_size');
-    named['img2img_cfg_scale'] = readFloat('img2img_cfg_scale'); active.push('img2img_cfg_scale');
-    named['img2img_distilled_cfg_scale'] = readFloat('img2img_distilled_cfg_scale'); active.push('img2img_distilled_cfg_scale');
-    named['img2img_image_cfg_scale'] = readFloat('img2img_image_cfg_scale'); active.push('img2img_image_cfg_scale');
-    named['img2img_denoising_strength'] = readFloat('img2img_denoising_strength'); active.push('img2img_denoising_strength');
+    const R2 = (window.Codex && window.Codex.Components && window.Codex.Components.Readers) || null;
+    const r2Text = R2 ? R2.readText : readText;
+    const r2DD = R2 ? R2.readDropdownValue : readDropdownValue;
+    const r2DDR = R2 ? R2.readDropdownOrRadioValue : readDropdownOrRadioValue;
+    const r2Int = R2 ? R2.readInt : readInt;
+    const r2Float = R2 ? R2.readFloat : readFloat;
+    const r2Seed = R2 ? R2.readSeedValue : readSeedValue;
+    named['img2img_prompt'] = r2Text('img2img_prompt'); active.push('img2img_prompt');
+    named['img2img_neg_prompt'] = r2Text('img2img_neg_prompt'); active.push('img2img_neg_prompt');
+    named['img2img_styles'] = r2DD('img2img_styles') || []; active.push('img2img_styles');
+    named['img2img_batch_count'] = r2Int('img2img_batch_count'); active.push('img2img_batch_count');
+    named['img2img_batch_size'] = r2Int('img2img_batch_size'); active.push('img2img_batch_size');
+    named['img2img_cfg_scale'] = r2Float('img2img_cfg_scale'); active.push('img2img_cfg_scale');
+    named['img2img_distilled_cfg_scale'] = r2Float('img2img_distilled_cfg_scale'); active.push('img2img_distilled_cfg_scale');
+    named['img2img_image_cfg_scale'] = r2Float('img2img_image_cfg_scale'); active.push('img2img_image_cfg_scale');
+    named['img2img_denoising_strength'] = r2Float('img2img_denoising_strength'); active.push('img2img_denoising_strength');
     named['img2img_selected_scale_tab'] = get_tab_index('img2img_tabs_resize'); active.push('img2img_selected_scale_tab');
-    named['img2img_height'] = readInt('img2img_height'); active.push('img2img_height');
-    named['img2img_width'] = readInt('img2img_width'); active.push('img2img_width');
-    named['img2img_scale_by'] = readFloat('img2img_scale'); active.push('img2img_scale_by');
+    named['img2img_height'] = r2Int('img2img_height'); active.push('img2img_height');
+    named['img2img_width'] = r2Int('img2img_width'); active.push('img2img_width');
+    named['img2img_scale_by'] = r2Float('img2img_scale'); active.push('img2img_scale_by');
     named['img2img_resize_mode'] = readRadioIndex('resize_mode'); active.push('img2img_resize_mode');
     // Sampler & Scheduler
-    named['img2img_steps'] = readInt('img2img_steps'); active.push('img2img_steps');
-    named['img2img_sampling'] = readDropdownOrRadioValue('img2img_sampling'); active.push('img2img_sampling');
-    named['img2img_scheduler'] = readDropdownValue('img2img_scheduler'); active.push('img2img_scheduler');
+    named['img2img_steps'] = r2Int('img2img_steps'); active.push('img2img_steps');
+    named['img2img_sampling'] = r2DDR('img2img_sampling'); active.push('img2img_sampling');
+    named['img2img_scheduler'] = r2DD('img2img_scheduler'); active.push('img2img_scheduler');
     // Seed + variation
-    named['img2img_seed'] = readSeedValue('img2img_seed'); active.push('img2img_seed');
+    named['img2img_seed'] = r2Seed('img2img_seed'); active.push('img2img_seed');
     const showVarI2I = readCheckbox('img2img_subseed_show');
     if (showVarI2I) {
         named['img2img_subseed_show'] = true; active.push('img2img_subseed_show');
-        named['img2img_subseed'] = readInt('img2img_subseed'); active.push('img2img_subseed');
-        named['img2img_subseed_strength'] = readFloat('img2img_subseed_strength'); active.push('img2img_subseed_strength');
-        named['img2img_seed_resize_from_w'] = readInt('img2img_seed_resize_from_w'); active.push('img2img_seed_resize_from_w');
-        named['img2img_seed_resize_from_h'] = readInt('img2img_seed_resize_from_h'); active.push('img2img_seed_resize_from_h');
+        named['img2img_subseed'] = r2Int('img2img_subseed'); active.push('img2img_subseed');
+        named['img2img_subseed_strength'] = r2Float('img2img_subseed_strength'); active.push('img2img_subseed_strength');
+        named['img2img_seed_resize_from_w'] = r2Int('img2img_seed_resize_from_w'); active.push('img2img_seed_resize_from_w');
+        named['img2img_seed_resize_from_h'] = r2Int('img2img_seed_resize_from_h'); active.push('img2img_seed_resize_from_h');
     }
     const tab = get_tab_index('mode_img2img');
     if ([2,3,4].includes(tab)) {
