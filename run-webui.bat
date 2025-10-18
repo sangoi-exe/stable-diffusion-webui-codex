@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >NUL 2>&1
-title Stable Diffusion WebUI — Codex Launcher
+title Stable Diffusion WebUI - Codex Launcher
 color 0A
 
 REM Repo root (folder of this script)
@@ -22,7 +22,10 @@ if errorlevel 1 (
 )
 
 REM 2) Check Python version (Windows builds target 3.10)
-for /f %%v in ('python -c "import sys;print(str(sys.version_info.major)+'.'+str(sys.version_info.minor))"') do set PYVER=%%v
+set "_TMPVER=%TEMP%\codex_pyver_%RANDOM%.txt"
+python -c "import sys;print(str(sys.version_info.major)+'.'+str(sys.version_info.minor))" > "%_TMPVER%" 2>NUL
+set /p PYVER=<"%_TMPVER%"
+del /q "%_TMPVER%" >NUL 2>&1
 if not "%PYVER%"=="3.10" (
   echo [ERROR] Detected Python %PYVER%. Windows build requires Python 3.10.x.
   echo         Please install Python 3.10 (64-bit) and ensure it is first in PATH.
@@ -104,4 +107,3 @@ if not %RUNERR%==0 (
 
 popd
 exit /b 0
-
