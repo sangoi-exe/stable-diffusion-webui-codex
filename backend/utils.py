@@ -64,12 +64,20 @@ class FilterPrefixView(MutableMapping):
         self._new_prefix = new_prefix
 
     def _to_base_key(self, k: str) -> str:
-        if self._new_prefix and k.startswith(self._new_prefix):
-            return self._prefix + k[len(self._new_prefix):]
-        if not self._new_prefix and k.startswith(self._prefix):
-            return k
-        # Accept direct pass-through for loaders that query with base keys
-        return k
+        # Map presented key 'k' back to the underlying base mapping key.
+        if self._new_prefix:
+            if k.startswith(self._new_prefix):
+                return self._prefix + k[len(self._new_prefix):]
+            # If caller already uses base prefix, pass-through
+            if k.startswith(self._prefix):
+                return k
+            # Fallback: assume k is suffix; prepend prefix
+            return self._prefix + k
+        else:
+            # Presented keys are suffix-only; base keys use prefix
+            if k.startswith(self._prefix):
+                return k
+            return self._prefix + k
 
     def __getitem__(self, k: str):
         return self._base[self._to_base_key(k)]

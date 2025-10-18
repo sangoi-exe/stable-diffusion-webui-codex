@@ -608,8 +608,8 @@ def split_state_dict(sd, additional_state_dicts: list = None):
 
     _trace.event("filter_clip_start")
     for k, v in guess.clip_target.items():
-        # CLIP weights in our IntegratedCLIP expect keys prefixed with 'transformer.'
-        state_dict[v] = try_filter_state_dict(sd, [k + '.'], new_prefix='transformer.')
+        # Present CLIP keys as expected by model; most SDXL weights already use 'transformer.'
+        state_dict[v] = try_filter_state_dict(sd, [k + '.'], new_prefix='')
     _trace.event("filter_clip_done")
 
     state_dict['ignore'] = sd
