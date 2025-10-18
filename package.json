@@ -2,7 +2,9 @@
   "name": "stable-diffusion-webui",
   "version": "0.0.0",
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "eslint": "^8.40.0",
+    "puppeteer": "^24.25.0",
     "typescript": "^5.6.3"
   },
   "scripts": {

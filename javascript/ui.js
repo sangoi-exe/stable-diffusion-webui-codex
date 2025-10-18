@@ -491,11 +491,8 @@ function submit_named() {
         if (typeof strict !== 'object' || strict === null) {
             strict = { __strict_version: 1, __source: 'txt2img', __builder_error: 'builder returned non-object' };
         }
-        try {
-            res[res.length - 1] = JSON.stringify(strict);
-        } catch (_) {
-            res[res.length - 1] = '{"__strict_version":1,"__source":"txt2img","__builder_error":"json_stringify_failed"}';
-        }
+        // Send object directly so gr.JSON receives a dict (not string)
+        res[res.length - 1] = strict;
     }
     return res;
 }
