@@ -650,6 +650,7 @@ function buildNamedImg2img(_args) {
     const r2Int = R2 ? R2.readInt : readInt;
     const r2Float = R2 ? R2.readFloat : readFloat;
     const r2Seed = R2 ? R2.readSeedValue : readSeedValue;
+    const r2RadioIndex = R2 ? R2.readRadioIndex : readRadioIndex;
     named['img2img_prompt'] = r2Text('img2img_prompt'); active.push('img2img_prompt');
     named['img2img_neg_prompt'] = r2Text('img2img_neg_prompt'); active.push('img2img_neg_prompt');
     named['img2img_styles'] = r2DD('img2img_styles') || []; active.push('img2img_styles');
@@ -680,12 +681,27 @@ function buildNamedImg2img(_args) {
     }
     const tab = get_tab_index('mode_img2img');
     if ([2,3,4].includes(tab)) {
-        named['img2img_mask_blur'] = readInt('img2img_mask_blur'); active.push('img2img_mask_blur');
-        named['img2img_mask_alpha'] = readFloat('img2img_mask_alpha'); active.push('img2img_mask_alpha');
-        named['img2img_inpainting_fill'] = readRadioIndex('img2img_inpainting_fill'); active.push('img2img_inpainting_fill');
-        named['img2img_inpaint_full_res'] = readRadioIndex('img2img_inpaint_full_res') === 1; active.push('img2img_inpaint_full_res');
-        named['img2img_inpaint_full_res_padding'] = readInt('img2img_inpaint_full_res_padding'); active.push('img2img_inpaint_full_res_padding');
-        named['img2img_inpainting_mask_invert'] = readRadioIndex('img2img_mask_mode'); active.push('img2img_inpainting_mask_invert');
+        named['img2img_mask_blur'] = r2Int('img2img_mask_blur'); active.push('img2img_mask_blur');
+        named['img2img_mask_alpha'] = r2Float('img2img_mask_alpha'); active.push('img2img_mask_alpha');
+        named['img2img_inpainting_fill'] = r2RadioIndex('img2img_inpainting_fill'); active.push('img2img_inpainting_fill');
+        named['img2img_inpaint_full_res'] = (r2RadioIndex('img2img_inpaint_full_res') === 1); active.push('img2img_inpaint_full_res');
+        named['img2img_inpaint_full_res_padding'] = r2Int('img2img_inpaint_full_res_padding'); active.push('img2img_inpaint_full_res_padding');
+        named['img2img_inpainting_mask_invert'] = r2RadioIndex('img2img_mask_mode'); active.push('img2img_inpainting_mask_invert');
+        // Normalize via Canvas component if present
+        try {
+            const CC = (window.Codex && window.Codex.Components && window.Codex.Components.Canvas) || null;
+            if (CC && typeof CC.getInpaint === 'function') {
+                const ci = CC.getInpaint();
+                if (ci) {
+                    named['img2img_mask_blur'] = ci.mask_blur;
+                    named['img2img_mask_alpha'] = ci.mask_alpha;
+                    named['img2img_inpainting_fill'] = ci.inpainting_fill;
+                    named['img2img_inpaint_full_res'] = !!ci.inpaint_full_res;
+                    named['img2img_inpaint_full_res_padding'] = ci.inpaint_full_res_padding;
+                    named['img2img_inpainting_mask_invert'] = ci.inpainting_mask_invert;
+                }
+            }
+        } catch {}
     }
     named['__active_ids'] = active;
     try {
