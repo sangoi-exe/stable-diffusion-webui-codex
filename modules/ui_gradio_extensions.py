@@ -126,19 +126,46 @@ def javascript_html():
     _assert_essentials()
 
     def _is_allowed(p: str) -> bool:
+        pathnorm = p.replace("\\", "/")
+        # Exclude any legacy assets from injection; legacy is reference-only
+        if "/legacy/" in pathnorm or pathnorm.startswith("legacy/"):
+            return False
+        base = posixpath.basename(pathnorm)
         if allow is None:
-            base = posixpath.basename(p.replace("\\", "/"))
             return base not in deny
-        base = posixpath.basename(p.replace("\\", "/"))
         return base in allow and base not in deny
 
-    for script in scripts.list_scripts("javascript", ".js"):
-        if _is_allowed(script.path):
-            head += f'<script type="text/javascript" src="{webpath(script.path)}"></script>\n'
+    def _select_best_by_basename(paths):
+        """Return dict basename -> chosen_path, preferring non-legacy paths."""
+        best = {}
+        for p in paths:
+            pathnorm = p.replace("\\", "/")
+            base = posixpath.basename(pathnorm)
+            if not _is_allowed(p):
+                continue
+            prev = best.get(base)
+            if prev is None:
+                best[base] = p
+                continue
+            # Prefer non-legacy over legacy if both exist
+            prev_is_legacy = ("/legacy/" in prev.replace("\\", "/") or prev.startswith("legacy/"))
+            cur_is_legacy = ("/legacy/" in pathnorm or pathnorm.startswith("legacy/"))
+            if prev_is_legacy and not cur_is_legacy:
+                best[base] = p
+        return best
 
-    for script in scripts.list_scripts("javascript", ".mjs"):
-        if _is_allowed(script.path):
-            head += f'<script type="module" src="{webpath(script.path)}"></script>\n'
+    js_files = [s.path for s in scripts.list_scripts("javascript", ".js")]
+    mjs_files = [s.path for s in scripts.list_scripts("javascript", ".mjs")]
+
+    # Deduplicate by basename; prefer non-legacy
+    best_js = _select_best_by_basename(js_files)
+    best_mjs = _select_best_by_basename(mjs_files)
+
+    for base, p in sorted(best_js.items()):
+        head += f'<script type="text/javascript" src="{webpath(p)}"></script>\n'
+
+    for base, p in sorted(best_mjs.items()):
+        head += f'<script type="module" src="{webpath(p)}"></script>\n'
 
     if shared.cmd_opts.theme:
         head += f'<script type="text/javascript">set_theme(\"{shared.cmd_opts.theme}\");</script>\n'
