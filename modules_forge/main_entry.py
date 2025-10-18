@@ -380,11 +380,6 @@ def modules_change(module_values: list, save=True, refresh=True) -> bool:
     if refresh:
         refresh_model_loading_parameters()
     return True
-    if save:
-        shared.opts.save(shared.config_filename)
-    if refresh:
-        refresh_model_loading_parameters()
-    return True
 
 
 def get_a1111_ui_component(tab, label):
