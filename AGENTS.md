@@ -91,4 +91,3 @@ For project-specific details in this workspace, see README.md.
 - `legacy/` is a historical reference. DO NOT modify, move, or remove files under `legacy/`.
 - Do not introduce new dependencies from active code to modules in `legacy/`. If you need logic from there, port it to the active directories (`modules/`, `extensions-builtin/`, etc.), with validation and documentation.
 - Use `legacy/` only for behavior lookups/diffs. Fixes must go into non-legacy code.
-
