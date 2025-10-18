@@ -1,4 +1,5 @@
 import argparse
+import os
 
 parser = argparse.ArgumentParser()
 
@@ -62,6 +63,69 @@ parser.add_argument("--disable-gpu-warning", action="store_true")
 parser.add_argument("--disable-online-tokenizer", action="store_true")
 
 args = parser.parse_known_args()[0]
+
+# Environment overrides (webui.settings.bat or process env)
+# Prefer explicit dtype selections via env without requiring CLI flags.
+_env = os.environ
+
+def _truthy(v: str | None) -> bool:
+    if not v:
+        return False
+    t = v.strip().lower()
+    return t in ("1", "true", "yes", "on")
+
+
+def _set_unet_dtype(val: str | None) -> None:
+    if not val:
+        return
+    v = val.strip().lower()
+    # Clear mutually exclusive flags first
+    args.unet_in_bf16 = False
+    args.unet_in_fp16 = False
+    args.unet_in_fp8_e4m3fn = False
+    args.unet_in_fp8_e5m2 = False
+    if v == "bf16" or v == "bfloat16":
+        args.unet_in_bf16 = True
+    elif v == "fp16" or v == "half":
+        args.unet_in_fp16 = True
+    elif v in ("fp8_e4m3fn", "fp8-e4m3fn", "fp8_e4"):  # shorthand tolerant
+        args.unet_in_fp8_e4m3fn = True
+    elif v in ("fp8_e5m2", "fp8-e5m2", "fp8_e5"):
+        args.unet_in_fp8_e5m2 = True
+    elif v == "fp32" or v == "float" or v == "single":
+        # No explicit unet_in_fp32 flag; leaving all False makes unet fall back to fp32.
+        pass
+
+
+def _set_vae_dtype(val: str | None) -> None:
+    if not val:
+        return
+    v = val.strip().lower()
+    # There are direct flags for VAE
+    if v == "bf16" or v == "bfloat16":
+        args.vae_in_bf16 = True
+        args.vae_in_fp16 = False
+        args.vae_in_fp32 = False
+    elif v == "fp16" or v == "half":
+        args.vae_in_bf16 = False
+        args.vae_in_fp16 = True
+        args.vae_in_fp32 = False
+    elif v == "fp32" or v == "float" or v == "single":
+        args.vae_in_bf16 = False
+        args.vae_in_fp16 = False
+        args.vae_in_fp32 = True
+
+
+# Global overrides
+if _truthy(_env.get("CODEX_VAE_IN_CPU")):
+    args.vae_in_cpu = True
+
+_set_unet_dtype(_env.get("CODEX_UNET_DTYPE") or _env.get("WEBUI_UNET_DTYPE"))
+_set_vae_dtype(_env.get("CODEX_VAE_DTYPE") or _env.get("WEBUI_VAE_DTYPE"))
+
+# Global all-fp32 override if user insists
+if _truthy(_env.get("CODEX_ALL_IN_FP32")):
+    args.all_in_fp32 = True
 
 # Some dynamic args that may be changed by webui rather than cmd flags.
 dynamic_args = dict(

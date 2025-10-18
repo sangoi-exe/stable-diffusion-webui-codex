@@ -24,6 +24,21 @@ def build_txt2img_processing(req: Txt2ImgRequest) -> _processing.StableDiffusion
         bool(req.highres_fix),
     )
     opts = _shared.opts
+    # Respect explicit enable flag inside highres_fix; a non-empty dict must not
+    # implicitly enable hires. This fixes HR showing as enabled with scale=1.0.
+    _hr = req.highres_fix if isinstance(req.highres_fix, dict) else {}
+    _hr_enable = bool(_hr.get("enable", False))
+    _hr_denoise = float(_hr.get("denoise", 0.5)) if _hr_enable else 0.0
+    _hr_scale = float(_hr.get("scale", 2.0)) if _hr_enable else 1.0
+    _hr_upscaler = _hr.get("upscaler", "Latent") if _hr_enable else None
+    _hr_steps = int(_hr.get("steps", 0)) if _hr_enable else 0
+    _hr_resize_x = int(_hr.get("resize_x", 0)) if _hr_enable else 0
+    _hr_resize_y = int(_hr.get("resize_y", 0)) if _hr_enable else 0
+    _hr_prompt = _hr.get("hr_prompt", "") if _hr_enable else ""
+    _hr_neg_prompt = _hr.get("hr_negative_prompt", "") if _hr_enable else ""
+    _hr_cfg = float(_hr.get("hr_cfg", 1.0)) if _hr_enable else 1.0
+    _hr_distilled_cfg = float(_hr.get("hr_distilled_cfg", 3.5)) if _hr_enable else 3.5
+
     p = _processing.StableDiffusionProcessingTxt2Img(
         outpath_samples=opts.outdir_samples or opts.outdir_txt2img_samples,
         outpath_grids=opts.outdir_grids or opts.outdir_txt2img_grids,
@@ -36,21 +51,21 @@ def build_txt2img_processing(req: Txt2ImgRequest) -> _processing.StableDiffusion
         distilled_cfg_scale=3.5,
         width=req.width,
         height=req.height,
-        enable_hr=bool(req.highres_fix),
-        denoising_strength=float(req.highres_fix.get("denoise", 0.5)) if isinstance(req.highres_fix, dict) else 0.0,
-        hr_scale=float(req.highres_fix.get("scale", 2.0)) if isinstance(req.highres_fix, dict) else 1.0,
-        hr_upscaler=req.highres_fix.get("upscaler", "Latent") if isinstance(req.highres_fix, dict) else None,
-        hr_second_pass_steps=int(req.highres_fix.get("steps", 0)) if isinstance(req.highres_fix, dict) else 0,
-        hr_resize_x=int(req.highres_fix.get("resize_x", 0)) if isinstance(req.highres_fix, dict) else 0,
-        hr_resize_y=int(req.highres_fix.get("resize_y", 0)) if isinstance(req.highres_fix, dict) else 0,
+        enable_hr=_hr_enable,
+        denoising_strength=_hr_denoise,
+        hr_scale=_hr_scale,
+        hr_upscaler=_hr_upscaler,
+        hr_second_pass_steps=_hr_steps,
+        hr_resize_x=_hr_resize_x,
+        hr_resize_y=_hr_resize_y,
         hr_checkpoint_name=None,
         hr_additional_modules=["Use same choices"],
         hr_sampler_name=None,
         hr_scheduler=None,
-        hr_prompt=req.metadata.get("hr_prompt", "") if req.metadata else "",
-        hr_negative_prompt=req.metadata.get("hr_negative_prompt", "") if req.metadata else "",
-        hr_cfg=float(req.metadata.get("hr_cfg", 1.0)) if req.metadata else 1.0,
-        hr_distilled_cfg=float(req.metadata.get("hr_distilled_cfg", 3.5)) if req.metadata else 3.5,
+        hr_prompt=_hr_prompt,
+        hr_negative_prompt=_hr_neg_prompt,
+        hr_cfg=_hr_cfg,
+        hr_distilled_cfg=_hr_distilled_cfg,
         override_settings={},
     )
 
