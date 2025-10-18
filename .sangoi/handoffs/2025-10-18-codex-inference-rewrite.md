@@ -107,10 +107,10 @@ Intended Solution (before implementation)
 
 MVP Deliverables (TI2V‑5B)
 
-- Loader + minimal forward producing a list of frames (PNG in memory).
-- Registry entries wired; explicit `UnsupportedTaskError` for not‑yet‑wired modes.
-- Presets + param validation; timing/VRAM logs.
-- Manual validation script `scripts/manual/wan_ti2v_5b_smoke.py` (prints metrics, saves first N frames).
+- Loader + forward skeleton with progress events and preset application.
+- Registry entries wired; explicit `EngineExecutionError` until generation is wired.
+- Presets + param validation; timing/VRAM logs via progress events.
+- UI‑first validation; optional smoke script can be added later for diagnostics.
 
 Validation Plan
 

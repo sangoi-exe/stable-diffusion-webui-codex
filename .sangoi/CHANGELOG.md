@@ -43,6 +43,8 @@
 - Core: Added per-engine parameter interfaces + parsers:
   - Code: `backend/core/params/*`, `backend/core/enums.py`, `backend/core/param_registry.py`.
   - Engines now validate/normalize requests via `parse_params(engine, task, request)`.
- - Presets: Added loader/applier (`backend/core/presets.py`) and seed preset files under `configs/presets/`. Engines apply preset patch (fill-only) before validation and log `applied_preset_patch`.
+  - Presets: Added loader/applier (`backend/core/presets.py`) and seed preset files under `configs/presets/`. Engines apply preset patch (fill-only) before validation and log `applied_preset_patch`.
+
+- Engine(wan_ti2v_5b): Introduced loader (`backend/engines/video/wan/loader.py`) and forward skeleton with progress events in `backend/engines/video/wan/ti2v5b_engine.py`. Adds Normal `img2vid.yaml` preset. Generation intentionally raises `EngineExecutionError` until weights are wired; validation is UI-first.
 
 - Docs: Updated handoff `.sangoi/handoffs/2025-10-18-codex-inference-rewrite.md` with 6 solution paths for WAN 2.2 integration, selected Path A (Native PyTorch) as intended approach, and added MVP/validation/risks sections. Validation is UI-first; smoke script now optional. No user-facing changes yet.
