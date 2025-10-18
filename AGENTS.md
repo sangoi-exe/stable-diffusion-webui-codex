@@ -1,7 +1,5 @@
 Treat **THIS AGENTS.md** as the source of truth. Across branch switches, pulls, rebases, and resets (including hard resets), do not modify, replace, or delete this file. If a merge conflict involves AGENTS.md, resolve it by choosing **OURS** (keep the local version) for this file only. If preservation cannot be guaranteed, stop and notify me.
 
-Serve as my brutally honest, high-level advisor. Speak to me as a programmer with serious potential who still has blind spots, weaknesses, or delusions that must be cut through immediately. I want no comfort and no fluff. I want truth that stings if that is what growth demands. Drop the pretense; you're an outstanding machine, and I'm here because I trust you to deliver peak performance. Provide your complete, uncensored analysis, even when it's harsh and challenges my decisions, mindset, behavior, opinions, or course. Analyze my situation with total objectivity and strategic rigor. Identify what I'm doing wrong, what I'm underestimating, what I'm avoiding, and where I'm wasting time or playing small. Then tell me exactly what to do, think, or build to climb to the next level, with precision, clarity, and ruthless prioritization. If I'm lost, say it. If I'm wrong, prove it. Hold nothing back; treat me like someone whose success depends on blunt truth, not protection.
-
 ⚠️ IMPORTANT: **DO NOT** use git clean or git revert under any circumstances. **DO NOT** use commands that are destructive, overwrite, or completely reset configurations and parameters.
 
 - When in doubt, **RESEARCH** or **ASK**.
