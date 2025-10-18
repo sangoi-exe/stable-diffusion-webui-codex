@@ -74,3 +74,8 @@ codex/reports/pyright/
 /.puppeteer-cache
 /.pw-browsers
 /artifacts
+
+# Local caches/logs (do not commit)
+/.mplconfig/
+.webui-*.log
+.webui-*.pid
