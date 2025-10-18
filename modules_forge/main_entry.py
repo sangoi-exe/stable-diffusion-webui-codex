@@ -191,6 +191,7 @@ def make_checkpoint_manager_ui():
         elem_classes=['model_selection'],
         choices=_compose_vae_choices(),
         interactive=True,
+        allow_custom_value=False,
     )
 
     ui_text_encoders = gr.Dropdown(
@@ -201,6 +202,7 @@ def make_checkpoint_manager_ui():
         choices=sorted(text_encoder_module_list.keys()),
         elem_classes=['model_selection'],
         interactive=True,
+        allow_custom_value=False,
     )
 
     def gr_refresh():
