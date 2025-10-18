@@ -1,4 +1,5 @@
 import torch
+from backend.utils import FilterPrefixView
 import logging
 from . import torch_trace as _trace
 
@@ -30,30 +31,19 @@ def state_dict_has(sd, prefix):
 
 
 def filter_state_dict_with_prefix(sd, prefix, new_prefix=''):
-    """Return a new dict with keys under `prefix`, optionally re-prefixed.
+    """Return a lazy view filtered by `prefix`, optionally re-prefixed.
 
-    Avoids materializing all tensors: iterate keys first, then fetch values only for matched keys.
-    Works with both plain dict and lazy mappings from safetensors.
+    Avoid materializing tensors while building the subset; deletion from the
+    base mapping is skipped to preserve laziness and stability.
     """
-    new_sd = {}
-    # snapshot keys to avoid concurrent modification while deleting
-    for k in list(sd.keys()):
-        if k.startswith(prefix):
-            new_k = new_prefix + k[len(prefix):]
-            new_sd[new_k] = sd[k]
-            try:
-                del sd[k]
-            except Exception:
-                # Some mappings may not support physical deletion; ignore
-                pass
-    return new_sd
+    return FilterPrefixView(sd, prefix, new_prefix)
 
 
 def try_filter_state_dict(sd, prefix_list, new_prefix=''):
     for prefix in prefix_list:
         if state_dict_has(sd, prefix):
             return filter_state_dict_with_prefix(sd, prefix, new_prefix)
-    return {}
+    return FilterPrefixView(sd, "__no_such_prefix__/")  # empty view
 
 
 def transformers_convert(sd, prefix_from, prefix_to, number):

@@ -50,6 +50,49 @@ class KeyPrefixView(MutableMapping):
             return sum(1 for _ in self.__iter__())
 
 
+class FilterPrefixView(MutableMapping):
+    """View over keys under a given prefix, optionally re-prefixed lazily.
+
+    - base: mapping with original keys (e.g., LazySafetensorsDict or KeyPrefixView)
+    - prefix: filter only keys that start with this
+    - new_prefix: keys presented by this view will start with new_prefix instead
+    """
+
+    def __init__(self, base: MutableMapping, prefix: str, new_prefix: str = ""):
+        self._base = base
+        self._prefix = prefix
+        self._new_prefix = new_prefix
+
+    def _to_base_key(self, k: str) -> str:
+        if self._new_prefix and k.startswith(self._new_prefix):
+            return self._prefix + k[len(self._new_prefix):]
+        if not self._new_prefix and k.startswith(self._prefix):
+            return k
+        # Accept direct pass-through for loaders that query with base keys
+        return k
+
+    def __getitem__(self, k: str):
+        return self._base[self._to_base_key(k)]
+
+    def __setitem__(self, k: str, v):
+        self._base[self._to_base_key(k)] = v
+
+    def __delitem__(self, k: str):
+        del self._base[self._to_base_key(k)]
+
+    def __iter__(self):
+        for k in self._base.keys():
+            if k.startswith(self._prefix):
+                out = self._new_prefix + k[len(self._prefix):]
+                yield out
+
+    def __len__(self) -> int:
+        c = 0
+        for _ in self.__iter__():
+            c += 1
+        return c
+
+
 def read_arbitrary_config(directory):
     config_path = os.path.join(directory, 'config.json')
 

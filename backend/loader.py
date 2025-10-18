@@ -570,10 +570,13 @@ def split_state_dict(sd, additional_state_dicts: list = None):
     _trace.event("process_vae_done")
 
     _trace.event("build_unet_vae_start")
-    state_dict = {
-        guess.unet_target: try_filter_state_dict(sd, guess.unet_key_prefix),
-        guess.vae_target: try_filter_state_dict(sd, guess.vae_key_prefix)
-    }
+    _trace.event("build_unet_start")
+    unet_sd = try_filter_state_dict(sd, guess.unet_key_prefix)
+    _trace.event("build_unet_done")
+    _trace.event("build_vae_start")
+    vae_sd = try_filter_state_dict(sd, guess.vae_key_prefix)
+    _trace.event("build_vae_done")
+    state_dict = {guess.unet_target: unet_sd, guess.vae_target: vae_sd}
     _trace.event("build_unet_vae_done")
 
     _trace.event("process_clip_start")
