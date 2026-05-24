@@ -1,6 +1,6 @@
 # Model Registry (Work in Progress)
 Date: 2025-10-28
-Last Review: 2026-05-17
+Last Review: 2026-05-24
 Status: Draft
 
 ## Purpose
@@ -12,6 +12,7 @@ Status: Draft
 - Detectors implemented for SD1.x, SDXL (base/refiner), Flux.1 (dev/schnell), FLUX.2 Klein 4B/base-4B core-only SafeTensors, LTX2 monolithic combined checkpoints, AuraFlow, SD3 / SD3.5 (medium & large families), Stable Cascade (B/C), Wan2.2 (T2V/I2V), Chroma, Qwen Image, and Anima (Cosmos Predict2 core `net.*` format).
 - `capabilities.py` defines `SemanticEngine` and an `EngineParamSurface` describing which high-level UI parameter sections (txt2img/img2img/video/hires/refiner/LoRA/ControlNet/masked-img2img) are expected to be used for each semantic engine tag; exposed to the API for frontend gating.
 - `capabilities.py` also owns `CAPABILITY_ONLY_EXACT_ENGINES`. Capability-only exact ids may appear only in capability/taxonomy maps and must not become registered engines, parked engines, aliases, facades, asset-contract ids, live-preview ids, runtime-family ids, or runtime dispatch ids.
+- `capabilities.py` owns parked exact-engine truth for `lens` while Lens runtime is absent. Do not add `SemanticEngine.LENS`, runnable `ENGINE_SURFACES`, `ENGINE_ID_TO_SEMANTIC_ENGINE`, `_ENGINE_ID_PRIMARY_FAMILY`, or asset-contract rows until a runtime tranche explicitly un-parks Lens.
 - 2025-12-14: `ModelSignature` gained a legacy `unet` alias for `core`, keeping older call sites working while the new contract stays `signature.core`.
 - 2025-12-14: Qwen Image detector reintroduced (`detectors/qwen_image.py`) and enums extended (`ModelFamily.QWEN_IMAGE`, `LatentFormat.QWEN_IMAGE`).
 - 2026-05-17: Qwen Image capability/runtime metadata now treats `qwen_image` as the single architecture family; `Qwen-Image-2512` and `Qwen-Image-Edit-2511` are internal variants, not separate engine or family ids.

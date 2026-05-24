@@ -30,6 +30,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `register_zimage_l2p` (function): Registers the Z-Image L2P pixel engine with no aliases.
 - `register_anima` (function): Registers the Anima engine.
 - `register_qwen_image` (function): Registers the Qwen Image architecture-family engine facade.
+- `register_lens` (function): Registers the parked Lens skeleton facade for isolated/manual validation only.
 """
 
 from __future__ import annotations
@@ -158,3 +159,8 @@ def register_anima(*, registry: EngineRegistry | None = None, replace: bool = Fa
 def register_qwen_image(*, registry: EngineRegistry | None = None, replace: bool = False) -> None:
     from apps.backend.engines.qwen_image.qwen_image import QwenImageEngine
     _reg("qwen_image", QwenImageEngine, registry=registry, replace=replace, aliases=())
+
+
+def register_lens(*, registry: EngineRegistry | None = None, replace: bool = False) -> None:
+    from apps.backend.engines.lens.lens import LensEngine
+    _reg("lens", LensEngine, registry=registry, replace=replace, aliases=())

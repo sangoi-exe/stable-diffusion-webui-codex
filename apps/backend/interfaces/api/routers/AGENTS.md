@@ -1,7 +1,7 @@
 # apps/backend/interfaces/api/routers Overview
 <!-- tags: backend, api, fastapi, routers -->
 Date: 2026-01-08
-Last Review: 2026-05-23
+Last Review: 2026-05-24
 Status: Active
 
 ## Purpose
@@ -30,6 +30,7 @@ Status: Active
 - 2026-04-29: `generation.py` route capability admission must use canonical `/api/engines/capabilities` identity only. If an engine id is absent from `ENGINE_ID_TO_SEMANTIC_ENGINE`, reject it instead of instantiating registry engines or probing `engine.capabilities()` as a fallback owner.
 - 2026-05-17: `generation.py` keeps Qwen Image variant selection internal-only: `/api/txt2img` derives `qwen_image_variant="2512"`, `/api/img2img` derives `qwen_image_variant="edit_2511"`, and public variant keys plus foreign-family selectors and classic edit-incompatible denoise/resize/mask/hires/IP-Adapter/LoRA/SUPIR surfaces fail before task creation. Qwen VAE SHA preflight must reject generic inventory VAE matches unless the path is under `qwen_image_vae` roots and exposes adjacent `AutoencoderKLQwenImage` config metadata; Qwen text-encoder SHA preflight must reject assets outside `qwen_image_tenc` roots.
 - 2026-05-23: `generation.py` keeps Z-Image L2P exact and no-VAE: `/api/txt2img` accepts only `engine="zimage_l2p"` with 1024x1024, batch 1, `euler/simple`, `checkpoint_core_only=true`, `model_format=checkpoint|gguf`, `model_sha`, and one Qwen3-4B `tenc_sha`; img2img/image-automation, VAE selectors, CLIP Skip, hires, swap/refiner, IP-Adapter, LoRA, advanced guidance, Z-Image variant keys, and unknown extras fail before task creation. `ui.py` accepts `zimage_l2p` as a live image tab type, and `models.py` routes its prompt-token count through the Z-Image/Qwen tokenizer key.
+- 2026-05-24: `generation.py` keeps Lens parked: explicit `engine="lens"` requests on `/api/txt2img`, `/api/img2img`, and `/api/image-automation` fail before task creation, `lens` is not resolved through runnable semantic capability maps, and the only Lens variant owner is nested `extras.lens.variant` / `img2img_extras.lens.variant` with strict `default|turbo|base` values.
 - 2026-03-30: `tests.py` also owns `/api/tests/ip-adapter/probe`; the router resolves inventory-backed adapter/image-encoder selectors and repo-scoped reference-image paths only, while `apps/backend/runtime/adapters/ip_adapter/probe.py` owns the actual conditioning receipt. Do not turn `tests.py` into a second txt2img surface.
 - 2026-03-30: `/api/tests/ip-adapter/probe` must execute the live CUDA probe in a subprocess and return the child receipt/failure payload; the router must not run the heavy CLIP/IP-Adapter probe inline in the API host process.
 - 2026-03-26: `generation.py` generic-video workers now forward settings key `codex_core_streaming` into canonical engine option `core_streaming_enabled` before calling the orchestrator, so live LTX `txt2vid` / `img2vid` requests can actually exercise the bounded core-streaming runtime seam instead of silently running the non-streamed path.

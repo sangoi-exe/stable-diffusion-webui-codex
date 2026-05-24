@@ -37,6 +37,8 @@ Qwen Image requests keep `qwen_image_variant` internal-only: txt2img derives `25
 foreign-family selectors, top-level txt2img clip-skip, classic denoise/resize/mask/hires/IP-Adapter/LoRA/SUPIR surfaces fail before task creation.
 Qwen Image VAE and text-encoder SHA selection is scoped to `qwen_image_vae` / `qwen_image_tenc` roots before task creation;
 the VAE must expose `AutoencoderKLQwenImage` config metadata.
+Lens is parked in this tranche: explicit `engine="lens"` txt2img/img2img/image-automation requests fail before task creation, and
+the only accepted Lens variant owner is nested `extras.lens.variant` for txt2img or `img2img_extras.lens.variant` for img2img.
 Resolves `extras.lora_sha` / `img2img_extras.lora_sha` into server-side `lora_path` overrides only for engines with `supports_lora=True`
 and when SHA ownership matches LoRA inventory (`inventory.loras`, `.safetensors`), rejecting unsupported-engine/non-LoRA resolution fail-loud.
 Enforces generation settings contracts: top-level `smart_*` payload keys are rejected and `settings_revision` must match persisted options revision.
@@ -133,6 +135,7 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
     )
     from apps.backend.runtime.model_registry.capabilities import (
         ENGINE_SURFACES,
+        PARKED_EXACT_ENGINES,
         SemanticEngine,
         engine_supports_cfg,
         ip_adapter_support_error,
@@ -149,6 +152,12 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
         qwen_image_edit_condition_dimensions,
         qwen_image_edit_vae_dimensions,
         validate_qwen_image_dimensions,
+    )
+    from apps.backend.runtime.families.lens.config import (
+        LENS_ENGINE_ID,
+        LENS_EXTRAS_KEY,
+        LENS_NOT_IMPLEMENTED_MESSAGE,
+        require_lens_variant,
     )
     from apps.backend.runtime.families.supir.config import parse_supir_mode_config
     from apps.backend.runtime.families.supir.errors import SupirBaseModelError, SupirConfigError, SupirWeightsError
@@ -204,6 +213,9 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
     _QWEN_IMAGE_VARIANT_KEY = QWEN_IMAGE_VARIANT_KEY
     _QWEN_IMAGE_SAMPLER = QWEN_IMAGE_PUBLIC_SAMPLER
     _QWEN_IMAGE_SCHEDULER = QWEN_IMAGE_PUBLIC_SCHEDULER
+    _LENS_ENGINE_ID = LENS_ENGINE_ID
+    _LENS_EXTRAS_KEY = LENS_EXTRAS_KEY
+    _LENS_NOT_IMPLEMENTED_MESSAGE = LENS_NOT_IMPLEMENTED_MESSAGE
     _ZIMAGE_L2P_ENGINE_ID = "zimage_l2p"
     _ZIMAGE_L2P_MODEL_FORMATS = {"checkpoint", "gguf"}
     _ZIMAGE_L2P_TXT2IMG_REJECTED_EXTRAS_KEYS = {
@@ -1279,6 +1291,8 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
 
 
     def _reject_not_implemented_engine(engine_key: str, *, field_name: str) -> None:
+        if engine_key == _LENS_ENGINE_ID:
+            raise HTTPException(status_code=501, detail=_parked_lens_detail())
         if engine_key in {"sd35", "netflix_void", "svd", "hunyuan_video"}:
             raise HTTPException(
                 status_code=501,
@@ -2527,6 +2541,7 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
         )
 
     def _validate_pre_task_img2img_payload(payload: Mapping[str, Any]) -> None:
+        _reject_lens_parked_request(payload, route_label="img2img")
         _reject_removed_img2img_second_pass_keys(payload)
         _reject_public_qwen_image_variant(payload, context="img2img")
         if _is_qwen_image_engine(payload.get("engine")):
@@ -2573,6 +2588,7 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
             )
 
     def _validate_pre_task_txt2img_payload(payload: Mapping[str, Any]) -> None:
+        _reject_lens_parked_request(payload, route_label="txt2img")
         _reject_public_qwen_image_variant(payload, context="txt2img")
         if not _is_qwen_image_engine(payload.get("engine")):
             return
@@ -2825,6 +2841,8 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
             return "sd35"
         if key == _QWEN_IMAGE_ENGINE_ID:
             return _QWEN_IMAGE_ENGINE_ID
+        if key == _LENS_ENGINE_ID:
+            return _LENS_ENGINE_ID
         from apps.backend.core.registry import registry as _engine_registry
         try:
             _ensure_default_engines_registered()
@@ -2856,6 +2874,8 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
         engine_key = _canonical_engine_key(raw_engine)
         if not engine_key:
             return
+        if engine_key == _LENS_ENGINE_ID:
+            raise HTTPException(status_code=501, detail=_parked_lens_detail())
         capability_attr, route_label = {
             GenerationRouteMode.TXT2IMG: ("supports_txt2img", "txt2img"),
             GenerationRouteMode.IMG2IMG: ("supports_img2img", "img2img"),
@@ -3077,6 +3097,58 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
 
     def _is_zimage_l2p_engine(engine_key: object) -> bool:
         return str(engine_key or "").strip().lower() == _ZIMAGE_L2P_ENGINE_ID
+
+    def _parked_lens_detail() -> str:
+        stub = PARKED_EXACT_ENGINES.get(_LENS_ENGINE_ID)
+        if stub is None:
+            return _LENS_NOT_IMPLEMENTED_MESSAGE
+        return stub.detail
+
+    def _reject_lens_variant_aliases(payload: Mapping[str, Any], *, context: str) -> None:
+        for alias_key in ("lens_variant", "lensVariant", "variant", "engine_options"):
+            if alias_key in payload:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"'{context}.{alias_key}' is not a valid Lens variant owner. "
+                        "Use 'extras.lens.variant'."
+                    ),
+                )
+
+    def _validate_lens_extras_owner(raw_extras: object, *, context: str) -> bool:
+        if raw_extras is None:
+            return False
+        if not isinstance(raw_extras, Mapping):
+            return False
+        _reject_lens_variant_aliases(raw_extras, context=context)
+        if _LENS_EXTRAS_KEY not in raw_extras:
+            return False
+        lens_payload = raw_extras.get(_LENS_EXTRAS_KEY)
+        if not isinstance(lens_payload, Mapping):
+            raise HTTPException(status_code=400, detail=f"'{context}.lens' must be an object")
+        unexpected_keys = sorted(str(key) for key in lens_payload.keys() if key != "variant")
+        if unexpected_keys:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{context}.lens' supports only 'variant'; unexpected keys: {', '.join(unexpected_keys)}.",
+            )
+        try:
+            require_lens_variant(lens_payload.get("variant"), context=f"{context}.lens.variant")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        return True
+
+    def _reject_lens_parked_request(payload: Mapping[str, Any], *, route_label: str) -> None:
+        _reject_lens_variant_aliases(payload, context=route_label)
+        raw_engine = payload.get("engine")
+        engine_key = _canonical_engine_key(raw_engine) if raw_engine is not None else ""
+        lens_extras_context = "img2img_extras" if route_label == "img2img" else "extras"
+        raw_extras = payload.get(lens_extras_context)
+        has_lens_extras = _validate_lens_extras_owner(raw_extras, context=lens_extras_context)
+        if has_lens_extras and engine_key != _LENS_ENGINE_ID:
+            raise HTTPException(status_code=400, detail=f"'{lens_extras_context}.lens' is only valid for engine 'lens'.")
+        if engine_key == _LENS_ENGINE_ID:
+            raise HTTPException(status_code=501, detail=_parked_lens_detail())
 
     def _reject_public_qwen_image_variant(payload: Mapping[str, Any], *, context: str) -> None:
         if _QWEN_IMAGE_VARIANT_KEY in payload:
@@ -5196,6 +5268,7 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
                 status_code=400,
                 detail=f"Engine '{_ZIMAGE_L2P_ENGINE_ID}' does not support image automation.",
             )
+        _reject_lens_parked_request(template, route_label=mode)
         if mode == "txt2img":
             _validate_txt2img_hires_request_payload(template)
             _validate_pre_task_txt2img_payload(template)
@@ -7347,9 +7420,9 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
     async def img2img(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Payload must be JSON object")
+        _validate_pre_task_img2img_payload(payload)
         _enforce_generation_settings_contract(payload)
         _validate_route_engine_capability(payload, route_mode=GenerationRouteMode.IMG2IMG)
-        _validate_pre_task_img2img_payload(payload)
 
         device = _parse_explicit_device(
             payload,

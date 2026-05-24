@@ -14,6 +14,7 @@ beyond the live runtime lane).
 Includes Qwen Image (`SemanticEngine.QWEN_IMAGE`) as a Qwen2.5-VL-conditioned flow-image engine with txt2img plus single-image edit img2img,
 and Anima (`SemanticEngine.ANIMA`) as a flow-based image engine (txt2img/img2img) requiring sha-selected external assets and exposing
 `er sde` in the recommended sampler surface. Z-Image L2P is exposed as a separate no-VAE pixel-space txt2img-only exact engine.
+Microsoft Lens is exposed only as a parked exact engine stub until its GPT-OSS/LensTransformer/VAE runtime lands; it is not a semantic engine or runnable capability row.
 FLUX.2 exposes the truthful Klein 4B/base-4B slice here: txt2img plus dedicated
 image-conditioned img2img with hires enabled only after the real backend continuation path landed; LoRA remains off.
 WAN semantic capabilities are bound to explicit WAN22 variant families via primary-family mapping.
@@ -395,6 +396,10 @@ PARKED_EXACT_ENGINES: Dict[str, ParkedExactEngineStub] = {
     "hunyuan_video": ParkedExactEngineStub(
         status="not_implemented",
         detail="Engine 'hunyuan_video' is parked; the Hunyuan Video runtime is not implemented yet.",
+    ),
+    "lens": ParkedExactEngineStub(
+        status="not_implemented",
+        detail="Engine 'lens' is parked; Lens txt2img runtime not yet implemented.",
     ),
 }
 

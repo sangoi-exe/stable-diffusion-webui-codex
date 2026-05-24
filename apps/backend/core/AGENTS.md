@@ -1,6 +1,6 @@
 # apps/backend/core Overview
 Date: 2025-10-28
-Last Review: 2026-05-17
+Last Review: 2026-05-24
 Status: Active
 
 ## Purpose
@@ -30,6 +30,7 @@ Status: Active
 - 2026-01-06: `InferenceOrchestrator` reload fingerprint now includes explicit `engine_options.vae_source`/`engine_options.tenc_source` to ensure built-in vs external asset selection changes trigger reloads.
 - 2026-01-28: `InferenceOrchestrator` reload fingerprint now includes `engine_options.zimage_variant` so Z-Image Turbo/Base switches trigger a reload.
 - 2026-05-17: `InferenceOrchestrator` reload fingerprint now includes internal `engine_options.qwen_image_variant` so Qwen Image txt2img (`2512`) and img2img edit (`edit_2511`) cannot reuse stale cached runtime state across variant switches.
+- 2026-05-24: `InferenceOrchestrator` reload fingerprint now includes internal `engine_options.lens_variant` for the parked Lens skeleton so future `default|turbo|base` switches cannot reuse stale cached runtime state once Lens loading lands.
 - 2026-01-01: `InferenceOrchestrator` now purges VRAM (unload cached engines + memory manager unload/empty_cache) before a generation when the requested `(checkpoint, text encoders)` signature differs from the previous generation (prevents OOM on model swaps).
 - 2026-01-02: Added standardized file header docstrings across `apps/backend/core/**` modules (doc-only change; part of rollout).
 - 2026-01-03: `apps/backend/core/__init__.py` no longer re-exports star-import facades; callers must import from specific modules (e.g. `core.requests`, `core.registry`).

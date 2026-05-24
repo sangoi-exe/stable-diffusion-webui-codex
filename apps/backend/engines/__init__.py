@@ -8,7 +8,7 @@ Required Notice: see NOTICE
 
 Purpose: Engine package facade and default registration entry points.
 Exposes `register_default_engines(...)` and lazily resolves optional/large engine classes to avoid heavy imports during startup.
-Includes the Anima, FLUX.2, LTX2, Qwen Image, and Z-Image L2P engine facades; parked placeholder families such as `netflix_void`
+Includes the Anima, FLUX.2, Lens skeleton, LTX2, Qwen Image, and Z-Image L2P engine facades; parked placeholder families such as `netflix_void`
 remain importable by name but are not part of default runtime registration.
 
 Symbols (top-level; keep in sync; no ghosts):
@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from typing import Any as ZImageL2PEngine
     from typing import Any as AnimaEngine
     from typing import Any as QwenImageEngine
+    from typing import Any as LensEngine
 
 
 def register_default_engines(*, registry: EngineRegistry | None = None, replace: bool = False) -> None:
@@ -137,6 +138,7 @@ __all__ = [
     "ZImageL2PEngine",
     "AnimaEngine",
     "QwenImageEngine",
+    "LensEngine",
     "Wan22Animate14BEngine",
     "Wan2214BEngine",
     "Wan225BEngine",
@@ -158,6 +160,7 @@ _ENGINE_EXPORTS = {
     "ZImageL2PEngine": ("apps.backend.engines.zimage_l2p.zimage_l2p", "ZImageL2PEngine"),
     "AnimaEngine": ("apps.backend.engines.anima.anima", "AnimaEngine"),
     "QwenImageEngine": ("apps.backend.engines.qwen_image.qwen_image", "QwenImageEngine"),
+    "LensEngine": ("apps.backend.engines.lens.lens", "LensEngine"),
     "Wan22Animate14BEngine": ("apps.backend.engines.wan22.wan22_14b_animate", "Wan22Animate14BEngine"),
     "Wan2214BEngine": ("apps.backend.engines.wan22.wan22_14b", "Wan2214BEngine"),
     "Wan225BEngine": ("apps.backend.engines.wan22.wan22_5b", "Wan225BEngine"),

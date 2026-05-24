@@ -13,7 +13,7 @@ On load/execution failures, performs a best-effort purge to release VRAM/RAM so 
 
 Symbols (top-level; keep in sync; no ghosts):
 - `InferenceOrchestrator` (class): Routes typed requests to engines; caches loaded engines with option fingerprinting, reloads when overrides
-  change (incl. `vae_source`/`tenc_source`/`zimage_variant`/`qwen_image_variant`/`dtype`), and manages VRAM hygiene across generations (contains nested helpers for option freezing and cache purges).
+  change (incl. `vae_source`/`tenc_source`/`zimage_variant`/`qwen_image_variant`/`lens_variant`/`dtype`), and manages VRAM hygiene across generations (contains nested helpers for option freezing and cache purges).
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from apps.backend.runtime.load_authority import (
 from apps.backend.runtime.diagnostics.error_summary import summarize_exception_for_console
 from apps.backend.runtime.diagnostics.exception_hook import dump_exception
 from apps.backend.runtime.families.qwen_image.config import QWEN_IMAGE_VARIANT_KEY
+from apps.backend.runtime.families.lens.config import LENS_VARIANT_KEY
 
 
 logger = get_backend_logger(__name__)
@@ -92,6 +93,7 @@ class InferenceOrchestrator:
         tenc_source = engine_options.get("tenc_source")
         zimage_variant = engine_options.get("zimage_variant")
         qwen_image_variant = engine_options.get(QWEN_IMAGE_VARIANT_KEY)
+        lens_variant = engine_options.get(LENS_VARIANT_KEY)
         dtype_raw = engine_options.get("dtype")
         if dtype_raw is None:
             dtype_value = None
@@ -120,6 +122,7 @@ class InferenceOrchestrator:
             "tenc_source": tenc_source,
             "zimage_variant": zimage_variant,
             QWEN_IMAGE_VARIANT_KEY: qwen_image_variant,
+            LENS_VARIANT_KEY: lens_variant,
             "core_streaming_enabled": streaming_val,
             "dtype": dtype_value,
         }
