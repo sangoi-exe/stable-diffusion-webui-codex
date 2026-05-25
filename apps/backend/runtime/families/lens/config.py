@@ -6,12 +6,15 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Microsoft Lens family constants, internal variant specs, defaults, architecture invariants, and official resolution buckets.
-Keeps `Lens`, `Lens-Turbo`, and `Lens-Base` as variants of the single parked `lens` engine while real GPT-OSS/LensTransformer/VAE runtime remains unimplemented.
+Purpose: Microsoft Lens family constants, internal variant specs, quant-policy identity, architecture invariants, and official resolution buckets.
+Keeps `Lens`, `Lens-Turbo`, and `Lens-Base` as variants of the single parked `lens` engine while the bootstrap tranche proves GPT-OSS tokenizer/text-encoder contracts without exposing generation.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `LensVariantSpec` (dataclass): Immutable metadata for one supported Lens variant.
 - `lens_variant_spec` (function): Resolve the immutable spec for a supported Lens variant.
+- `lens_text_encoder_quant_policy_from_options` (function): Resolve the internal Lens text-encoder quant policy from load options.
+- `lens_options_with_default_quant_policy` (function): Return non-mutating Lens load options with the default dequant BF16 policy.
+- `require_lens_text_encoder_quant_policy` (function): Validate the internal Lens text-encoder quant policy value.
 - `require_lens_variant` (function): Validate a strict lowercase Lens variant value.
 """
 
@@ -24,6 +27,10 @@ LENS_ENGINE_ID = "lens"
 LENS_EXTRAS_KEY = "lens"
 LENS_VARIANT_KEY = "lens_variant"
 LENS_NOT_IMPLEMENTED_MESSAGE = "Lens txt2img runtime not yet implemented"
+LENS_TEXT_ENCODER_QUANT_POLICY_KEY = "lens_text_encoder_quant_policy"
+LENS_TEXT_ENCODER_QUANT_POLICY_DEQUANT_BF16 = "mxfp4_dequant_bf16"
+LENS_TEXT_ENCODER_QUANT_POLICY_DEFAULT = LENS_TEXT_ENCODER_QUANT_POLICY_DEQUANT_BF16
+LENS_TEXT_ENCODER_QUANT_POLICIES = (LENS_TEXT_ENCODER_QUANT_POLICY_DEQUANT_BF16,)
 
 LENS_DEFAULT_VARIANT = "default"
 LENS_TURBO_VARIANT = "turbo"
@@ -157,6 +164,47 @@ def lens_variant_spec(raw_variant: object) -> LensVariantSpec:
     return LENS_VARIANT_SPECS[variant]
 
 
+def _quant_policy_error(context: str) -> RuntimeError:
+    allowed = ", ".join(LENS_TEXT_ENCODER_QUANT_POLICIES)
+    return RuntimeError(f"{context} must be one of: {allowed}.")
+
+
+def require_lens_text_encoder_quant_policy(
+    raw_policy: object,
+    *,
+    context: str = LENS_TEXT_ENCODER_QUANT_POLICY_KEY,
+) -> str:
+    if not isinstance(raw_policy, str) or not raw_policy:
+        raise _quant_policy_error(context)
+    if raw_policy != raw_policy.strip():
+        raise _quant_policy_error(context)
+    if raw_policy not in LENS_TEXT_ENCODER_QUANT_POLICIES:
+        raise _quant_policy_error(context)
+    return raw_policy
+
+
+def lens_options_with_default_quant_policy(options: Mapping[str, object]) -> dict[str, object]:
+    """Return a non-mutating Lens option mapping with the effective quant policy."""
+
+    effective_options = dict(options)
+    raw_policy = effective_options.get(LENS_TEXT_ENCODER_QUANT_POLICY_KEY)
+    if raw_policy is None:
+        effective_options[LENS_TEXT_ENCODER_QUANT_POLICY_KEY] = LENS_TEXT_ENCODER_QUANT_POLICY_DEFAULT
+    else:
+        effective_options[LENS_TEXT_ENCODER_QUANT_POLICY_KEY] = require_lens_text_encoder_quant_policy(
+            raw_policy,
+            context=f"Lens engine option {LENS_TEXT_ENCODER_QUANT_POLICY_KEY!r}",
+        )
+    return effective_options
+
+
+def lens_text_encoder_quant_policy_from_options(options: Mapping[str, object]) -> str:
+    return require_lens_text_encoder_quant_policy(
+        options.get(LENS_TEXT_ENCODER_QUANT_POLICY_KEY),
+        context=f"Lens engine option {LENS_TEXT_ENCODER_QUANT_POLICY_KEY!r}",
+    )
+
+
 __all__ = [
     "LENS_AXES_DIMS_ROPE",
     "LENS_BASE_REPO_ID",
@@ -177,6 +225,10 @@ __all__ = [
     "LENS_SUPPORTED_BASE_RESOLUTIONS",
     "LENS_SUPPORTED_VARIANTS",
     "LENS_TEXT_ENCODER_CLASS",
+    "LENS_TEXT_ENCODER_QUANT_POLICIES",
+    "LENS_TEXT_ENCODER_QUANT_POLICY_DEFAULT",
+    "LENS_TEXT_ENCODER_QUANT_POLICY_DEQUANT_BF16",
+    "LENS_TEXT_ENCODER_QUANT_POLICY_KEY",
     "LENS_TEXT_HIDDEN_DIM",
     "LENS_TEXT_MODEL_TYPE",
     "LENS_TEXT_NUM_HIDDEN_LAYERS",
@@ -198,6 +250,9 @@ __all__ = [
     "LENS_VARIANT_KEY",
     "LENS_VARIANT_SPECS",
     "LensVariantSpec",
+    "lens_options_with_default_quant_policy",
+    "lens_text_encoder_quant_policy_from_options",
     "lens_variant_spec",
+    "require_lens_text_encoder_quant_policy",
     "require_lens_variant",
 ]
