@@ -7,19 +7,20 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Parked Microsoft Lens engine facade for skeleton/bootstrap validation.
-Registers manually under `lens`, validates metadata-only Diffusers folders, records Lens bootstrap readiness metadata, exposes the reserved `sample_lens_txt2img(...)` hook, and fails loud until real Lens txt2img runtime is implemented.
+Registers manually under `lens`, validates metadata-only Diffusers folders, records Lens bootstrap readiness metadata, exposes the keyword-only reserved `sample_lens_txt2img(...)` hook, and fails loud until real Lens txt2img runtime is implemented.
 
 Symbols (top-level; keep in sync; no ghosts):
-- `LensEngine` (class): Manually-registerable parked Lens engine facade with metadata validation and not-implemented txt2img hook.
+- `LensEngine` (class): Manually-registerable parked Lens engine facade with metadata validation and keyword-only not-implemented txt2img hook.
 """
 
 from __future__ import annotations
 
-from typing import Any, Iterator, Mapping
+from typing import TYPE_CHECKING, Any, Iterator, Mapping
 
 from apps.backend.core.engine_interface import BaseInferenceEngine, EngineCapabilities
 from apps.backend.core.requests import InferenceEvent
 from apps.backend.engines.lens.spec import LensEngineSpec, lens_engine_spec_from_options
+from apps.backend.runtime.processing.datatypes import PromptContext, SamplingPlan
 from apps.backend.runtime.families.lens.bootstrap import LensRuntimeBootstrapStatus, probe_lens_runtime_bootstrap
 from apps.backend.runtime.families.lens.config import (
     LENS_ENGINE_ID,
@@ -27,8 +28,11 @@ from apps.backend.runtime.families.lens.config import (
     LENS_SUPPORTED_VARIANTS,
     LENS_VARIANT_KEY,
 )
-from apps.backend.runtime.families.lens.sampler import sample_lens_txt2img_not_implemented
+from apps.backend.runtime.families.lens.sampler import LensProgressCallback, sample_lens_txt2img_not_implemented
 from apps.backend.runtime.logging import get_backend_logger
+
+if TYPE_CHECKING:
+    import torch
 
 logger = get_backend_logger("backend.engines.lens")
 
@@ -92,9 +96,27 @@ class LensEngine(BaseInferenceEngine):
             data["lens_bootstrap"] = self._bootstrap_status.to_dict()
         return data
 
-    def sample_lens_txt2img(self, *args: Any, **kwargs: Any) -> None:
+    def sample_lens_txt2img(
+        self,
+        *,
+        prompt_context: PromptContext,
+        sampling_plan: SamplingPlan,
+        width: int,
+        height: int,
+        batch_size: int,
+        iterations: int,
+        progress_callback: LensProgressCallback | None,
+    ) -> "torch.Tensor":
         self.ensure_loaded()
-        sample_lens_txt2img_not_implemented(*args, **kwargs)
+        return sample_lens_txt2img_not_implemented(
+            prompt_context=prompt_context,
+            sampling_plan=sampling_plan,
+            width=width,
+            height=height,
+            batch_size=batch_size,
+            iterations=iterations,
+            progress_callback=progress_callback,
+        )
 
     def txt2img(self, request: Any, **kwargs: Any) -> Iterator[InferenceEvent]:
         del request, kwargs

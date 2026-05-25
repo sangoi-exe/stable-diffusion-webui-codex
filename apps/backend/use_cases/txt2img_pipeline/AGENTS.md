@@ -1,7 +1,7 @@
 # apps/backend/use_cases/txt2img_pipeline Overview
 <!-- tags: backend, use-case, txt2img, pipeline, refiner -->
 Date: 2025-10-31
-Last Review: 2026-05-23
+Last Review: 2026-05-25
 Status: Active
 
 ## Purpose
@@ -13,6 +13,7 @@ Status: Active
 - Stage helpers must log meaningful events and raise explicit errors; no silent fallbacks or global state mutations.
 - 2026-05-23: `_guard_zimage_l2p_txt2img(...)` validates the effective prompt/negative set used by conditioning: exactly one prompt plus the existing scalar request `negative_prompt` when `PromptContext.negative_prompts` is empty. Missing negative prompt is valid as the empty request negative; multiple negatives or any LoRA tag in the effective prompt/negative set still fail loud.
 - 2026-05-23: The exact Z-Image L2P txt2img branch in `runner.py` owns only the local `BackendState` sampling lifecycle bridge because it bypasses `CodexSampler`; `_image_streaming.py` still shapes `ProgressEvent`s and task/SSE persistence remains with the task worker/registry path.
+- 2026-05-25: The exact Lens txt2img hook branch remains parked but has a canonical runner seam. `_guard_lens_txt2img(...)` runs after prompt-context/sampling-plan resolution and before generic prompt application, `ImageRNG` construction, process scripts, first-pass image handling, hires resolution, and generic conditioning. Only exact Lens may carry `PrepareState.rng=None`; non-Lens generic sampling fails loud if `state.rng` is absent.
 - `refiner.py` now owns two distinct stage families: SDXL-native refiner stages (`GlobalRefinerStage`, `HiresRefinerStage`) and the generic first-pass `swap_model` stage (`GlobalSwapModelStage`). Runner composes the first-pass swap between base sampling and hires, and hires must consume post-swap outputs rather than pre-swap base results.
 - Stage-local engine reloads must forward the full selector truth for the owning seam. Example: Z-Image `zimage_variant` must travel through first-pass `swap_model` and hires `swap_model` load options, while SDXL refiner seams stay native-only.
 - SDXL refiner config now travels via typed `RefinerConfig` on `CodexProcessingTxt2Img` (global) and `CodexHiresConfig.refiner` (hires-coupled). Missing `model` or invalid `switch_at_step` pointers raise at stage execution instead of silently skipping.

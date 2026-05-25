@@ -14,6 +14,7 @@ When configured, the hires second pass parses LoRA-only prompt tags, inherits ba
 Sampler-specific hires plan options such as ER-SDE stay attached to the derived hires plan rather than leaking through flat processing fields.
 First-pass base decode before hires is now upscaler-aware (`latent:*` skips decode; pixel upscalers decode).
 Exact Z-Image L2P runs stay inside this canonical txt2img runner with pre-conditioning unsupported-surface guards, effective prompt/optional-negative validation, pixel RGB sampling, canonical `BackendState` sampling-progress publication, and `GenerationResult.decoded` propagation that avoids VAE decode fallback.
+Exact Lens runs stay parked but now have the same canonical runner-hook seam: the runner guards unsupported Lens txt2img surfaces before generic prompt application/conditioning/RNG construction and expects decoded RGB hook output.
 When smart offload is enabled, keeps required text-encoder patchers loaded across cond+uncond and unloads them after conditioning.
 
 Symbols (top-level; keep in sync; no ghosts):
@@ -56,6 +57,8 @@ from apps.backend.runtime.memory.smart_offload_invariants import (
     enforce_smart_offload_pre_conditioning_residency,
     enforce_smart_offload_text_encoders_off,
 )
+from apps.backend.runtime.families.lens.resolution import require_lens_dimensions
+from apps.backend.runtime.families.lens.sampler import validate_lens_decoded_output
 from apps.backend.runtime.processing.datatypes import (
     ConditioningPayload,
     GenerationResult,
@@ -105,7 +108,7 @@ class PrepareState:
     prompt_context: PromptContext
     hires_prompt_context: PromptContext | None
     sampling_plan: SamplingPlan
-    rng: ImageRNG
+    rng: ImageRNG | None
     payload: ConditioningPayload
     init_latents: torch.Tensor | None
     init_decoded: torch.Tensor | None
@@ -567,6 +570,10 @@ class Txt2ImgPipelineRunner:
     def _is_zimage_l2p_processing(processing: CodexProcessingTxt2Img) -> bool:
         return str(getattr(getattr(processing, "sd_model", None), "engine_id", "") or "") == "zimage_l2p"
 
+    @staticmethod
+    def _is_lens_processing(processing: CodexProcessingTxt2Img) -> bool:
+        return str(getattr(getattr(processing, "sd_model", None), "engine_id", "") or "") == "lens"
+
     def _ensure_zimage_l2p_rng(
         self,
         processing: CodexProcessingTxt2Img,
@@ -646,6 +653,60 @@ class Txt2ImgPipelineRunner:
         hook = getattr(getattr(processing, "sd_model", None), "sample_pixel_txt2img", None)
         if not callable(hook):
             raise RuntimeError("Z-Image L2P engine is missing required sample_pixel_txt2img hook.")
+
+    def _guard_lens_txt2img(
+        self,
+        processing: CodexProcessingTxt2Img,
+        prompt_context: PromptContext,
+        plan: SamplingPlan,
+    ) -> None:
+        """Fail loud before generic prompt application, RNG construction, or conditioning for Lens."""
+
+        require_lens_dimensions(
+            int(processing.width),
+            int(processing.height),
+            context="Lens txt2img dimensions",
+        )
+        if int(processing.batch_size) != 1 or int(processing.iterations) != 1:
+            raise RuntimeError(
+                "Lens first hook tranche supports only batch_size=1 and iterations=1 "
+                f"(got batch_size={processing.batch_size}, iterations={processing.iterations})."
+            )
+        effective_prompts = list(prompt_context.prompts)
+        effective_negative_prompts = list(prompt_context.negative_prompts)
+        if len(effective_prompts) != 1 or len(effective_negative_prompts) > 1:
+            raise RuntimeError(
+                "Lens first hook tranche supports exactly one prompt and at most one optional negative prompt per request."
+            )
+        if bool(getattr(getattr(processing, "hires", None), "enabled", False)):
+            raise RuntimeError("Lens does not support hires.")
+        if getattr(processing, "firstpass_image", None) is not None:
+            raise RuntimeError("Lens does not support precomputed first-pass images.")
+        if getattr(processing, "latent_scale_mode", None) is not None:
+            raise RuntimeError("Lens does not support latent scale modes.")
+        if GlobalSwapModelStage(getattr(processing, "swap_model", None)).is_enabled():
+            raise RuntimeError("Lens does not support top-level swap_model.")
+        if GlobalRefinerStage(getattr(processing, "refiner", None)).is_enabled():
+            raise RuntimeError("Lens does not support refiner.")
+        ip_adapter = getattr(processing, "ip_adapter", None)
+        if ip_adapter is not None and bool(getattr(ip_adapter, "enabled", False)):
+            raise RuntimeError("Lens does not support IP-Adapter.")
+        if tuple(collect_lora_selections(prompt_context.loras)):
+            raise RuntimeError("Lens does not support LoRA prompt selections in the hook tranche.")
+        if prompt_context.clip_skip is not None:
+            raise RuntimeError("Lens does not support clip_skip.")
+        if int(getattr(processing, "seed_resize_from_h", 0) or 0) or int(getattr(processing, "seed_resize_from_w", 0) or 0):
+            raise RuntimeError("Lens does not support seed resize.")
+        sampler_name = str(plan.sampler_name or "").strip().lower()
+        scheduler_name = str(plan.scheduler_name or "").strip().lower()
+        if sampler_name != "euler" or scheduler_name != "simple":
+            raise RuntimeError(
+                "Lens first hook tranche supports only sampler='euler' and scheduler='simple' "
+                f"(got sampler={plan.sampler_name!r}, scheduler={plan.scheduler_name!r})."
+            )
+        hook = getattr(getattr(processing, "sd_model", None), "sample_lens_txt2img", None)
+        if not callable(hook):
+            raise RuntimeError("Lens engine is missing required sample_lens_txt2img hook.")
 
     def _apply_refiner_stage(
         self,
@@ -855,33 +916,53 @@ class Txt2ImgPipelineRunner:
         prompts: Sequence[str],
     ) -> PrepareState:
         prompt_context = build_prompt_context(processing, prompts)
-        apply_prompt_context(processing, prompt_context)
-
         plan = build_sampling_plan(processing, seeds, subseeds, subseed_strength)
+        is_lens = self._is_lens_processing(processing)
+        if is_lens:
+            self._guard_lens_txt2img(processing, prompt_context, plan)
+            if conditioning_data is not None or unconditional_data is not None:
+                raise RuntimeError("Lens txt2img hook owns conditioning; precomputed conditioning is unsupported.")
+        else:
+            apply_prompt_context(processing, prompt_context)
+
         is_zimage_l2p = self._is_zimage_l2p_processing(processing)
-        rng = self._ensure_zimage_l2p_rng(processing, plan) if is_zimage_l2p else ensure_sampler_and_rng(processing, plan)
+        if is_lens:
+            rng = None
+        elif is_zimage_l2p:
+            rng = self._ensure_zimage_l2p_rng(processing, plan)
+        else:
+            rng = ensure_sampler_and_rng(processing, plan)
 
         processing.seeds = list(plan.seeds)
         processing.subseeds = list(plan.subseeds)
         processing.guidance_scale = plan.guidance_scale
         processing.cfg_scale = plan.guidance_scale
         processing.steps = plan.steps
-        processing.prepare_prompt_data()
-
-        run_process_scripts(processing)
 
         payload = ConditioningPayload(conditioning=conditioning_data, unconditional=unconditional_data)
 
-        init_latents, init_decoded = self._prepare_first_pass_from_image(processing)
-        if processing.hires.enabled:
-            self._resolve_hires_execution(processing, emit_plan_event=True)
-        if is_zimage_l2p:
-            self._guard_zimage_l2p_txt2img(processing, prompt_context, plan)
+        if is_lens:
+            init_latents = None
+            init_decoded = None
+        else:
+            processing.prepare_prompt_data()
+
+            run_process_scripts(processing)
+
+            init_latents, init_decoded = self._prepare_first_pass_from_image(processing)
+            if processing.hires.enabled:
+                self._resolve_hires_execution(processing, emit_plan_event=True)
+            if is_zimage_l2p:
+                self._guard_zimage_l2p_txt2img(processing, prompt_context, plan)
 
         # Compute conditioning if not provided (SDXL path); preserve metadata (width/height/targets) after overrides.
         cond = conditioning_data
         uncond = unconditional_data
-        if cond is None or uncond is None:
+        if is_lens:
+            cond = None
+            uncond = None
+            payload = ConditioningPayload(conditioning=None, unconditional=None)
+        elif cond is None or uncond is None:
             cond, uncond = self._compute_conditioning(processing, prompt_context)
             # For distilled CFG models (Flux), uncond is intentionally None - only cond is required
             if cond is None:
@@ -906,6 +987,74 @@ class Txt2ImgPipelineRunner:
         base_samples = state.init_latents
         decoded_samples = state.init_decoded
         boundary_state: SamplingBoundaryState | None = None
+        if self._is_lens_processing(processing):
+            if base_samples is not None or decoded_samples is not None:
+                raise RuntimeError("Lens txt2img hook must start from Lens sampler-owned sequential latent noise.")
+            hook = getattr(processing.sd_model, "sample_lens_txt2img", None)
+            if not callable(hook):
+                raise RuntimeError("Lens engine is missing required sample_lens_txt2img hook.")
+
+            progress_owner_token = str(getattr(processing, "_codex_progress_owner_token", "") or "").strip()
+            if not progress_owner_token:
+                raise RuntimeError("Lens progress owner token is missing.")
+            sampling_steps = int(state.sampling_plan.steps)
+            if sampling_steps <= 0:
+                raise RuntimeError("Lens sampling steps must be positive for progress reporting.")
+
+            def _lens_progress_int(payload: dict[str, object], key: str) -> int:
+                if key not in payload:
+                    raise RuntimeError(f"Lens progress payload missing required progress key '{key}'.")
+                value = payload[key]
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise RuntimeError(f"Lens progress payload key '{key}' must be a non-bool int.")
+                return int(value)
+
+            def _lens_progress(info: dict[str, object]) -> None:
+                payload = dict(info)
+                if backend_state.should_stop:
+                    raise RuntimeError("cancelled")
+                step = _lens_progress_int(payload, "step")
+                payload_steps = _lens_progress_int(payload, "steps")
+                if payload_steps <= 0:
+                    raise RuntimeError("Lens progress payload steps must be positive.")
+                if payload_steps != sampling_steps:
+                    raise RuntimeError(
+                        "Lens progress payload steps "
+                        f"does not match sampling plan steps (payload={payload_steps}, plan={sampling_steps})."
+                    )
+                if step < 1 or step > sampling_steps:
+                    raise RuntimeError(f"Lens progress step out of range (step={step}, steps={sampling_steps}).")
+                backend_state.update_sampling(step=step, total=sampling_steps, owner_token=progress_owner_token)
+                backend_state.reset_sampling_blocks(owner_token=progress_owner_token)
+                processing.update_extra_param("Lens Progress", payload)
+
+            backend_state.start(
+                job_count=1,
+                sampling_steps=sampling_steps,
+                progress_owner_token=progress_owner_token,
+            )
+            try:
+                decoded_output = hook(
+                    prompt_context=state.prompt_context,
+                    sampling_plan=state.sampling_plan,
+                    width=int(processing.width),
+                    height=int(processing.height),
+                    batch_size=int(processing.batch_size),
+                    iterations=int(processing.iterations),
+                    progress_callback=_lens_progress,
+                )
+            finally:
+                backend_state.end()
+                backend_state.clear_flags()
+            decoded_samples = validate_lens_decoded_output(
+                decoded_output,
+                batch_size=int(processing.batch_size),
+                height=int(processing.height),
+                width=int(processing.width),
+            )
+            self._log_tensor_stats("lens_decoded_samples", decoded_samples)
+            return SamplingOutput(samples=decoded_samples, decoded=decoded_samples, boundary_state=None)
+
         if self._is_zimage_l2p_processing(processing):
             if base_samples is not None or decoded_samples is not None:
                 raise RuntimeError("Z-Image L2P pixel txt2img must start from sampler-owned RGB noise.")
@@ -996,6 +1145,8 @@ class Txt2ImgPipelineRunner:
             capture_boundary_state_at_step = int(swap_cfg.swap_at_step)
 
         if base_samples is None and decoded_samples is None:
+            if state.rng is None:
+                raise RuntimeError("Generic txt2img sampling requires ImageRNG; only exact Lens processing may use rng=None.")
             base_result = execute_sampling_result(
                 processing,
                 state.sampling_plan,

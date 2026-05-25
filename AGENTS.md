@@ -72,7 +72,7 @@ If you touch an `apps/**` source file, you keep its **file header block** honest
 
 ## WebUI Atlas
 
-Last reviewed on 2026-05-23 during the Z-Image L2P exact txt2img integration.
+Last reviewed on 2026-05-25 during the Microsoft Lens runner-hook contract tranche.
 
 <!-- Merge-safety anchor: this prompt-resident WebUI Atlas replaces the former split-file discovery front door; update it whenever a hot path, owner file, public route, or shipped entrypoint moves. -->
 
@@ -145,6 +145,7 @@ Last reviewed on 2026-05-23 during the Z-Image L2P exact txt2img integration.
 - Stage runner: `apps/backend/use_cases/txt2img_pipeline/runner.py`
   - Executes the staged txt2img pipeline and returns the `GenerationResult`.
   - Exact `zimage_l2p` remains inside this canonical runner: it guards unsupported state before conditioning, calls the engine pixel sampler hook, and returns the pixel tensor in `GenerationResult.decoded` so no VAE decode fallback runs.
+  - Parked exact `lens` hook contract remains inside this canonical runner: it guards unsupported state before generic prompt application/RNG/conditioning, calls the engine Lens txt2img hook, and expects decoded RGB output in `GenerationResult.decoded` so no classic VAE decode fallback runs; public/default capabilities still keep Lens parked.
 - Terminal surfaces: `apps/backend/interfaces/api/tasks/generation_tasks.py` and `apps/backend/interfaces/api/routers/tasks.py`
   - Encode/save images, store the result payload, and expose terminal result/end through `GET /api/tasks/{id}` and `/api/tasks/{id}/events`.
 
