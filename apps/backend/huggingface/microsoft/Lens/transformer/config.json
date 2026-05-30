@@ -1,0 +1,26 @@
+{
+  "_class_name": "LensTransformer2DModel",
+  "_diffusers_version": "0.37.1",
+  "attention_head_dim": 64,
+  "axes_dims_rope": [
+    8,
+    28,
+    28
+  ],
+  "enc_hidden_dim": 2880,
+  "gate_mlp": true,
+  "in_channels": 128,
+  "inner_dim": 1536,
+  "multi_layer_encoder_feature": true,
+  "num_attention_heads": 24,
+  "num_layers": 48,
+  "out_channels": 32,
+  "patch_size": 2,
+  "rms_norm": true,
+  "selected_layer_index": [
+    5,
+    11,
+    17,
+    23
+  ]
+}

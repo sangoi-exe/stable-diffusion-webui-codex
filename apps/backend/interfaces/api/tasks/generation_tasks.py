@@ -14,7 +14,7 @@ When `CODEX_TRACE_CONTRACT=1`, emits prompt-redacted contract-trace JSONL events
 
 Symbols (top-level; keep in sync; no ghosts):
 - `encode_images` (function): Encode PIL images to base64 PNG payloads, optionally injecting PNG text metadata.
-- `build_engine_options` (function): Build `engine_options` dict from request extras, explicit worker engine key, and options snapshot (TE/VAE overrides, no-VAE contracts, explicit checkpoint selectors, Z-Image/Qwen Image variants, core streaming).
+- `build_engine_options` (function): Build `engine_options` dict from request extras, explicit worker engine key, and options snapshot (TE/VAE selectors, external VAE requirements, no-VAE contracts, explicit checkpoint selectors, Z-Image/Qwen Image/Lens variants, core streaming).
 - `resolve_request_smart_flags` (function): Parse/validate per-request smart flags (`smart_offload`/`smart_fallback`/`smart_cache`) as strict booleans.
 - `force_runtime_memory_cleanup` (function): Best-effort runtime cleanup used on worker error paths (orchestrator cache + memory manager + CUDA cache).
 - `_format_parameters_infotext` (function): Serializes generation `info` dicts into A1111-compatible infotext for PNG `parameters`.
@@ -53,6 +53,7 @@ from apps.backend.runtime.diagnostics.contract_trace import emit_event as emit_c
 from apps.backend.runtime.diagnostics.contract_trace import hash_request_prompt
 from apps.backend.runtime.diagnostics.fallback_state import fallback_used as fallback_state_used
 from apps.backend.runtime.diagnostics.fallback_state import reset_fallback_state
+from apps.backend.runtime.families.lens.config import LENS_ENGINE_ID, LENS_EXTRAS_KEY, LENS_VARIANT_KEY, require_lens_variant
 from apps.backend.runtime.families.qwen_image.config import QWEN_IMAGE_VARIANT_KEY, require_qwen_image_variant
 from apps.backend.runtime.load_authority import (
     LoadAuthorityStage,
@@ -122,12 +123,12 @@ def build_engine_options(*, req: Any, engine_key: str, opts_snapshot: Callable[[
     from apps.backend.core.contracts.asset_requirements import contract_for_request
 
     try:
-        requires_vae = bool(
-            contract_for_request(
-                engine_id=engine_id,
-                checkpoint_core_only=checkpoint_core_only_from_extras,
-            ).requires_vae
+        asset_contract = contract_for_request(
+            engine_id=engine_id,
+            checkpoint_core_only=checkpoint_core_only_from_extras,
         )
+        uses_vae = bool(asset_contract.uses_vae)
+        requires_vae = bool(asset_contract.requires_vae)
     except (KeyError, ValueError) as exc:
         raise RuntimeError(f"Failed to resolve asset contract for engine '{engine_id}'.") from exc
 
@@ -139,7 +140,9 @@ def build_engine_options(*, req: Any, engine_key: str, opts_snapshot: Callable[[
     if isinstance(vae_path_from_extras, str) and vae_path_from_extras.strip():
         engine_options["vae_path"] = vae_path_from_extras.strip()
     vae_source_from_extras = extras.get("vae_source")
-    if requires_vae:
+    vae_sha_from_extras = extras.get("vae_sha")
+    has_vae_sha = isinstance(vae_sha_from_extras, str) and bool(vae_sha_from_extras.strip())
+    if uses_vae:
         if vae_source_from_extras is None:
             raise RuntimeError("Missing extras.vae_source.")
         if not isinstance(vae_source_from_extras, str) or not vae_source_from_extras.strip():
@@ -148,11 +151,23 @@ def build_engine_options(*, req: Any, engine_key: str, opts_snapshot: Callable[[
         if normalized_vae_source not in {"built_in", "external"}:
             raise RuntimeError("extras.vae_source must be 'built_in' or 'external'.")
         engine_options["vae_source"] = normalized_vae_source
+        if normalized_vae_source == "built_in":
+            if "vae_path" in engine_options:
+                raise RuntimeError("extras.vae_source='built_in' does not allow extras.vae_path.")
+            if has_vae_sha:
+                raise RuntimeError("extras.vae_source='built_in' does not allow extras.vae_sha.")
+            if requires_vae:
+                raise RuntimeError(f"Engine '{engine_id}' requires an external VAE; extras.vae_source must be 'external'.")
+        else:
+            if "vae_path" not in engine_options:
+                raise RuntimeError("extras.vae_source='external' requires extras.vae_path.")
     else:
         if vae_source_from_extras is not None:
             raise RuntimeError(f"Engine '{engine_id}' does not use extras.vae_source.")
         if "vae_path" in engine_options:
             raise RuntimeError(f"Engine '{engine_id}' does not use extras.vae_path.")
+        if has_vae_sha:
+            raise RuntimeError(f"Engine '{engine_id}' does not use extras.vae_sha.")
 
     model_format_from_extras = extras.get("model_format")
     if model_format_from_extras is None:
@@ -188,6 +203,30 @@ def build_engine_options(*, req: Any, engine_key: str, opts_snapshot: Callable[[
         engine_options[QWEN_IMAGE_VARIANT_KEY] = require_qwen_image_variant(
             qwen_image_variant,
             context=f"extras.{QWEN_IMAGE_VARIANT_KEY}",
+        )
+
+    for lens_alias_key in ("lens_variant", "lensVariant", "variant", "engine_options"):
+        if lens_alias_key in extras:
+            raise RuntimeError(
+                "Lens variant must use the nested owner extras.lens.variant; "
+                f"unsupported alias key: extras.{lens_alias_key}."
+            )
+    lens_payload = extras.get(LENS_EXTRAS_KEY)
+    if lens_payload is not None:
+        if engine_id != LENS_ENGINE_ID:
+            raise RuntimeError("extras.lens is only valid for engine 'lens'.")
+        if not isinstance(lens_payload, Mapping):
+            raise RuntimeError("extras.lens must be an object.")
+        unexpected_lens_keys = sorted(str(key) for key in lens_payload.keys() if key != "variant")
+        if unexpected_lens_keys:
+            raise RuntimeError(
+                "extras.lens supports only 'variant'; unexpected keys: "
+                + ", ".join(unexpected_lens_keys)
+                + "."
+            )
+        engine_options[LENS_VARIANT_KEY] = require_lens_variant(
+            lens_payload.get("variant"),
+            context="extras.lens.variant",
         )
 
     # Pass streaming option from settings to engine (no model-part fallbacks).

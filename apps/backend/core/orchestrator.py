@@ -7,13 +7,13 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Backend inference orchestrator (engine routing + caching + event streaming).
-Resolves engines from the registry, canonicalizes aliases to descriptor keys before cache/fingerprint ownership, loads/unloads per request,
+Resolves engines from the registry, derives effective load-affecting options before cache/fingerprint ownership, loads/unloads per request,
 fingerprints load-affecting options, purges VRAM on model swaps, and yields typed progress events back to API callers.
 On load/execution failures, performs a best-effort purge to release VRAM/RAM so the backend can recover without restart.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `InferenceOrchestrator` (class): Routes typed requests to engines; caches loaded engines with option fingerprinting, reloads when overrides
-  change (incl. `vae_source`/`tenc_source`/`zimage_variant`/`qwen_image_variant`/`dtype`), and manages VRAM hygiene across generations (contains nested helpers for option freezing and cache purges).
+  change (incl. `vae_source`/`tenc_source`/`zimage_variant`/`qwen_image_variant`/`lens_variant`/Lens text-encoder quant policy/`dtype`), and manages VRAM hygiene across generations (contains nested helpers for option freezing, effective option derivation, and cache purges).
 """
 
 from __future__ import annotations
@@ -39,6 +39,12 @@ from apps.backend.runtime.load_authority import (
 from apps.backend.runtime.diagnostics.error_summary import summarize_exception_for_console
 from apps.backend.runtime.diagnostics.exception_hook import dump_exception
 from apps.backend.runtime.families.qwen_image.config import QWEN_IMAGE_VARIANT_KEY
+from apps.backend.runtime.families.lens.config import (
+    LENS_ENGINE_ID,
+    LENS_TEXT_ENCODER_QUANT_POLICY_KEY,
+    LENS_VARIANT_KEY,
+    lens_options_with_default_quant_policy,
+)
 
 
 logger = get_backend_logger(__name__)
@@ -92,6 +98,8 @@ class InferenceOrchestrator:
         tenc_source = engine_options.get("tenc_source")
         zimage_variant = engine_options.get("zimage_variant")
         qwen_image_variant = engine_options.get(QWEN_IMAGE_VARIANT_KEY)
+        lens_variant = engine_options.get(LENS_VARIANT_KEY)
+        lens_text_encoder_quant_policy = engine_options.get(LENS_TEXT_ENCODER_QUANT_POLICY_KEY)
         dtype_raw = engine_options.get("dtype")
         if dtype_raw is None:
             dtype_value = None
@@ -120,10 +128,20 @@ class InferenceOrchestrator:
             "tenc_source": tenc_source,
             "zimage_variant": zimage_variant,
             QWEN_IMAGE_VARIANT_KEY: qwen_image_variant,
+            LENS_VARIANT_KEY: lens_variant,
+            LENS_TEXT_ENCODER_QUANT_POLICY_KEY: lens_text_encoder_quant_policy,
             "core_streaming_enabled": streaming_val,
             "dtype": dtype_value,
         }
         return InferenceOrchestrator._freeze_engine_options(relevant)
+
+    @staticmethod
+    def _effective_engine_options(engine_key: str, engine_options: Mapping[str, object]) -> dict[str, object]:
+        """Return load options after canonical internal defaults are applied."""
+
+        if engine_key == LENS_ENGINE_ID:
+            return lens_options_with_default_quant_policy(engine_options)
+        return dict(engine_options)
 
     @staticmethod
     def _component_device(component: object) -> object | None:
@@ -176,10 +194,11 @@ class InferenceOrchestrator:
         engine_options: Mapping[str, object],
     ) -> object:
         canonical_key = self._canonical_engine_key(engine_key)
+        effective_options = self._effective_engine_options(canonical_key, engine_options)
         relevant = {
             "engine_key": canonical_key,
             "model_ref": model_ref,
-            "reload_fingerprint": self._reload_fingerprint(engine_options),
+            "reload_fingerprint": self._reload_fingerprint(effective_options),
         }
         return InferenceOrchestrator._freeze_engine_options(relevant)
 
@@ -401,7 +420,7 @@ class InferenceOrchestrator:
     ) -> Iterator[InferenceEvent]:
         start = time.perf_counter()
         canonical_key = self._canonical_engine_key(engine_key)
-        engine_opts = engine_options or {}
+        engine_opts = self._effective_engine_options(canonical_key, engine_options or {})
         if model_ref is not None:
             try:
                 self._maybe_purge_vram_for_generation(

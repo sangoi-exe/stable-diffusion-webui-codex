@@ -11,7 +11,7 @@ Defines TypeScript interfaces/types for backend responses (models/options/sample
 Inventory DTOs now include first-class IP-Adapter model/image-encoder collections from `/api/models/inventory`, SUPIR diagnostics DTOs from `/api/supir/models`, add-path contracts expose explicit nullable `size_bytes`
 metadata (`number | null`) for byte-progress UX and fail-loud validation in sequential library adds. SUPIR diagnostics now include structured
 stable sampler rows (`SupirSamplerInfo`) with backend-owned native sampler/scheduler metadata, and engine capabilities include explicit masked-img2img
-  support, vid2vid discoverability, SUPIR-mode discoverability, exact-engine img2img inpaint-mode maps, parked exact-engine statuses, plus the optional nested LTX execution-profile surface used by the current checkpoint-aware LTX defaults lane.
+  support, vid2vid discoverability, SUPIR-mode discoverability, exact-engine img2img inpaint-mode maps, parked exact-engine statuses, VAE usage vs external VAE requirement contracts, plus the optional nested LTX execution-profile surface used by the current checkpoint-aware LTX defaults lane.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `ModelInfo` (interface): Model list entry returned by `/api/models`, including explicit `format` and `core_only` checkpoint selectors.
@@ -58,7 +58,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `WorkflowCreateResponse` / `WorkflowUpdateResponse` / `WorkflowDeleteResponse` (interfaces): Workflow mutation receipts from `/api/ui/workflows`.
 - `PromptTokenCountRequest` (interface): Request payload for `/api/models/prompt-token-count`.
 - `PromptTokenCountResponse` (interface): Response payload for `/api/models/prompt-token-count`.
-- `EngineAssetContract` (interface): Per-engine asset requirements contract exposed by the backend (VAE/text encoders).
+- `EngineAssetContract` (interface): Per-engine asset requirements contract exposed by the backend (VAE usage, external VAE requirement, text encoders).
 - `EngineAssetContractVariants` (interface): Base vs core-only contract variants for one engine id.
 - `EmbeddingsResponse` (interface): `/api/embeddings` response shape.
 - `PathsResponse` (interface): `/api/paths` response shape.
@@ -570,6 +570,7 @@ export interface PromptTokenCountResponse {
 
 export interface EngineAssetContract {
   requires_vae: boolean
+  uses_vae: boolean
   tenc_count: number
   tenc_slots?: string[]
   tenc_slot_labels?: string[]

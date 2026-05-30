@@ -10,7 +10,7 @@ Purpose: Pure helper for explicit frontend image request contract resolution.
 Resolves checkpoint metadata, FLUX.2 guidance mode, asset-contract-backed text-encoder/VAE selectors, and canonical image `extras`
 without importing Pinia/Vue stores directly. Qwen Image text encoders are accepted only as `qwen_image/<path>` labels that resolve through
 the Qwen Image text-encoder root, and Z-Image L2P text encoders are accepted only as shared `zimage/<path>` labels that resolve through
-the Z-Image text-encoder root. No-VAE engines emit no VAE selector extras. Callers inject store-backed resolver callbacks
+the Z-Image text-encoder root. VAE-using engines always emit explicit `vae_source`; no-VAE engines emit no VAE selector extras. Callers inject store-backed resolver callbacks
 and remain responsible for translating thrown contract `Error`s into UI state.
 
 Symbols (top-level; keep in sync; no ghosts):
@@ -281,20 +281,24 @@ export function buildExplicitImageRequestContract(
     }
   }
 
-  if (assetContract.requires_vae) {
+  if (assetContract.uses_vae) {
     const selectedVae = args.resolvers.requireVaeSelection(args.selectedVaeLabel)
-    const selectedVaeIsSentinel = selectedVae === 'built-in' || selectedVae === 'none'
-    const resolvedVaeSha = selectedVaeIsSentinel
-      ? ''
-      : String(args.resolvers.resolveVaeSha(selectedVae) || '').trim().toLowerCase()
-    if (!selectedVaeIsSentinel && !resolvedVaeSha) {
-      throw new Error('Selected VAE is invalid or stale. Re-select a VAE and retry.')
+    if (selectedVae === 'none') {
+      throw new Error(`Engine '${args.engineKey}' uses a VAE; select built-in or an external VAE.`)
     }
-    extras.vae_source = resolvedVaeSha ? 'external' : 'built_in'
-    if (!resolvedVaeSha) {
-      throw new Error('Select a VAE so the request can include vae_sha.')
+    if (selectedVae === 'built-in') {
+      if (assetContract.requires_vae) {
+        throw new Error(`Engine '${args.engineKey}' requires an external VAE selection.`)
+      }
+      extras.vae_source = 'built_in'
+    } else {
+      const resolvedVaeSha = String(args.resolvers.resolveVaeSha(selectedVae) || '').trim().toLowerCase()
+      if (!resolvedVaeSha) {
+        throw new Error('Selected VAE is invalid or stale. Re-select a VAE and retry.')
+      }
+      extras.vae_source = 'external'
+      extras.vae_sha = resolvedVaeSha
     }
-    extras.vae_sha = resolvedVaeSha
   } else {
     const rawSelectedVae = String(args.selectedVaeLabel || '').trim()
     if (rawSelectedVae) {

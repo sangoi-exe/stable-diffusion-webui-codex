@@ -1,7 +1,7 @@
 <!-- tags: frontend, utils, xyz -->
 # apps/interface/src/utils Overview
 Date: 2025-12-03
-Last Review: 2026-05-23
+Last Review: 2026-05-30
 Status: Active
 
 ## Purpose
@@ -15,6 +15,7 @@ Status: Active
 - 2026-04-08: `inpaint_mask_preview.ts` is the canonical pure helper for inpaint preview geometry and blur-spill raster math (mask bbox, blur-support expansion, masked-padding crop expansion, outward blur-spill alpha generation, display/storage invert-mask resolution, and tint packing) shared by `InitialImageBlock.vue` and `InpaintMaskEditorOverlay.vue`; thumbnail-space containment still belongs to `InitialImageCard.vue`, not this helper, and crop math requires explicit processing dimensions instead of hidden image-dimension fallback.
 - 2026-03-21: `img2img_resize.ts` now owns engine-scoped truthful resize-mode subsets; unmasked ZImage img2img reuses the same helper for UI filtering and payload normalization, exposing only the pixel-space modes that `image_init.py` actually implements.
 - 2026-03-20: Added `image_request_contract.ts` as the canonical pure helper for frontend image request selector/extras resolution; `useGeneration.ts` and `xyz.ts` must both reuse it for checkpoint metadata, FLUX.2 guidance mode, asset-contract-backed `tenc_sha`/`vae_sha`, `vae_source`, and ZImage variant extras instead of duplicating that logic. Qwen Image text-encoder labels must be `qwen_image/<path>` selections resolved through `qwen_image_tenc`; raw paths, basenames, SHA-only labels, and other family prefixes must fail before request payloads are emitted.
+- 2026-05-30: `image_request_contract.ts` emits `extras.vae_source` for every asset contract with `uses_vae=true` (including built-in VAE for monolithic SDXL `.safetensors`) and still emits no VAE selectors for no-VAE engines such as `zimage_l2p`.
 - 2025-12-03: Added XYZ helpers (`xyz.ts`) for axis parsing/combo building used by the sweep view/store.
 - 2026-01-03: Added standardized file header block to `xyz.ts` (doc-only change; part of rollout).
 - 2026-01-29: Added PNG infotext parsing + sampler/scheduler mapping helpers (`pnginfo.ts`).

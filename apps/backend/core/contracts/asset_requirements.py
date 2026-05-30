@@ -6,8 +6,8 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Canonical per-engine asset requirements (VAE/text encoders) for generation requests.
-Centralizes “what is required” so UI ↔ API ↔ loader can stay in sync and drift cannot reappear via duplicated `engine_id in (...)` logic.
+Purpose: Canonical per-engine asset requirements (VAE usage, external VAE requirements, and text encoders) for generation requests.
+Centralizes runtime VAE usage separately from external asset requirements so UI ↔ API ↔ loader stay in sync without duplicated `engine_id in (...)` logic.
     Includes sha-selected external-asset engines (e.g., FLUX.2 Klein, Qwen Image, LTX2 GGUF core-only, Z-Image, Z-Image L2P, and Anima) where VAE/text-encoder
     weights must be provided explicitly.
 WAN22 engine variants (`wan22_5b`, `wan22_14b`, `wan22_14b_animate`) are modeled as explicit engine contracts with strict owner mapping, and
@@ -16,7 +16,7 @@ Capability-only exact ids are intentionally absent from asset-contract owner map
 
 Symbols (top-level; keep in sync; no ghosts):
 - `TextEncoderKind` (enum): UI-friendly label for the expected text encoder selection kind.
-- `EngineAssetContract` (dataclass): Required VAE/text encoder contract for a specific engine request context.
+- `EngineAssetContract` (dataclass): Runtime VAE usage and required external asset contract for a specific engine request context.
 - `contract_owner_for_engine` (function): Resolve canonical asset-contract owner engine id for an API/runtime engine id.
 - `contract_owner_for_semantic_engine` (function): Resolve canonical asset-contract owner engine id for a semantic engine surface.
 - `contract_for_engine` (function): Base contract for an engine when the selected checkpoint is not core-only.
@@ -70,6 +70,7 @@ class EngineAssetContract:
     """Asset requirements for an engine request context."""
 
     requires_vae: bool
+    uses_vae: bool
     tenc_slots: tuple[str, ...]
     tenc_kind: TextEncoderKind
     sha_only: bool
@@ -77,6 +78,9 @@ class EngineAssetContract:
     notes: str = ""
 
     def __post_init__(self) -> None:
+        if self.requires_vae and not self.uses_vae:
+            raise ValueError("requires_vae implies uses_vae")
+
         slots = tuple(str(s).strip() for s in (self.tenc_slots or ()))
         if any(not s for s in slots):
             raise ValueError("tenc_slots must not contain empty values")
@@ -109,6 +113,7 @@ class EngineAssetContract:
     def as_dict(self) -> dict[str, object]:
         return {
             "requires_vae": bool(self.requires_vae),
+            "uses_vae": bool(self.uses_vae),
             "tenc_count": int(self.tenc_count),
             "tenc_slots": list(self.tenc_slots),
             "tenc_slot_labels": list(self.tenc_slot_labels or []),
@@ -123,6 +128,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     # Diffusion checkpoints embed VAE/text encoders; external assets are optional overrides.
     "sd15": EngineAssetContract(
         requires_vae=False,
+        uses_vae=True,
         tenc_slots=(),
         tenc_kind=TextEncoderKind.NONE,
         sha_only=True,
@@ -130,6 +136,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "sd20": EngineAssetContract(
         requires_vae=False,
+        uses_vae=True,
         tenc_slots=(),
         tenc_kind=TextEncoderKind.NONE,
         sha_only=True,
@@ -137,6 +144,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "sdxl": EngineAssetContract(
         requires_vae=False,
+        uses_vae=True,
         tenc_slots=(),
         tenc_kind=TextEncoderKind.NONE,
         sha_only=True,
@@ -144,6 +152,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "sdxl_refiner": EngineAssetContract(
         requires_vae=False,
+        uses_vae=True,
         tenc_slots=(),
         tenc_kind=TextEncoderKind.NONE,
         sha_only=True,
@@ -151,6 +160,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "sd35": EngineAssetContract(
         requires_vae=False,
+        uses_vae=True,
         tenc_slots=(),
         tenc_kind=TextEncoderKind.NONE,
         sha_only=True,
@@ -159,6 +169,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     # External-assets-first families.
     "flux1": EngineAssetContract(
         requires_vae=True,
+        uses_vae=True,
         tenc_slots=("clip_l", "t5xxl"),
         tenc_slot_labels=("CLIP-L", "T5-XXL"),
         tenc_kind=TextEncoderKind.CLIP_T5,
@@ -167,6 +178,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "flux1_kontext": EngineAssetContract(
         requires_vae=True,
+        uses_vae=True,
         tenc_slots=("clip_l", "t5xxl"),
         tenc_slot_labels=("CLIP-L", "T5-XXL"),
         tenc_kind=TextEncoderKind.CLIP_T5,
@@ -175,6 +187,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "flux2": EngineAssetContract(
         requires_vae=True,
+        uses_vae=True,
         tenc_slots=("qwen3_4b",),
         tenc_slot_labels=("Qwen3-4B",),
         tenc_kind=TextEncoderKind.QWEN,
@@ -183,6 +196,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "qwen_image": EngineAssetContract(
         requires_vae=True,
+        uses_vae=True,
         tenc_slots=("qwen2_5_vl_7b",),
         tenc_slot_labels=("Qwen2.5-VL-7B",),
         tenc_kind=TextEncoderKind.QWEN,
@@ -191,6 +205,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "zimage": EngineAssetContract(
         requires_vae=True,
+        uses_vae=True,
         tenc_slots=("qwen3_4b",),
         tenc_slot_labels=("Qwen3-4B",),
         tenc_kind=TextEncoderKind.QWEN,
@@ -199,6 +214,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "zimage_l2p": EngineAssetContract(
         requires_vae=False,
+        uses_vae=False,
         tenc_slots=("qwen3_4b",),
         tenc_slot_labels=("Qwen3-4B",),
         tenc_kind=TextEncoderKind.QWEN,
@@ -207,6 +223,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "anima": EngineAssetContract(
         requires_vae=True,
+        uses_vae=True,
         tenc_slots=("qwen3_06b",),
         tenc_slot_labels=("Qwen3-0.6B",),
         tenc_kind=TextEncoderKind.QWEN,
@@ -215,6 +232,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "wan22_5b": EngineAssetContract(
         requires_vae=True,
+        uses_vae=True,
         tenc_slots=("t5xxl",),
         tenc_slot_labels=("T5-XXL",),
         tenc_kind=TextEncoderKind.T5,
@@ -223,6 +241,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "wan22_14b": EngineAssetContract(
         requires_vae=True,
+        uses_vae=True,
         tenc_slots=("t5xxl",),
         tenc_slot_labels=("T5-XXL",),
         tenc_kind=TextEncoderKind.T5,
@@ -231,6 +250,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "wan22_14b_animate": EngineAssetContract(
         requires_vae=True,
+        uses_vae=True,
         tenc_slots=("t5xxl",),
         tenc_slot_labels=("T5-XXL",),
         tenc_kind=TextEncoderKind.T5,
@@ -239,6 +259,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "ltx2": EngineAssetContract(
         requires_vae=False,
+        uses_vae=True,
         tenc_slots=("gemma3_12b",),
         tenc_slot_labels=("Gemma3-12B",),
         tenc_kind=TextEncoderKind.GEMMA,
@@ -251,6 +272,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "netflix_void": EngineAssetContract(
         requires_vae=False,
+        uses_vae=True,
         tenc_slots=(),
         tenc_kind=TextEncoderKind.NONE,
         sha_only=True,
@@ -262,6 +284,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "svd": EngineAssetContract(
         requires_vae=False,
+        uses_vae=True,
         tenc_slots=(),
         tenc_kind=TextEncoderKind.NONE,
         sha_only=True,
@@ -269,6 +292,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     ),
     "hunyuan_video": EngineAssetContract(
         requires_vae=False,
+        uses_vae=True,
         tenc_slots=(),
         tenc_kind=TextEncoderKind.NONE,
         sha_only=True,
@@ -277,6 +301,7 @@ _BASE_CONTRACTS: dict[str, EngineAssetContract] = {
     # Chroma safetensors are treated as monolithic; GGUF selections remain core-only.
     "flux1_chroma": EngineAssetContract(
         requires_vae=False,
+        uses_vae=True,
         tenc_slots=(),
         tenc_kind=TextEncoderKind.NONE,
         sha_only=True,
@@ -382,6 +407,7 @@ def contract_for_core_only(engine_id: str) -> EngineAssetContract:
     if owner == "ltx2":
         return EngineAssetContract(
             requires_vae=True,
+            uses_vae=True,
             tenc_slots=("gemma3_12b",),
             tenc_slot_labels=("Gemma3-12B",),
             tenc_kind=TextEncoderKind.GEMMA,
@@ -396,6 +422,7 @@ def contract_for_core_only(engine_id: str) -> EngineAssetContract:
     if owner == "flux1_chroma":
         return EngineAssetContract(
             requires_vae=True,
+            uses_vae=True,
             tenc_slots=("t5xxl",),
             tenc_slot_labels=("T5-XXL",),
             tenc_kind=TextEncoderKind.T5,
@@ -406,6 +433,7 @@ def contract_for_core_only(engine_id: str) -> EngineAssetContract:
     if owner in ("sd15", "sd20"):
         return EngineAssetContract(
             requires_vae=True,
+            uses_vae=True,
             tenc_slots=("clip_l",),
             tenc_slot_labels=("CLIP-L",),
             tenc_kind=TextEncoderKind.CLIP,
@@ -417,6 +445,7 @@ def contract_for_core_only(engine_id: str) -> EngineAssetContract:
         if owner == "sdxl_refiner":
             return EngineAssetContract(
                 requires_vae=True,
+                uses_vae=True,
                 tenc_slots=("clip_g",),
                 tenc_slot_labels=("CLIP-G",),
                 tenc_kind=TextEncoderKind.CLIP,
@@ -425,6 +454,7 @@ def contract_for_core_only(engine_id: str) -> EngineAssetContract:
             )
         return EngineAssetContract(
             requires_vae=True,
+            uses_vae=True,
             tenc_slots=("clip_l", "clip_g"),
             tenc_slot_labels=("CLIP-L", "CLIP-G"),
             tenc_kind=TextEncoderKind.SDXL,
@@ -438,6 +468,7 @@ def contract_for_core_only(engine_id: str) -> EngineAssetContract:
         labels = ("CLIP-L", "CLIP-G", "T5-XXL") if enable_t5 else ("CLIP-L", "CLIP-G")
         return EngineAssetContract(
             requires_vae=True,
+            uses_vae=True,
             tenc_slots=slots,
             tenc_slot_labels=labels,
             tenc_kind=TextEncoderKind.SD3,
@@ -451,6 +482,7 @@ def contract_for_core_only(engine_id: str) -> EngineAssetContract:
     base = contract_for_engine(owner)
     return EngineAssetContract(
         requires_vae=True,
+        uses_vae=True,
         tenc_slots=("clip_l",),
         tenc_slot_labels=("CLIP-L",),
         tenc_kind=TextEncoderKind.CLIP,
