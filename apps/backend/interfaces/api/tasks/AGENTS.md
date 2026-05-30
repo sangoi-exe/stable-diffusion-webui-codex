@@ -1,7 +1,7 @@
 # apps/backend/interfaces/api/tasks Overview
 <!-- tags: backend, api, tasks, orchestration -->
 Date: 2026-01-30
-Last Review: 2026-05-24
+Last Review: 2026-05-30
 Status: Active
 
 ## Purpose
@@ -13,7 +13,7 @@ Status: Active
 - `apps/backend/interfaces/api/tasks/upscale_tasks.py` — task workers for standalone `/api/upscale` and HF upscaler downloads (`/api/upscalers/download`) with explicit integrity verification (manifest sha256 when available).
 
 ## Notes
-- 2026-05-23: `generation_tasks.py::build_engine_options(..., engine_key=...)` requires the worker-resolved engine key, resolves VAE requirements through the asset contract, forwards `checkpoint_core_only` / `model_format`, requires `vae_source` only for VAE-required engines, and rejects `vae_source` / `vae_path` for no-VAE engines.
+- 2026-05-30: `generation_tasks.py::build_engine_options(..., engine_key=...)` requires the worker-resolved engine key, resolves runtime VAE usage through `EngineAssetContract.uses_vae`, forwards explicit `vae_source` for every VAE-using engine, preserves `requires_vae` as the external-VAE requirement, and rejects `vae_source` / `vae_path` / `vae_sha` for no-VAE engines.
 - 2026-05-24: `generation_tasks.py::build_engine_options(...)` reserves only nested `extras.lens.variant` for Lens variant propagation and rejects `extras.lens` on non-Lens engines; flat aliases such as `extras.lens_variant`, `extras.lensVariant`, `extras.variant`, and `extras.engine_options` fail loud.
 - 2026-05-17: `generation_tasks.py::build_engine_options(...)` forwards internal `extras.qwen_image_variant` values (`2512` / `edit_2511`) into engine options so Qwen Image cache/reload ownership stays variant-aware without accepting a public variant payload key.
 - This package must remain import-light (avoid importing torch-heavy modules at import time). Prefer local imports inside functions.

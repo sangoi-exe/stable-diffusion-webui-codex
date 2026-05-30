@@ -28,7 +28,7 @@ Uses cached inventory slot metadata for sha-selected text encoders (`tenc_sha`, 
 `height/width % 16 == 0` (Diffusers parity) to avoid silent patch-grid cropping (returns suggested rounded-up dimensions on invalid requests).
 Resolves WAN `wan_vae_sha` through VAE inventory ownership and validates VAE config availability before runtime dispatch (`bundle_dir/config.json` for directory VAEs, or sibling/metadata `vae/config.json` for file VAEs).
 Validates `extras.vae_sha` against VAE inventory ownership (rejects non-VAE asset SHAs before runtime load) to keep Flux core-only causality fail-loud at request time.
-Image request selectors are explicit: the router validates `model_sha`, `checkpoint_core_only`, `model_format`, and `vae_source`
+Image request selectors are explicit: the router validates `model_sha`, `checkpoint_core_only`, `model_format`, and `vae_source` for VAE-using engines
 against inventory metadata instead of probing checkpoint families or inferring core-only status from checkpoint names.
 Z-Image L2P requests are exact txt2img-only, pixel-space, no-VAE 1024x1024 requests; the router rejects stale VAE, variant, hires, refiner,
 swap-model, IP-Adapter, LoRA, clip-skip, unsupported sampler/scheduler, unsupported model-format state, wrong-family denoisers, denoiser GGUFs
@@ -3780,7 +3780,7 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
         vae_sha = _normalize_sha_field(extras.get("vae_sha"), field_label=vae_field)
         vae_source_raw = extras.get("vae_source")
         vae_source: str | None = None
-        if not contract.requires_vae:
+        if not contract.uses_vae:
             if vae_source_raw is not None:
                 raise HTTPException(
                     status_code=400,
@@ -3855,7 +3855,7 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
                 detail=f"'{tenc1_field}' and '{tenc2_field}' are only allowed for SDXL core-only checkpoints.",
             )
 
-        if contract.requires_vae:
+        if contract.uses_vae:
             if vae_source == "external" and not vae_sha:
                 raise HTTPException(
                     status_code=400,
@@ -3866,8 +3866,7 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
                     status_code=400,
                     detail=f"'{vae_source_field}' set to 'built_in' does not allow '{vae_field}'",
                 )
-            if not vae_sha:
-                raise HTTPException(status_code=400, detail=f"Engine '{engine_id}' requires '{vae_field}' (sha256)")
+        if contract.requires_vae:
             if vae_source == "built_in":
                 raise HTTPException(
                     status_code=400,
@@ -3876,6 +3875,8 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
                         f"and does not allow '{vae_source_field}=built_in'."
                     ),
                 )
+            if not vae_sha:
+                raise HTTPException(status_code=400, detail=f"Engine '{engine_id}' requires '{vae_field}' (sha256)")
 
         if contract.requires_text_encoders:
             if len(tenc_shas) == 0:
@@ -7191,6 +7192,7 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
                     engine_opts.update(
                         _build_engine_options(
                             req=req,
+                            engine_key=engine_key,
                             opts_snapshot=lambda: options_snapshot,
                         )
                     )

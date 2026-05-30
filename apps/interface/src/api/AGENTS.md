@@ -1,7 +1,7 @@
 # apps/interface/src/api Overview
 <!-- tags: frontend, api, payloads -->
 Date: 2025-10-28
-Last Review: 2026-05-23
+Last Review: 2026-05-30
 Status: Active
 
 ## Purpose
@@ -32,7 +32,7 @@ Status: Active
 - 2026-01-24: Removed the static `/settings_schema.json` fallback; the frontend now requires `/api/settings/schema` to be available.
 - `ModelsResponse` is served by `/api/models`; it includes `format`, `core_only`, and `core_only_reason` so image payload builders can keep selector truth inventory-authoritative before dispatch.
 - `EngineCapabilitiesResponse` is served by `/api/engines/capabilities`; it includes:
-  - `asset_contracts` (base + core-only; now includes `tenc_slots`/`tenc_slot_labels` for slot-accurate requirements)
+  - `asset_contracts` (base + core-only; now includes `uses_vae` for runtime VAE selector propagation and `tenc_slots`/`tenc_slot_labels` for slot-accurate requirements)
   - `engine_id_to_semantic_engine` (explicit key-space mapping; required by frontend taxonomy resolution)
   - required `parked_exact_engines` (exact parked-placeholder ids such as `sd35` / `netflix_void` / `svd` / `hunyuan_video`; these must not also appear in runnable maps)
   - `dependency_checks` (backend-owned readiness rows per semantic engine; `ready` covers only unscoped/global rows, while mode-scoped rows such as SDXL inpaint assets stay separately evaluable through each row's `inpaint_modes`)
