@@ -9,9 +9,12 @@ Status: Active
 
 ## Key Files
 - `apps/backend/runtime/families/qwen_image/config.py` - Edit-2511 metadata, prompt-template constants, dimensions, and image geometry helpers.
+- `apps/backend/runtime/families/qwen_image/loader.py` - Strict native transformer/TEnc/VAE construction, lazy keyspace binding, scheduler metadata, and patcher ownership.
 - `apps/backend/runtime/families/qwen_image/scheduler.py` - Diffusers-free FlowMatch Euler scheduler metadata validation plus Qwen Image sequence-length/shift helpers.
-- `apps/backend/runtime/families/qwen_image/text_encoder.py` - Lightweight Qwen2.5-VL config validation plus variant-owned prompt-template planning.
-- `apps/backend/runtime/families/qwen_image/transformer.py` - Edit-2511 `QwenImageTransformer2DModel` config and zero-conditioning validation.
+- `apps/backend/runtime/families/qwen_image/text_encoder.py` - Qwen2.5-VL config validation, exact processor batch contract, prompt-template planning, and base-model forward boundary.
+- `apps/backend/runtime/families/qwen_image/transformer.py` - Edit-2511 `QwenImageTransformer2DModel` config, topology, forward contract, and zero-conditioning validation.
+- `apps/backend/runtime/families/qwen_image/transformer_layers.py` - Checkpoint-owned dual-stream attention, modulation, feed-forward, and timestep layers.
+- `apps/backend/runtime/families/qwen_image/transformer_rope.py` - Non-checkpoint centered three-axis RoPE tables and application math.
 - `apps/backend/runtime/families/qwen_image/vae.py` - Exact external `AutoencoderKLQwenImage` SafeTensors admission, vendored-config validation, and per-channel latent normalization helpers.
 - `apps/backend/runtime/families/qwen_image/__init__.py` - Lightweight public family-runtime export surface.
 

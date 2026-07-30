@@ -1,6 +1,6 @@
 # apps/backend/patchers Overview
 Date: 2025-10-30
-Last Review: 2026-05-18
+Last Review: 2026-07-30
 Status: Active
 
 ## Purpose
@@ -16,10 +16,13 @@ Status: Active
 - `unet.py` — Codex-native UNet patcher built on typed helpers (`SamplingReservation`, `ControlNetChain`) for deterministic sampling reservations, ControlNet chaining, and patch registration.
 - `denoiser.py` — Generic `DenoiserPatcher` wrapper (ControlNet-free) for non-UNet denoisers; wraps `SamplerModel` and exposes the shared `ModelPatcher` surface.
 - `vae_normalization_policy.py` — Typed VAE normalization policy resolver (`enum` + `dataclasses`) with explicit per-family shift contracts.
+- `vae.py` — Canonical VAE wrapper; resolves diffusers/native geometry and prefers an encoder's explicit final `latents` tensor before sampling a fallback `latent_dist`.
 - Additional patch modules (e.g., adapters) live here as they are ported.
 
 ## Notes
 - Patchers should operate on runtime objects provided by `runtime/` and `engines/` without duplicating loading logic.
+- 2026-07-30: encode outputs that expose both an explicit tensor-valued `latents` field and `latent_dist` use the explicit owner-produced tensor; the generic wrapper must not sample the posterior again or undo owner-controlled rank regulation.
+- 2026-07-30: `VAE` resolves native 3D autoencoder geometry from `scale_factor_spatial` and `z_dim` when diffusers-style `down_block_types` and `latent_channels` are absent; missing or invalid geometry remains fail-loud.
 - 2026-03-22: `vae.py` encode paths now accept optional `encode_seed` and build a device-local posterior generator for diffusers-style `latent_dist.sample(...)`; regular, tiled, regular->tiled retry, and CPU-fallback encode paths must all recreate generators from the same seed when they restart full-image work, and seeded posterior sampling failures must fail loud instead of silently degrading to mean latents.
 - LoRA merges are transactional: loaders snapshot parameters, track deterministic patch order, surface tqdm progress, and raise on any mismatched tensor metadata.
 - When introducing new patch behaviour, add explicit configuration flags/options and document them in `.sangoi/backend/`.

@@ -6,13 +6,15 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Qwen Image Qwen2.5-VL text-encoder metadata and prompt-template helpers.
-Validates the lightweight Qwen2.5-VL config contract and builds prompt-template plans for internal Qwen Image variants
-without importing `transformers` or loading text-encoder weights.
+Purpose: Qwen Image Qwen2.5-VL metadata, processor-batch, and base-model runtime helpers.
+Validates the lightweight Qwen2.5-VL config contract, builds the exact Edit-2511 prompt template, and owns the typed
+processor/base-model boundary without importing `transformers` at module import time.
 
 Symbols (top-level; keep in sync; no ghosts):
+- `QwenImageProcessorBatch` (dataclass): Exact four-tensor Qwen2-VL processor output used by Edit-2511.
 - `QwenImagePromptPlan` (dataclass): Rendered prompt plus template-drop/max-sequence metadata for text encoding.
 - `QwenImageTextEncoderConfig` (dataclass): Strict Qwen2.5-VL text-encoder metadata contract.
+- `QwenImageTextEncoderRuntime` (class): Bound processor plus `Qwen2_5_VLModel` forward seam.
 - `QwenImageVisionConfig` (dataclass): Strict Qwen2.5-VL visual-tower metadata contract.
 - `qwen_image_prompt_plan` (function): Render a prompt through the variant-owned Qwen Image template.
 - `qwen_image_text_encoder_config_from_mapping` (function): Validate and convert a text-encoder config mapping.
@@ -21,10 +23,25 @@ Symbols (top-level; keep in sync; no ghosts):
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Protocol
+
+import torch
+from torch import nn
 
 from .config import QWEN_IMAGE_CONTEXT_DIM, QWEN_IMAGE_TOKENIZER_MAX_LENGTH, qwen_image_variant_spec
+
+
+class _QwenImageProcessor(Protocol):
+    def __call__(
+        self,
+        *,
+        text: list[str],
+        images: object,
+        padding: bool,
+        return_tensors: str,
+    ) -> Mapping[str, torch.Tensor]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +85,187 @@ class QwenImagePromptPlan:
         if self.template_start_idx < 0:
             raise ValueError("Qwen Image prompt template_start_idx must be non-negative")
         qwen_image_validate_max_sequence_length(self.max_sequence_length)
+
+
+@dataclass(frozen=True, slots=True)
+class QwenImageProcessorBatch:
+    input_ids: torch.Tensor
+    attention_mask: torch.Tensor
+    pixel_values: torch.Tensor
+    image_grid_thw: torch.Tensor
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("input_ids", self.input_ids),
+            ("attention_mask", self.attention_mask),
+            ("pixel_values", self.pixel_values),
+            ("image_grid_thw", self.image_grid_thw),
+        ):
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"Qwen Image processor {field_name} must be a torch.Tensor.")
+        if self.input_ids.ndim != 2 or int(self.input_ids.shape[0]) != 1:
+            raise RuntimeError(
+                "Qwen Image processor input_ids must have shape [1,S]; "
+                f"got {tuple(self.input_ids.shape)}."
+            )
+        if tuple(self.attention_mask.shape) != tuple(self.input_ids.shape):
+            raise RuntimeError(
+                "Qwen Image processor attention_mask must match input_ids; "
+                f"got mask={tuple(self.attention_mask.shape)} ids={tuple(self.input_ids.shape)}."
+            )
+        if self.pixel_values.ndim != 2 or int(self.pixel_values.shape[1]) != 1176:
+            raise RuntimeError(
+                "Qwen Image processor pixel_values must have shape [P,1176]; "
+                f"got {tuple(self.pixel_values.shape)}."
+            )
+        if self.image_grid_thw.ndim != 2 or tuple(self.image_grid_thw.shape) != (1, 3):
+            raise RuntimeError(
+                "Qwen Image processor image_grid_thw must have shape [1,3]; "
+                f"got {tuple(self.image_grid_thw.shape)}."
+            )
+
+    def to_model_inputs(
+        self,
+        *,
+        device: torch.device,
+        pixel_dtype: torch.dtype,
+    ) -> dict[str, torch.Tensor]:
+        return {
+            "input_ids": self.input_ids.to(device=device, dtype=torch.long),
+            "attention_mask": self.attention_mask.to(device=device, dtype=torch.long),
+            "pixel_values": self.pixel_values.to(device=device, dtype=pixel_dtype),
+            "image_grid_thw": self.image_grid_thw.to(device=device, dtype=torch.long),
+        }
+
+
+class QwenImageTextEncoderRuntime:
+    """Exact Qwen2.5-VL processor and base-model runtime boundary."""
+
+    def __init__(
+        self,
+        *,
+        model: nn.Module,
+        processor: _QwenImageProcessor,
+        compute_dtype: torch.dtype,
+    ) -> None:
+        if not isinstance(model, nn.Module):
+            raise TypeError(f"Qwen Image text encoder model must be nn.Module; got {type(model).__name__}.")
+        if not callable(processor):
+            raise TypeError(
+                f"Qwen Image processor must be callable; got {type(processor).__name__}."
+            )
+        if compute_dtype not in (torch.bfloat16, torch.float16, torch.float32):
+            raise RuntimeError(
+                "Qwen Image text encoder compute dtype must be bf16, fp16, or fp32; "
+                f"got {compute_dtype}."
+            )
+        self.model = model.eval()
+        self.processor = processor
+        self.compute_dtype = compute_dtype
+
+    @property
+    def device(self) -> torch.device:
+        try:
+            return next(self.model.parameters()).device
+        except StopIteration as exc:
+            raise RuntimeError("Qwen Image text encoder model has no parameters.") from exc
+
+    def prepare_processor_batch(
+        self,
+        *,
+        prompt_plan: QwenImagePromptPlan,
+        image: object,
+    ) -> QwenImageProcessorBatch:
+        if not isinstance(prompt_plan, QwenImagePromptPlan):
+            raise TypeError(
+                "Qwen Image processor requires QwenImagePromptPlan; "
+                f"got {type(prompt_plan).__name__}."
+            )
+        raw_batch = self.processor(
+            text=[prompt_plan.rendered_prompt],
+            images=image,
+            padding=True,
+            return_tensors="pt",
+        )
+        if not isinstance(raw_batch, Mapping):
+            raise RuntimeError(
+                "Qwen Image processor must return a mapping; "
+                f"got {type(raw_batch).__name__}."
+            )
+        expected_keys = {"input_ids", "attention_mask", "pixel_values", "image_grid_thw"}
+        actual_keys = {str(key) for key in raw_batch.keys()}
+        if actual_keys != expected_keys:
+            raise RuntimeError(
+                "Qwen Image processor output key mismatch. "
+                f"missing={sorted(expected_keys - actual_keys)} extra={sorted(actual_keys - expected_keys)}."
+            )
+        values: dict[str, torch.Tensor] = {}
+        for key in sorted(expected_keys):
+            value = raw_batch[key]
+            if not isinstance(value, torch.Tensor):
+                raise RuntimeError(
+                    f"Qwen Image processor output {key!r} must be a torch.Tensor; "
+                    f"got {type(value).__name__}."
+                )
+            values[key] = value
+        batch = QwenImageProcessorBatch(
+            input_ids=values["input_ids"],
+            attention_mask=values["attention_mask"],
+            pixel_values=values["pixel_values"],
+            image_grid_thw=values["image_grid_thw"],
+        )
+        sequence_length = int(batch.input_ids.shape[1])
+        if sequence_length > prompt_plan.max_sequence_length:
+            raise RuntimeError(
+                "Qwen Image processor sequence exceeds the selected max_sequence_length. "
+                f"got={sequence_length} max={prompt_plan.max_sequence_length}."
+            )
+        if prompt_plan.template_start_idx >= sequence_length:
+            raise RuntimeError(
+                "Qwen Image prompt template drop index must be smaller than the encoded sequence length. "
+                f"drop={prompt_plan.template_start_idx} sequence={sequence_length}."
+            )
+        return batch
+
+    @torch.inference_mode()
+    def forward_processor_batch(self, batch: QwenImageProcessorBatch) -> torch.Tensor:
+        if not isinstance(batch, QwenImageProcessorBatch):
+            raise TypeError(
+                "Qwen Image text encoder requires QwenImageProcessorBatch; "
+                f"got {type(batch).__name__}."
+            )
+        model_inputs = batch.to_model_inputs(
+            device=self.device,
+            pixel_dtype=self.compute_dtype,
+        )
+        output = self.model(
+            input_ids=model_inputs["input_ids"],
+            attention_mask=model_inputs["attention_mask"],
+            pixel_values=model_inputs["pixel_values"],
+            image_grid_thw=model_inputs["image_grid_thw"],
+            use_cache=False,
+            output_hidden_states=False,
+            return_dict=True,
+        )
+        hidden_states = getattr(output, "last_hidden_state", None)
+        if not isinstance(hidden_states, torch.Tensor):
+            raise RuntimeError(
+                "Qwen2_5_VLModel output must expose tensor last_hidden_state; "
+                f"got {type(hidden_states).__name__}."
+            )
+        expected_shape = (
+            int(batch.input_ids.shape[0]),
+            int(batch.input_ids.shape[1]),
+            QWEN_IMAGE_CONTEXT_DIM,
+        )
+        if tuple(hidden_states.shape) != expected_shape:
+            raise RuntimeError(
+                "Qwen Image text encoder hidden-state shape mismatch. "
+                f"got={tuple(hidden_states.shape)} expected={expected_shape}."
+            )
+        if not bool(torch.isfinite(hidden_states).all().item()):
+            raise RuntimeError("Qwen Image text encoder produced non-finite hidden states.")
+        return hidden_states
 
 
 def _require_mapping(value: object, *, field: str, context: str) -> Mapping[str, object]:
@@ -130,8 +328,10 @@ def qwen_image_prompt_plan(
 
 
 __all__ = [
+    "QwenImageProcessorBatch",
     "QwenImagePromptPlan",
     "QwenImageTextEncoderConfig",
+    "QwenImageTextEncoderRuntime",
     "QwenImageVisionConfig",
     "qwen_image_prompt_plan",
     "qwen_image_text_encoder_config_from_mapping",

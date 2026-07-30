@@ -18,7 +18,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `_tensor_stats` (function): Opt-in VAE tensor diagnostics for shape/dtype/device and basic statistics (`CODEX_VAE_TENSOR_STATS=1` plus DEBUG logging).
 - `_unwrap_decode_output` (function): Normalizes diffusers decode outputs to a plain tensor (`DecoderOutput.sample` or passthrough).
 - `_new_encode_generator` (function): Builds a device-local seeded generator for deterministic VAE posterior sampling when img2img requests supply an encode seed.
-- `_unwrap_encode_output` (function): Normalizes diffusers encode outputs to a latent tensor (handles `latent_dist`, `.sample()`, `.mean`, etc.).
+- `_unwrap_encode_output` (function): Normalizes encode outputs to a latent tensor, preferring an explicit owner-produced `.latents` tensor before distribution sampling.
 - `_report_vae_progress` (function): Reports VAE encode/decode block progress into backend state for phase-aware streaming.
 - `_NormalizingFirstStage` (class): Wrapper around a first-stage VAE that applies strict scalar/per-channel latent normalization (including optional shift semantics) and proxies encode/decode APIs.
 - `VaeTileGeometry` (class import): Shared typed tile geometry contract consumed by tiled decode/encode helpers.
@@ -106,7 +106,7 @@ def _new_encode_generator(*, encode_seed: int | None, device: torch.device | str
 
 
 def _unwrap_encode_output(output, *, generator: torch.Generator | None = None):
-    """Extract latent tensor from diffusers AutoencoderKLOutput or passthrough."""
+    """Extract the owner-produced latent tensor or sample a distribution output."""
 
     def _sample_output(sample_owner):
         if generator is None:
@@ -123,7 +123,11 @@ def _unwrap_encode_output(output, *, generator: torch.Generator | None = None):
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError("VAE encode output failed during generator-seeded sampling.") from exc
 
-    # Newer diffusers-style outputs: AutoencoderKLOutput with latent_dist
+    explicit_latents = getattr(output, "latents", None)
+    if torch.is_tensor(explicit_latents):
+        return explicit_latents
+
+    # Newer diffusers-style outputs: AutoencoderKLOutput with latent_dist.
     if hasattr(output, "latent_dist"):
         dist = getattr(output, "latent_dist")
         if hasattr(dist, "sample"):
@@ -356,8 +360,46 @@ class VAE:
         self.memory_used_decode = (
             lambda shape, dtype: (2178 * shape[2] * shape[3] * 64) * torch.empty((), dtype=dtype).element_size()
         )
-        self.downscale_ratio = int(2 ** (len(model.config.down_block_types) - 1))
-        self.latent_channels = int(model.config.latent_channels)
+        config = getattr(model, "config", None)
+        has_spatial_scale, raw_spatial_scale = read_vae_config_field(config, "scale_factor_spatial")
+        if has_spatial_scale:
+            try:
+                self.downscale_ratio = int(raw_spatial_scale)
+            except Exception as exc:  # noqa: BLE001 - fail-loud config boundary
+                raise RuntimeError(
+                    f"VAE scale_factor_spatial must be an integer; got {raw_spatial_scale!r}."
+                ) from exc
+            if self.downscale_ratio <= 0:
+                raise RuntimeError(
+                    f"VAE scale_factor_spatial must be positive; got {self.downscale_ratio}."
+                )
+        else:
+            has_down_blocks, raw_down_blocks = read_vae_config_field(config, "down_block_types")
+            if (
+                not has_down_blocks
+                or not isinstance(raw_down_blocks, (list, tuple))
+                or not raw_down_blocks
+            ):
+                raise RuntimeError(
+                    "VAE config must define positive scale_factor_spatial or a non-empty down_block_types sequence."
+                )
+            self.downscale_ratio = int(2 ** (len(raw_down_blocks) - 1))
+
+        has_latent_channels, raw_latent_channels = read_vae_config_field(config, "latent_channels")
+        if not has_latent_channels:
+            has_latent_channels, raw_latent_channels = read_vae_config_field(config, "z_dim")
+        if not has_latent_channels:
+            raise RuntimeError("VAE config must define latent_channels or z_dim.")
+        try:
+            self.latent_channels = int(raw_latent_channels)
+        except Exception as exc:  # noqa: BLE001 - fail-loud config boundary
+            raise RuntimeError(
+                f"VAE latent channel count must be an integer; got {raw_latent_channels!r}."
+            ) from exc
+        if self.latent_channels <= 0:
+            raise RuntimeError(
+                f"VAE latent channel count must be positive; got {self.latent_channels}."
+            )
         if family is not None and not isinstance(family, ModelFamily):
             raise RuntimeError(f"Invalid VAE family type: {type(family)!r}. Expected ModelFamily or None.")
         self.family: ModelFamily | None = family
