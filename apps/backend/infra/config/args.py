@@ -15,7 +15,8 @@ Also parses strict LoRA loader policy toggles (`--lora-merge-mode`, `--lora-refr
 Main-device invariant support enforces a single runtime device authority: `--main-device` (launcher-provided) governs
 core/TE/VAE and falls back to CUDA when available (else CPU) when omitted.
 Mount/offload device invariants add explicit lifecycle control (`--mount-device`, `--offload-device`) with fail-loud
-normalization; mount defaults to the resolved main device, offload defaults to CPU when unset/auto.
+normalization; mount defaults to the resolved main device, offload defaults to CPU when unset/auto, and matching
+component roles retain the explicit main backend whenever mount differs from main.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `_build_parser` (function): Defines the argparse schema for backend runtime flags (devices/dtypes/attention/swap/etc).
@@ -802,6 +803,7 @@ def _torch_dtype_for_choice(choice: str | None) -> str | None:
 
 def _apply_component_device_overrides(config: RuntimeMemoryConfig, ns: argparse.Namespace) -> None:
     main_backend = _device_backend_for_choice(getattr(ns, "codex_main_device", None))
+    mount_backend = _device_backend_for_choice(getattr(ns, "codex_mount_device", None))
     role_choices = (
         (DeviceRole.CORE, getattr(ns, "codex_core_device", None), getattr(ns, "codex_core_dtype", None)),
         (DeviceRole.TEXT_ENCODER, getattr(ns, "codex_te_device", None), getattr(ns, "codex_te_dtype", None)),
@@ -811,7 +813,12 @@ def _apply_component_device_overrides(config: RuntimeMemoryConfig, ns: argparse.
         policy = config.component_policy(role)
         resolved_backend = _device_backend_for_choice(device_choice)
         if resolved_backend is not None:
-            if main_backend is not None and resolved_backend == main_backend:
+            if (
+                main_backend is not None
+                and mount_backend is not None
+                and resolved_backend == main_backend
+                and resolved_backend == mount_backend
+            ):
                 policy.preferred_backend = DeviceBackend.AUTO
             else:
                 policy.preferred_backend = resolved_backend
