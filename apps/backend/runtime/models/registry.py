@@ -10,7 +10,8 @@ Purpose: Checkpoint/VAE discovery with sha256 and layout-metadata caching.
 Scans configured model roots (via `apps/paths.json` accessors) for checkpoint and VAE weight files, including file-level checkpoint entries,
 computes sha256 hashes, and maintains a persistent cache in `models/.hashes.json` (schema v2) for fast UI inventory, backend SHA-based
 resolution, CLIP layout metadata reuse, and checkpoint-scoped metadata forwarding such as current LTX2 execution-profile/default hints,
-Netflix VOID overlay pairing readiness, and Z-Image L2P GGUF admission metadata. Paths config resolution is fail-loud (no silent fallback to defaults on invalid config payloads).
+Netflix VOID overlay pairing readiness, exact Qwen Image Edit-2511 GGUF identity, and Z-Image L2P GGUF admission metadata.
+Paths config resolution is fail-loud (no silent fallback to defaults on invalid config payloads).
 Family hints and root selection cover SD/Flux/Qwen Image/Anima/WAN/ZImage/ZImage L2P/LTX2/Netflix VOID keyspaces while generic VAE inventory excludes audio-bundle files.
 
 Symbols (top-level; keep in sync; no ghosts):
@@ -19,6 +20,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `_sha256` (function): Computes sha256 digest for a file path.
 - `detect_safetensors_primary_dtype` (function): Best-effort safetensors dtype hint reader (header-only parse; used for defaults/telemetry).
 - `_detect_sdxl_core_only_checkpoint` (function): Header-only SDXL checkpoint classifier for UNet-only `.safetensors` assets discovered under SDXL roots.
+- `_inspect_qwen_image_edit_core_checkpoint` (function): Header-only exact Qwen Image Edit-2511 transformer GGUF inspector.
 - `_inspect_zimage_l2p_core_checkpoint` (function): Header-only Z-Image L2P checkpoint inspector for no-VAE pixel DiT SafeTensors/GGUF assets.
 - `_detect_zimage_l2p_core_checkpoint` (function): Boolean wrapper around the L2P checkpoint inspector.
 - `_HashCacheEntry` (dataclass): Cache entry for one file (sha + mtime + size) used to avoid re-hashing unchanged files.
@@ -129,6 +131,49 @@ def _detect_sdxl_core_only_checkpoint(path: Path) -> bool:
     has_vae = any(key.startswith("first_stage_model.") or key.startswith("vae.") for key in keys)
     has_text_encoders = any(key.startswith("conditioner.embedders.") for key in keys)
     return has_unet and not has_vae and not has_text_encoders
+
+
+@dataclass(frozen=True, slots=True)
+class _TensorShapeDescriptor:
+    shape: tuple[int, ...]
+
+
+def _inspect_qwen_image_edit_core_checkpoint(path: Path) -> dict[str, object] | None:
+    if path.suffix.lower() != ".gguf":
+        return None
+    try:
+        from apps.backend.quantization.gguf import GGUFReader
+        from apps.backend.quantization.gguf_loader import get_gguf_metadata
+        from apps.backend.runtime.model_registry.detectors.qwen_image import (
+            validate_qwen_image_edit_gguf_metadata,
+        )
+        from apps.backend.runtime.state_dict.keymap_qwen_image_transformer import (
+            resolve_qwen_image_edit_transformer_keyspace,
+        )
+
+        metadata = dict(get_gguf_metadata(str(path)))
+        validate_qwen_image_edit_gguf_metadata(metadata)
+        reader = GGUFReader(str(path))
+        descriptors = {
+            tensor.name: _TensorShapeDescriptor(
+                shape=tuple(int(dim) for dim in reversed(tensor.shape.tolist())),
+            )
+            for tensor in reader.tensors
+        }
+        resolve_qwen_image_edit_transformer_keyspace(descriptors)
+    except Exception:
+        return None
+    return {
+        "requires_vae": True,
+        "text_encoder_slots": ["qwen2_5_vl_7b"],
+        "qwen_image_variant": "edit_2511",
+        "zero_cond_t": True,
+        "signature_source": "qwen_image_edit_2511_gguf_profile",
+        "codex.quant_policy": str(metadata.get("codex.quant_policy") or ""),
+        "codex.quant_policy_preset": str(metadata.get("codex.quant_policy_preset") or ""),
+        "model.architecture": str(metadata.get("model.architecture") or ""),
+        "model.name": str(metadata.get("model.name") or ""),
+    }
 
 
 def _inspect_zimage_l2p_core_checkpoint(path: Path) -> dict[str, object] | None:
@@ -617,6 +662,14 @@ class ModelRegistry:
             if not core_only and family_hint == "sdxl" and _detect_sdxl_core_only_checkpoint(file):
                 core_only = True
                 core_only_reason = "sdxl_header_unet_only"
+            qwen_image_metadata: dict[str, object] = {}
+            if family_hint == "qwen_image":
+                inspected_qwen_metadata = _inspect_qwen_image_edit_core_checkpoint(file)
+                if inspected_qwen_metadata is None:
+                    continue
+                qwen_image_metadata = inspected_qwen_metadata
+                core_only = True
+                core_only_reason = "qwen_image_edit_2511_gguf_profile_core_only"
             zimage_l2p_metadata: dict[str, object] = {}
             if family_hint == "zimage_l2p":
                 inspected_l2p_metadata = _inspect_zimage_l2p_core_checkpoint(file)
@@ -671,6 +724,7 @@ class ModelRegistry:
                 file_size=stat.st_size,
                 metadata={
                     **metadata,
+                    **qwen_image_metadata,
                     **zimage_l2p_metadata,
                 },
                 updated_at=stat.st_mtime,

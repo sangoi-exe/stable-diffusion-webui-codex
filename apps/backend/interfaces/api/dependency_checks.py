@@ -10,7 +10,7 @@ Purpose: Backend-owned engine dependency check contract for WebUI readiness surf
 Builds deterministic per-engine check rows from backend inventory/model-registry state so the frontend can render a strict
 "Dependency Check" panel and disable generation when required assets are missing. Semantic-engine asset checks resolve through the
 canonical contract owner seam (`contract_owner_for_semantic_engine`) to prevent drift between API surfaces, including Qwen Image
-and Z-Image L2P scoped split-asset roots, the
+Edit-2511 vendored processor/config readiness, Z-Image L2P scoped split-asset roots, the
 vendored LTX2 metadata/config readiness required by explicit execution profiles and the explicit Netflix VOID base-bundle +
 literal overlay-pair readiness contract. Mode-scoped rows can now report exact masked-runtime readiness (for example SDXL `fooocus_inpaint`)
 without making the whole semantic engine globally unready.
@@ -18,6 +18,7 @@ without making the whole semantic engine globally unready.
 Symbols (top-level; keep in sync; no ghosts):
 - `DependencyCheckRow` (dataclass): One backend dependency row (`id/label/ok/message`, with optional `inpaint_modes` scope) rendered by the frontend.
 - `EngineDependencyStatus` (dataclass): Aggregated dependency status for one semantic engine (`ready + checks`).
+- `_qwen_image_vendored_metadata_check` (function): Validate the complete offline Edit-2511 processor/tokenizer/component metadata set.
 - `build_engine_dependency_checks` (function): Build per-engine dependency status map for `/api/engines/capabilities`.
 """
 
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib
+import json
 import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -39,6 +41,14 @@ from apps.backend.inventory import cache as inventory_cache
 from apps.backend.runtime.families.sd.brushnet import resolve_brushnet_assets
 from apps.backend.runtime.families.sd.fooocus_inpaint import resolve_fooocus_inpaint_assets
 from apps.backend.runtime.families.ltx2.config import LTX2_VENDOR_REPO_ID, resolve_ltx2_vendor_paths
+from apps.backend.runtime.families.qwen_image.config import (
+    QWEN_IMAGE_EDIT_PIPELINE_CLASS,
+    QWEN_IMAGE_EDIT_VARIANT,
+)
+from apps.backend.runtime.families.qwen_image.scheduler import qwen_image_scheduler_config_from_mapping
+from apps.backend.runtime.families.qwen_image.text_encoder import qwen_image_text_encoder_config_from_mapping
+from apps.backend.runtime.families.qwen_image.transformer import qwen_image_transformer_config_from_mapping
+from apps.backend.runtime.families.qwen_image.vae import qwen_image_vae_config_from_mapping
 from apps.backend.runtime.families.netflix_void.loader import resolve_netflix_void_base_dirs
 from apps.backend.runtime.model_registry.netflix_void_execution import (
     NETFLIX_VOID_KIND_PASS2,
@@ -211,6 +221,142 @@ def _ltx2_vendored_metadata_check() -> DependencyCheckRow:
             f"connectors_config={vendor_paths.connectors_config_path}, "
             "component_configs=text_encoder|scheduler|connectors|transformer|vae|audio_vae|vocoder. "
             "The explicit two_stage lane additionally requires latent_upsampler/config.json."
+        ),
+    )
+
+
+def _qwen_image_vendored_metadata_check() -> DependencyCheckRow:
+    metadata_root = _BACKEND_ROOT / "huggingface" / "Qwen" / "Qwen-Image-Edit-2511"
+    required_files = (
+        "model_index.json",
+        "processor/added_tokens.json",
+        "processor/chat_template.jinja",
+        "processor/merges.txt",
+        "processor/preprocessor_config.json",
+        "processor/special_tokens_map.json",
+        "processor/tokenizer.json",
+        "processor/tokenizer_config.json",
+        "processor/video_preprocessor_config.json",
+        "processor/vocab.json",
+        "scheduler/scheduler_config.json",
+        "text_encoder/config.json",
+        "text_encoder/generation_config.json",
+        "text_encoder/model.safetensors.index.json",
+        "tokenizer/added_tokens.json",
+        "tokenizer/chat_template.jinja",
+        "tokenizer/merges.txt",
+        "tokenizer/special_tokens_map.json",
+        "tokenizer/tokenizer_config.json",
+        "tokenizer/vocab.json",
+        "transformer/config.json",
+        "transformer/diffusion_pytorch_model.safetensors.index.json",
+        "vae/config.json",
+    )
+    missing = [relative for relative in required_files if not (metadata_root / relative).is_file()]
+    if missing:
+        return DependencyCheckRow(
+            id="vendored_metadata",
+            label="Vendored Metadata",
+            ok=False,
+            message=(
+                "Qwen Image Edit-2511 vendored metadata is incomplete under "
+                f"{metadata_root}: missing={missing}."
+            ),
+        )
+
+    def _read_object(relative: str) -> Mapping[str, object]:
+        path = metadata_root / relative
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, Mapping):
+            raise RuntimeError(f"{path} must contain a JSON object.")
+        return payload
+
+    try:
+        model_index = _read_object("model_index.json")
+        if str(model_index.get("_class_name") or "").strip() != QWEN_IMAGE_EDIT_PIPELINE_CLASS:
+            raise RuntimeError(
+                "model_index.json must declare "
+                f"_class_name={QWEN_IMAGE_EDIT_PIPELINE_CLASS!r}."
+            )
+        expected_components = {
+            "processor": ("transformers", "Qwen2VLProcessor"),
+            "scheduler": ("diffusers", "FlowMatchEulerDiscreteScheduler"),
+            "text_encoder": ("transformers", "Qwen2_5_VLForConditionalGeneration"),
+            "tokenizer": ("transformers", "Qwen2Tokenizer"),
+            "transformer": ("diffusers", "QwenImageTransformer2DModel"),
+            "vae": ("diffusers", "AutoencoderKLQwenImage"),
+        }
+        for component, expected in expected_components.items():
+            raw = model_index.get(component)
+            actual = tuple(raw) if isinstance(raw, list) else ()
+            if actual != expected:
+                raise RuntimeError(
+                    f"model_index.json component {component!r} mismatch: got={actual!r} expected={expected!r}."
+                )
+
+        qwen_image_transformer_config_from_mapping(
+            _read_object("transformer/config.json"),
+            variant=QWEN_IMAGE_EDIT_VARIANT,
+            context=str(metadata_root / "transformer/config.json"),
+        )
+        qwen_image_text_encoder_config_from_mapping(
+            _read_object("text_encoder/config.json"),
+            context=str(metadata_root / "text_encoder/config.json"),
+        )
+        qwen_image_vae_config_from_mapping(
+            _read_object("vae/config.json"),
+            context=str(metadata_root / "vae/config.json"),
+        )
+        qwen_image_scheduler_config_from_mapping(
+            _read_object("scheduler/scheduler_config.json"),
+            context=str(metadata_root / "scheduler/scheduler_config.json"),
+        )
+
+        processor_config = _read_object("processor/preprocessor_config.json")
+        expected_processor_fields = {
+            "image_processor_type": "Qwen2VLImageProcessorFast",
+            "processor_class": "Qwen2VLProcessor",
+            "patch_size": 14,
+            "temporal_patch_size": 2,
+            "merge_size": 2,
+            "min_pixels": 3136,
+            "max_pixels": 12845056,
+        }
+        for field, expected in expected_processor_fields.items():
+            actual = processor_config.get(field)
+            if actual != expected:
+                raise RuntimeError(
+                    f"processor/preprocessor_config.json field {field!r} mismatch: "
+                    f"got={actual!r} expected={expected!r}."
+                )
+        tokenizer_config = _read_object("processor/tokenizer_config.json")
+        expected_tokenizer_fields = {
+            "processor_class": "Qwen2VLProcessor",
+            "tokenizer_class": "Qwen2Tokenizer",
+            "model_max_length": 131072,
+        }
+        for field, expected in expected_tokenizer_fields.items():
+            actual = tokenizer_config.get(field)
+            if actual != expected:
+                raise RuntimeError(
+                    f"processor/tokenizer_config.json field {field!r} mismatch: "
+                    f"got={actual!r} expected={expected!r}."
+                )
+    except Exception as exc:
+        return DependencyCheckRow(
+            id="vendored_metadata",
+            label="Vendored Metadata",
+            ok=False,
+            message=f"Qwen Image Edit-2511 vendored metadata validation failed: {exc}",
+        )
+
+    return DependencyCheckRow(
+        id="vendored_metadata",
+        label="Vendored Metadata",
+        ok=True,
+        message=(
+            "Qwen Image Edit-2511 offline metadata ready: exact model_index, processor/tokenizer assets, "
+            "Qwen2.5-VL config, 60-block transformer config, VAE config, and FlowMatch scheduler config."
         ),
     )
 
@@ -651,6 +797,8 @@ def build_engine_dependency_checks(
 
         contract_engine = contract_owner_for_semantic_engine(semantic_engine)
         contract = contract_for_engine(contract_engine)
+        if semantic_engine == "qwen_image":
+            checks.append(_qwen_image_vendored_metadata_check())
         if semantic_engine == "ltx2":
             checks.append(_ltx2_vendored_metadata_check())
             if has_core_only_checkpoints and not has_monolithic_checkpoints:

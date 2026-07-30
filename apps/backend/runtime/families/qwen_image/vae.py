@@ -6,9 +6,9 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Qwen Image VAE metadata validation and latent normalization helpers.
-Owns the lightweight `AutoencoderKLQwenImage` config contract and per-channel latent mean/std math used by Qwen Image
-encode/decode seams, without building or loading the heavyweight VAE module.
+Purpose: Qwen Image Edit-2511 VAE metadata validation and latent normalization helpers.
+Owns the vendored `AutoencoderKLQwenImage` config contract, exact external SafeTensors header identity, and per-channel
+latent mean/std math used by Qwen Image encode/decode seams without loading tensor payloads during admission.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageVaeConfig` (dataclass): Strict metadata contract for `AutoencoderKLQwenImage`.
@@ -26,10 +26,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Sequence
 
+from apps.backend.runtime.checkpoint.safetensors_header import read_safetensors_header
+
 if TYPE_CHECKING:  # pragma: no cover
     import torch
 
 from .config import QWEN_IMAGE_LATENT_CHANNELS
+
+_VENDORED_VAE_CONFIG_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "huggingface"
+    / "Qwen"
+    / "Qwen-Image-Edit-2511"
+    / "vae"
+    / "config.json"
+)
+_EXPECTED_VAE_TENSOR_COUNT = 194
+_EXPECTED_VAE_DTYPE = "BF16"
+_CRITICAL_VAE_SHAPES = {
+    "encoder.conv_in.weight": (96, 3, 3, 3, 3),
+    "decoder.conv_out.weight": (3, 96, 3, 3, 3),
+    "quant_conv.weight": (32, 32, 1, 1, 1),
+    "post_quant_conv.weight": (16, 16, 1, 1, 1),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,10 +118,46 @@ def _read_vae_config(path: Path, *, context: str) -> Mapping[str, object]:
     return data
 
 
-def _config_path_for_vae_asset(path: Path) -> Path:
-    if path.is_dir():
-        return path / "config.json"
-    return path.parent / "config.json"
+def _validate_vae_safetensors_header(path: Path, *, context: str) -> None:
+    try:
+        header = read_safetensors_header(path)
+    except Exception as exc:
+        raise RuntimeError(f"{context}: failed to read SafeTensors header from {path}: {exc}") from exc
+
+    tensor_entries = {
+        str(name): metadata
+        for name, metadata in header.items()
+        if name != "__metadata__" and isinstance(metadata, Mapping)
+    }
+    if len(tensor_entries) != _EXPECTED_VAE_TENSOR_COUNT:
+        raise RuntimeError(
+            f"{context}: exact Edit-2511 VAE tensor count mismatch for {path}. "
+            f"got={len(tensor_entries)} expected={_EXPECTED_VAE_TENSOR_COUNT}."
+        )
+
+    wrong_dtypes: list[str] = []
+    for name, metadata in tensor_entries.items():
+        dtype = metadata.get("dtype")
+        if dtype != _EXPECTED_VAE_DTYPE:
+            wrong_dtypes.append(f"{name}:{dtype!r}")
+    if wrong_dtypes:
+        raise RuntimeError(
+            f"{context}: Edit-2511 VAE tensors must all use {_EXPECTED_VAE_DTYPE}. "
+            f"offenders_sample={wrong_dtypes[:10]}"
+        )
+
+    for name, expected_shape in _CRITICAL_VAE_SHAPES.items():
+        metadata = tensor_entries.get(name)
+        raw_shape = metadata.get("shape") if isinstance(metadata, Mapping) else None
+        try:
+            actual_shape = tuple(int(dim) for dim in raw_shape) if isinstance(raw_shape, (list, tuple)) else None
+        except Exception:
+            actual_shape = None
+        if actual_shape != expected_shape:
+            raise RuntimeError(
+                f"{context}: Edit-2511 VAE critical shape mismatch for {name!r}. "
+                f"got={actual_shape!r} expected={expected_shape!r}."
+            )
 
 
 def _is_under_allowed_root(path: Path, roots: Sequence[object]) -> bool:
@@ -134,14 +189,21 @@ def qwen_image_validate_external_vae_path(
     path = Path(raw_path.strip()).expanduser()
     if not path.exists():
         raise RuntimeError(f"{context}: path not found: {path}")
+    if not path.is_file():
+        raise RuntimeError(f"{context}: Edit-2511 requires one exact VAE SafeTensors file; got {path}.")
+    if path.suffix.lower() not in {".safetensor", ".safetensors"}:
+        raise RuntimeError(f"{context}: Edit-2511 VAE must be a SafeTensors file; got {path}.")
     if allowed_roots and not _is_under_allowed_root(path, allowed_roots):
         roots_text = ", ".join(str(root) for root in allowed_roots if isinstance(root, str) and root.strip())
         raise RuntimeError(
             f"{context}: path must be under qwen_image_vae roots; got {path}. Roots: {roots_text or '<none>'}."
         )
 
-    config_path = _config_path_for_vae_asset(path)
-    qwen_image_vae_config_from_mapping(_read_vae_config(config_path, context=context), context=str(config_path))
+    _validate_vae_safetensors_header(path, context=context)
+    qwen_image_vae_config_from_mapping(
+        _read_vae_config(_VENDORED_VAE_CONFIG_PATH, context=context),
+        context=str(_VENDORED_VAE_CONFIG_PATH),
+    )
     return str(path)
 
 

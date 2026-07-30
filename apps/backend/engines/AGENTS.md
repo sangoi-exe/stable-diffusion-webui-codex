@@ -35,7 +35,7 @@ Status: Active
   - Generic conditioning cache helpers (overrideable per call) + shared tensor move helpers for CPU↔device caching.
   - Runtime guard helper (`require_runtime`) for consistent “call load() first” errors across engines.
 - 2026-02-05: Added the `anima` engine key.
-- 2026-05-17: Added the `qwen_image` engine key/facade with internal variants only (`2512` txt2img, `edit_2511` img2img edit); no `qwen_image_2512` or `qwen_image_edit_2511` engine ids/aliases exist.
+- 2026-07-30: `qwen_image` is an Edit-2511-only img2img engine. Its live asset set is one exact core transformer GGUF, one external Qwen2.5-VL GGUF, and one external Qwen VAE SafeTensors file; txt2img is not a supported task.
 - 2026-05-24: Added the `lens/` parked skeleton facade and `registration.register_lens(...)` for isolated/manual validation only. `lens` is not default-registered; capability truth stays under `parked_exact_engines` until real Lens txt2img runtime lands.
 - 2026-02-08: Engine adapters now map swap-model pointer semantics using `switch_at_step` (`RefinerConfig.swap_at_step`) for both global and hires nested refiner config.
 - 2026-02-28: `AnimaEngine` is an implemented runtime-backed engine (`apps/backend/engines/anima/anima.py`) and is registered by default (`registration.register_anima` / `register_default_engines`); it is no longer a stub facade.

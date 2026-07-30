@@ -6,15 +6,14 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Qwen Image family constants, internal variant specs, and output geometry helpers.
-Keeps `Qwen-Image-2512` and `Qwen-Image-Edit-2511` as internal variants of the single `qwen_image` architecture
-family while preserving prompt, CFG, tokenizer, and dimension contracts derived from the local HF metadata/reference shelf.
+Purpose: Qwen Image Edit-2511 family constants, immutable runtime spec, and output geometry helpers.
+Keeps the single-image `Qwen-Image-Edit-2511` img2img contract under the canonical `qwen_image` architecture family while
+preserving prompt, CFG, tokenizer, and dimension contracts derived from the vendored Hugging Face metadata.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageVariantSpec` (dataclass): Immutable metadata for one supported Qwen Image variant.
 - `qwen_image_edit_condition_dimensions` (function): Derive Edit-2511 processor condition-image dimensions.
 - `qwen_image_edit_vae_dimensions` (function): Derive Edit-2511 VAE/reference-image dimensions.
-- `qwen_image_variant_for_mode` (function): Resolve the internal variant for a canonical generation mode.
 - `qwen_image_variant_spec` (function): Return the immutable spec for a supported internal variant.
 - `require_qwen_image_variant` (function): Validate and normalize an internal Qwen Image variant.
 - `validate_qwen_image_dimensions` (function): Enforce Qwen Image output dimension invariants.
@@ -30,13 +29,10 @@ QWEN_IMAGE_ENGINE_ID = "qwen_image"
 QWEN_IMAGE_ARCHITECTURE_LABEL = "Qwen-Image-2.0"
 QWEN_IMAGE_VARIANT_KEY = "qwen_image_variant"
 
-QWEN_IMAGE_TXT2IMG_VARIANT = "2512"
 QWEN_IMAGE_EDIT_VARIANT = "edit_2511"
-QWEN_IMAGE_SUPPORTED_VARIANTS = (QWEN_IMAGE_TXT2IMG_VARIANT, QWEN_IMAGE_EDIT_VARIANT)
+QWEN_IMAGE_SUPPORTED_VARIANTS = (QWEN_IMAGE_EDIT_VARIANT,)
 
-QWEN_IMAGE_TXT2IMG_REPO_ID = "Qwen/Qwen-Image-2512"
 QWEN_IMAGE_EDIT_REPO_ID = "Qwen/Qwen-Image-Edit-2511"
-QWEN_IMAGE_TXT2IMG_PIPELINE_CLASS = "QwenImagePipeline"
 QWEN_IMAGE_EDIT_PIPELINE_CLASS = "QwenImageEditPlusPipeline"
 
 QWEN_IMAGE_LATENT_CHANNELS = 16
@@ -53,24 +49,12 @@ QWEN_IMAGE_DISTILLED_GUIDANCE = 1.0
 QWEN_IMAGE_PUBLIC_SAMPLER = "euler"
 QWEN_IMAGE_PUBLIC_SCHEDULER = "simple"
 
-QWEN_IMAGE_TXT2IMG_DEFAULT_WIDTH = 1328
-QWEN_IMAGE_TXT2IMG_DEFAULT_HEIGHT = 1328
-QWEN_IMAGE_TXT2IMG_DEFAULT_STEPS = 50
 QWEN_IMAGE_EDIT_DEFAULT_WIDTH = 1024
 QWEN_IMAGE_EDIT_DEFAULT_HEIGHT = 1024
 QWEN_IMAGE_EDIT_DEFAULT_STEPS = 40
 QWEN_IMAGE_EDIT_CONDITION_AREA = 384 * 384
 QWEN_IMAGE_EDIT_VAE_AREA = 1024 * 1024
 
-QWEN_IMAGE_TXT2IMG_PROMPT_TEMPLATE = (
-    "<|im_start|>system\n"
-    "Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the "
-    "objects and background:<|im_end|>\n"
-    "<|im_start|>user\n"
-    "{}<|im_end|>\n"
-    "<|im_start|>assistant\n"
-)
-QWEN_IMAGE_TXT2IMG_PROMPT_TEMPLATE_START_IDX = 34
 QWEN_IMAGE_EDIT_PROMPT_TEMPLATE = (
     "<|im_start|>system\n"
     "Describe the key features of the input image (color, shape, size, texture, objects, background), then explain "
@@ -105,7 +89,7 @@ class QwenImageVariantSpec:
     def __post_init__(self) -> None:
         if self.variant not in QWEN_IMAGE_SUPPORTED_VARIANTS:
             raise ValueError(f"Unsupported Qwen Image variant in spec: {self.variant!r}")
-        if self.route_mode not in {"txt2img", "img2img"}:
+        if self.route_mode != "img2img":
             raise ValueError(f"Unsupported Qwen Image route_mode in spec: {self.route_mode!r}")
         validate_qwen_image_dimensions(self.default_width, self.default_height, context=f"{self.variant}.default_size")
         if self.default_steps <= 0:
@@ -145,18 +129,6 @@ def validate_qwen_image_dimensions(width: object, height: object, *, context: st
 
 
 QWEN_IMAGE_VARIANT_SPECS: Mapping[str, QwenImageVariantSpec] = {
-    QWEN_IMAGE_TXT2IMG_VARIANT: QwenImageVariantSpec(
-        variant=QWEN_IMAGE_TXT2IMG_VARIANT,
-        route_mode="txt2img",
-        repo_id=QWEN_IMAGE_TXT2IMG_REPO_ID,
-        pipeline_class=QWEN_IMAGE_TXT2IMG_PIPELINE_CLASS,
-        default_width=QWEN_IMAGE_TXT2IMG_DEFAULT_WIDTH,
-        default_height=QWEN_IMAGE_TXT2IMG_DEFAULT_HEIGHT,
-        default_steps=QWEN_IMAGE_TXT2IMG_DEFAULT_STEPS,
-        default_true_cfg=QWEN_IMAGE_DEFAULT_TRUE_CFG,
-        prompt_template=QWEN_IMAGE_TXT2IMG_PROMPT_TEMPLATE,
-        prompt_template_start_idx=QWEN_IMAGE_TXT2IMG_PROMPT_TEMPLATE_START_IDX,
-    ),
     QWEN_IMAGE_EDIT_VARIANT: QwenImageVariantSpec(
         variant=QWEN_IMAGE_EDIT_VARIANT,
         route_mode="img2img",
@@ -187,15 +159,6 @@ def require_qwen_image_variant(raw_variant: object, *, context: str = "qwen_imag
 def qwen_image_variant_spec(raw_variant: object) -> QwenImageVariantSpec:
     variant = require_qwen_image_variant(raw_variant)
     return QWEN_IMAGE_VARIANT_SPECS[variant]
-
-
-def qwen_image_variant_for_mode(mode: object) -> str:
-    normalized = str(mode or "").strip().lower()
-    if normalized == "txt2img":
-        return QWEN_IMAGE_TXT2IMG_VARIANT
-    if normalized == "img2img":
-        return QWEN_IMAGE_EDIT_VARIANT
-    raise RuntimeError("Qwen Image supports only txt2img and img2img route modes in this tranche.")
 
 
 def _dimensions_for_area(
@@ -276,21 +239,12 @@ __all__ = [
     "QWEN_IMAGE_SUPPORTED_VARIANTS",
     "QWEN_IMAGE_TOKENIZER_MAX_LENGTH",
     "QWEN_IMAGE_TRANSFORMER_IN_CHANNELS",
-    "QWEN_IMAGE_TXT2IMG_DEFAULT_HEIGHT",
-    "QWEN_IMAGE_TXT2IMG_DEFAULT_STEPS",
-    "QWEN_IMAGE_TXT2IMG_DEFAULT_WIDTH",
-    "QWEN_IMAGE_TXT2IMG_PIPELINE_CLASS",
-    "QWEN_IMAGE_TXT2IMG_PROMPT_TEMPLATE",
-    "QWEN_IMAGE_TXT2IMG_PROMPT_TEMPLATE_START_IDX",
-    "QWEN_IMAGE_TXT2IMG_REPO_ID",
-    "QWEN_IMAGE_TXT2IMG_VARIANT",
     "QWEN_IMAGE_VARIANT_KEY",
     "QWEN_IMAGE_VARIANT_SPECS",
     "QWEN_IMAGE_VAE_SCALE_FACTOR",
     "QwenImageVariantSpec",
     "qwen_image_edit_condition_dimensions",
     "qwen_image_edit_vae_dimensions",
-    "qwen_image_variant_for_mode",
     "qwen_image_variant_spec",
     "require_qwen_image_variant",
     "validate_qwen_image_dimensions",

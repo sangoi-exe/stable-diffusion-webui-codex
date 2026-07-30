@@ -6,17 +6,19 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Canonical key-style detection + explicit source-style mapping for Qwen text-encoder/backbone state_dict keys.
-Provides strict, fail-loud keyspace resolution for Qwen text checkpoints that arrive as native HF keys (`model.*`) or the known wrapper/container
-surfaces around that backbone, while explicitly allowing known auxiliary heads (`lm_head.*`, optional `visual.*`), ignoring safetensors metadata
-sentinels, and refusing unknown keyspaces.
+Purpose: Canonical key-style detection + explicit source-style mapping for Qwen text-encoder state_dict keys.
+Provides the generic Qwen text-backbone resolver plus an exact Qwen Image Edit-2511 multimodal resolver that maps stored
+`model.*` keys to the runtime `language_model.*` lookup space, keeps stored `visual.*` keys intact, validates topology lazily,
+and excludes only the separately validated stored `lm_head.weight` tensor.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `resolve_qwen_text_encoder_keyspace` (function): Resolves Qwen text-checkpoint source styles into canonical backbone keys (`model.*`) and drops known auxiliary heads.
+- `resolve_qwen2_5_vl_multimodal_keyspace` (function): Resolves the exact 729-key Qwen Image Qwen2.5-VL GGUF into the 728-key runtime model view.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import MutableMapping, Sequence
 from typing import TypeVar
 
@@ -68,6 +70,69 @@ _DETECTOR = KeyStyleDetector(
         ),
     ),
 )
+
+_QWEN2_5_VL_EXPECTED_TENSOR_COUNT = 729
+_QWEN2_5_VL_LANGUAGE_LAYER_COUNT = 28
+_QWEN2_5_VL_VISUAL_BLOCK_COUNT = 32
+_QWEN2_5_VL_LANGUAGE_LAYER_PATTERN = re.compile(r"^model\.layers\.(\d+)\.(.+)$")
+_QWEN2_5_VL_VISUAL_BLOCK_PATTERN = re.compile(r"^visual\.blocks\.(\d+)\.(.+)$")
+_QWEN2_5_VL_LANGUAGE_ROOT_KEYS = frozenset(
+    {
+        "model.embed_tokens.weight",
+        "model.norm.weight",
+    }
+)
+_QWEN2_5_VL_VISUAL_ROOT_KEYS = frozenset(
+    {
+        "visual.merger.ln_q.weight",
+        "visual.merger.mlp.0.bias",
+        "visual.merger.mlp.0.weight",
+        "visual.merger.mlp.2.bias",
+        "visual.merger.mlp.2.weight",
+        "visual.patch_embed.proj.weight",
+    }
+)
+_QWEN2_5_VL_LANGUAGE_LAYER_SUFFIXES = frozenset(
+    {
+        "input_layernorm.weight",
+        "mlp.down_proj.weight",
+        "mlp.gate_proj.weight",
+        "mlp.up_proj.weight",
+        "post_attention_layernorm.weight",
+        "self_attn.k_proj.bias",
+        "self_attn.k_proj.weight",
+        "self_attn.o_proj.weight",
+        "self_attn.q_proj.bias",
+        "self_attn.q_proj.weight",
+        "self_attn.v_proj.bias",
+        "self_attn.v_proj.weight",
+    }
+)
+_QWEN2_5_VL_VISUAL_BLOCK_SUFFIXES = frozenset(
+    {
+        "attn.proj.bias",
+        "attn.proj.weight",
+        "attn.qkv.bias",
+        "attn.qkv.weight",
+        "mlp.down_proj.bias",
+        "mlp.down_proj.weight",
+        "mlp.gate_proj.bias",
+        "mlp.gate_proj.weight",
+        "mlp.up_proj.bias",
+        "mlp.up_proj.weight",
+        "norm1.weight",
+        "norm2.weight",
+    }
+)
+_QWEN2_5_VL_AUX_KEYS = frozenset({"lm_head.weight"})
+_QWEN2_5_VL_CRITICAL_SHAPES = {
+    "model.embed_tokens.weight": (152064, 3584),
+    "model.norm.weight": (3584,),
+    "model.layers.0.self_attn.q_proj.weight": (3584, 3584),
+    "model.layers.27.self_attn.q_proj.weight": (3584, 3584),
+    "visual.patch_embed.proj.weight": (1280, 3, 2, 14, 14),
+    "lm_head.weight": (152064, 3584),
+}
 
 
 def _is_supported_qwen_root_key(key: str) -> bool:
@@ -193,4 +258,189 @@ def resolve_qwen_text_encoder_keyspace(
     )
 
 
-__all__ = ["resolve_qwen_text_encoder_keyspace"]
+def _logical_shape(state_dict: MutableMapping[str, _T], key: str) -> tuple[int, ...] | None:
+    shape_getter = getattr(state_dict, "shape_of", None)
+    if callable(shape_getter):
+        try:
+            shape = shape_getter(key)
+        except Exception:
+            shape = None
+        if shape is not None:
+            return tuple(int(dim) for dim in shape)
+    try:
+        value = state_dict[key]
+    except Exception:
+        return None
+    shape = getattr(value, "shape", None)
+    if shape is None:
+        return None
+    return tuple(int(dim) for dim in shape)
+
+
+def _validate_exact_qwen2_5_vl_keyspace(state_dict: MutableMapping[str, _T]) -> list[str]:
+    raw_keys = list(state_dict.keys())
+    non_string = [type(key).__name__ for key in raw_keys if not isinstance(key, str)]
+    if non_string:
+        raise KeyMappingError(
+            "qwen2_5_vl_multimodal: every stored tensor key must be a string; "
+            f"offender_types={non_string[:10]}"
+        )
+    keys = [str(key) for key in raw_keys]
+    if len(keys) != _QWEN2_5_VL_EXPECTED_TENSOR_COUNT:
+        raise KeyMappingError(
+            "qwen2_5_vl_multimodal: exact Qwen Image text-encoder tensor count mismatch. "
+            f"got={len(keys)} expected={_QWEN2_5_VL_EXPECTED_TENSOR_COUNT}"
+        )
+
+    language_roots: set[str] = set()
+    visual_roots: set[str] = set()
+    aux_keys: set[str] = set()
+    language_layers: dict[int, set[str]] = {}
+    visual_blocks: dict[int, set[str]] = {}
+    unsupported: list[str] = []
+    for key in keys:
+        if key in _QWEN2_5_VL_LANGUAGE_ROOT_KEYS:
+            language_roots.add(key)
+            continue
+        if key in _QWEN2_5_VL_VISUAL_ROOT_KEYS:
+            visual_roots.add(key)
+            continue
+        if key in _QWEN2_5_VL_AUX_KEYS:
+            aux_keys.add(key)
+            continue
+
+        language_match = _QWEN2_5_VL_LANGUAGE_LAYER_PATTERN.fullmatch(key)
+        if language_match is not None:
+            layer_index = int(language_match.group(1))
+            suffix = language_match.group(2)
+            if (
+                layer_index < 0
+                or layer_index >= _QWEN2_5_VL_LANGUAGE_LAYER_COUNT
+                or suffix not in _QWEN2_5_VL_LANGUAGE_LAYER_SUFFIXES
+            ):
+                unsupported.append(key)
+            else:
+                language_layers.setdefault(layer_index, set()).add(suffix)
+            continue
+
+        visual_match = _QWEN2_5_VL_VISUAL_BLOCK_PATTERN.fullmatch(key)
+        if visual_match is not None:
+            block_index = int(visual_match.group(1))
+            suffix = visual_match.group(2)
+            if (
+                block_index < 0
+                or block_index >= _QWEN2_5_VL_VISUAL_BLOCK_COUNT
+                or suffix not in _QWEN2_5_VL_VISUAL_BLOCK_SUFFIXES
+            ):
+                unsupported.append(key)
+            else:
+                visual_blocks.setdefault(block_index, set()).add(suffix)
+            continue
+        unsupported.append(key)
+
+    if unsupported:
+        raise KeyMappingError(
+            "qwen2_5_vl_multimodal: unsupported stored keys; wrapper prefixes and alternate layouts are not accepted. "
+            f"offenders_sample={sorted(unsupported)[:10]}"
+        )
+    for label, found, expected in (
+        ("language roots", language_roots, _QWEN2_5_VL_LANGUAGE_ROOT_KEYS),
+        ("visual roots", visual_roots, _QWEN2_5_VL_VISUAL_ROOT_KEYS),
+        ("auxiliary keys", aux_keys, _QWEN2_5_VL_AUX_KEYS),
+    ):
+        if found != expected:
+            raise KeyMappingError(
+                f"qwen2_5_vl_multimodal: {label} mismatch. "
+                f"missing={sorted(expected - found)} extra={sorted(found - expected)}"
+            )
+
+    expected_language_indices = set(range(_QWEN2_5_VL_LANGUAGE_LAYER_COUNT))
+    if set(language_layers) != expected_language_indices:
+        raise KeyMappingError(
+            "qwen2_5_vl_multimodal: language layer index set mismatch. "
+            f"missing={sorted(expected_language_indices - set(language_layers))} "
+            f"extra={sorted(set(language_layers) - expected_language_indices)}"
+        )
+    for layer_index in range(_QWEN2_5_VL_LANGUAGE_LAYER_COUNT):
+        found = language_layers[layer_index]
+        if found != _QWEN2_5_VL_LANGUAGE_LAYER_SUFFIXES:
+            raise KeyMappingError(
+                "qwen2_5_vl_multimodal: language layer tensor topology mismatch. "
+                f"layer={layer_index} missing={sorted(_QWEN2_5_VL_LANGUAGE_LAYER_SUFFIXES - found)} "
+                f"extra={sorted(found - _QWEN2_5_VL_LANGUAGE_LAYER_SUFFIXES)}"
+            )
+
+    expected_visual_indices = set(range(_QWEN2_5_VL_VISUAL_BLOCK_COUNT))
+    if set(visual_blocks) != expected_visual_indices:
+        raise KeyMappingError(
+            "qwen2_5_vl_multimodal: visual block index set mismatch. "
+            f"missing={sorted(expected_visual_indices - set(visual_blocks))} "
+            f"extra={sorted(set(visual_blocks) - expected_visual_indices)}"
+        )
+    for block_index in range(_QWEN2_5_VL_VISUAL_BLOCK_COUNT):
+        found = visual_blocks[block_index]
+        if found != _QWEN2_5_VL_VISUAL_BLOCK_SUFFIXES:
+            raise KeyMappingError(
+                "qwen2_5_vl_multimodal: visual block tensor topology mismatch. "
+                f"block={block_index} missing={sorted(_QWEN2_5_VL_VISUAL_BLOCK_SUFFIXES - found)} "
+                f"extra={sorted(found - _QWEN2_5_VL_VISUAL_BLOCK_SUFFIXES)}"
+            )
+
+    for key, expected_shape in _QWEN2_5_VL_CRITICAL_SHAPES.items():
+        actual_shape = _logical_shape(state_dict, key)
+        if actual_shape != expected_shape:
+            raise KeyMappingError(
+                "qwen2_5_vl_multimodal: critical logical shape mismatch. "
+                f"key={key!r} got={actual_shape!r} expected={expected_shape!r}"
+            )
+    return keys
+
+
+def resolve_qwen2_5_vl_multimodal_keyspace(
+    state_dict: MutableMapping[str, _T],
+) -> ResolvedKeyspace[_T]:
+    """Resolve the exact Qwen Image Qwen2.5-VL GGUF into the runtime model lookup space."""
+
+    keys = _validate_exact_qwen2_5_vl_keyspace(state_dict)
+    canonical_to_source: dict[str, str] = {}
+    for source_key in keys:
+        if source_key in _QWEN2_5_VL_AUX_KEYS:
+            continue
+        destination_key = (
+            f"language_model.{source_key[len('model.') :]}"
+            if source_key.startswith("model.")
+            else source_key
+        )
+        previous = canonical_to_source.get(destination_key)
+        if previous is not None:
+            raise KeyMappingError(
+                "qwen2_5_vl_multimodal: multiple stored keys map to the same runtime lookup key. "
+                f"destination={destination_key!r} sources={previous!r},{source_key!r}"
+            )
+        canonical_to_source[destination_key] = source_key
+
+    expected_runtime_count = _QWEN2_5_VL_EXPECTED_TENSOR_COUNT - len(_QWEN2_5_VL_AUX_KEYS)
+    if len(canonical_to_source) != expected_runtime_count:
+        raise KeyMappingError(
+            "qwen2_5_vl_multimodal: runtime key count mismatch after excluding lm_head.weight. "
+            f"got={len(canonical_to_source)} expected={expected_runtime_count}"
+        )
+    return ResolvedKeyspace(
+        style=KeyStyle.HF,
+        canonical_to_source=canonical_to_source,
+        metadata={
+            "resolver": "qwen2_5_vl_multimodal",
+            "source_keys": len(keys),
+            "canonical_keys": len(canonical_to_source),
+            "language_layers": _QWEN2_5_VL_LANGUAGE_LAYER_COUNT,
+            "visual_blocks": _QWEN2_5_VL_VISUAL_BLOCK_COUNT,
+            "excluded_auxiliary_keys": tuple(sorted(_QWEN2_5_VL_AUX_KEYS)),
+        },
+        view=KeyspaceLookupView(state_dict, canonical_to_source),
+    )
+
+
+__all__ = [
+    "resolve_qwen2_5_vl_multimodal_keyspace",
+    "resolve_qwen_text_encoder_keyspace",
+]

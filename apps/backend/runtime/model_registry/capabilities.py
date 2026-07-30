@@ -11,7 +11,7 @@ Defines `SemanticEngine` tags and an `EngineParamSurface` describing which high-
 including explicit masked-img2img/inpaint support, vid2vid discoverability, and native IP-Adapter/SUPIR discoverability, with executable defaults and
 recommendation hints for the live surface (for example SD15 `ddim`/`ddim`, WAN22 `uni-pc bh2`/`simple`, and LTX2 `euler`/`simple` with no sampler fiction
 beyond the live runtime lane).
-Includes Qwen Image (`SemanticEngine.QWEN_IMAGE`) as a Qwen2.5-VL-conditioned flow-image engine with txt2img plus single-image edit img2img,
+Includes Qwen Image (`SemanticEngine.QWEN_IMAGE`) as an Edit-2511-only Qwen2.5-VL-conditioned single-image img2img engine,
 and Anima (`SemanticEngine.ANIMA`) as a flow-based image engine (txt2img/img2img) requiring sha-selected external assets and exposing
 `er sde` in the recommended sampler surface. Z-Image L2P is exposed as a separate no-VAE pixel-space txt2img-only exact engine.
 Microsoft Lens is exposed only as a parked exact engine stub until its GPT-OSS/LensTransformer/VAE runtime lands; it is not a semantic engine or runnable capability row.
@@ -246,9 +246,9 @@ ENGINE_SURFACES: Dict[SemanticEngine, EngineParamSurface] = {
         default_sampler="euler",
         default_scheduler="simple",
     ),
-    # Qwen Image architecture family: 2512 txt2img plus Edit-2511 single-image edit img2img.
+    # Qwen Image Edit-2511: single-image edit img2img only.
     SemanticEngine.QWEN_IMAGE: EngineParamSurface(
-        supports_txt2img=True,
+        supports_txt2img=False,
         supports_img2img=True,
         supports_img2img_masking=False,
         supports_txt2vid=False,

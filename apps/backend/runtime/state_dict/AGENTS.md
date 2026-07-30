@@ -11,6 +11,7 @@ Key files:
 - `apps/backend/runtime/state_dict/keymap_anima_transformer.py`: Anima transformer key-style resolver (raw `net.*` or already-canonical runtime keys → canonical Anima runtime lookup space).
 - `apps/backend/runtime/state_dict/keymap_llama_gguf.py`: llama.cpp-style GGUF tensor-name resolver for text models (HF key layout).
 - `apps/backend/runtime/state_dict/keymap_qwen_text_encoder.py`: Qwen text-encoder key-style resolver (native HF backbone or known wrapper/container surfaces -> canonical `model.*` lookup space; optional aux heads handled explicitly by policy).
+- `apps/backend/runtime/state_dict/keymap_qwen_image_transformer.py`: Exact Edit-2511 1,933-key transformer topology validator and identity lookup view; stored native keys remain unchanged.
 - `apps/backend/runtime/state_dict/keymap_sdxl_clip.py`: SDXL base text-encoder key mapping (CLIP-L/CLIP-G → Codex IntegratedCLIP layout).
 - `apps/backend/runtime/state_dict/keymap_sdxl_checkpoint.py`: SDXL checkpoint keyspace resolver for original-format checkpoints; known wrapper/container source styles map explicitly into canonical parser lookup keys.
 - `apps/backend/runtime/state_dict/keymap_sdxl_vae.py`: SDXL/Flow16 VAE key-style resolver (LDM-style → diffusers AutoencoderKL; wrapper-rewrite inputs fail loud).
@@ -53,5 +54,7 @@ Notes:
 - 2026-03-12: Added strict Gemma3 text-only GGUF keyspace resolution in `keymap_gemma3_text_encoder.py` for the LTX2 Gemma3 external loader path; it accepts llama.cpp GGUF text keys or already-native `Gemma3TextModel` keys and exposes only a lookup view.
 - 2026-03-21: `keymap_gemma3_text_encoder.py` now rejects documented wrapper-prefix rewrite inputs (`model.`, `language_model.`, `base_text_encoder.`) until the source layout is modeled explicitly; the strict lookup view remains canonical GGUF-or-native-HF only.
 - 2026-03-31: Added `keymap_anima_transformer.py` as the explicit raw `net.*`/canonical Anima transformer keyspace owner; parser and loader now keep stored core keys native and resolve them through lazy lookup views instead of parser-side prefix stripping or eager normalization.
+- 2026-07-30: `keymap_qwen_text_encoder.py` adds the exact 729-key Qwen2.5-VL multimodal source contract and exposes a 728-key runtime lookup view (`model.*` stored keys -> `language_model.*` runtime names; `visual.*` unchanged) while separately validating and excluding stored `lm_head.weight`.
+- 2026-07-30: Added `keymap_qwen_image_transformer.py` for the exact Edit-2511 native transformer keyspace. It accepts no wrappers or alternate layouts and never rewrites stored keys.
 
-Last Review: 2026-03-31
+Last Review: 2026-07-30

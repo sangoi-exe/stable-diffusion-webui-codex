@@ -18,8 +18,8 @@ Flux T5 component loading now guarantees model construction before state-dict lo
 FLUX.2 Klein 4B/base-4B expected-family loads use vendored HF metadata plus family-scoped keyspace resolution so native/source GGUF keys and
 legacy fused core slices land in the Diffusers `Flux2Transformer2DModel` lookup space without mutating the checkpoint; unsupported FLUX.2
 variants/configs fail loud.
-Qwen Image HF-style repos are metadata-gated before generic Diffusers component loading; they return a repo-owned split-asset bundle
-(`qwen_image` with internal variant metadata) and never run generic `from_pretrained(...)` component materialization in this loader path.
+Qwen Image is admitted only as the exact core-only Edit-2511 GGUF plus one exact external Qwen2.5-VL GGUF and VAE SafeTensors asset.
+HF-style Qwen metadata directories remain validation inputs only and fail loud when selected as executable models.
 SDXL VAE conversion now preflights canonical projection keys after keyspace resolution so projection-lane shape violations surface explicitly (instead of collapsing into generic missing-key noise).
 GGUF smart-offload staging for large transformer classes now emits canonical INFO audit events via `backend.smart_offload`.
 Those staging events are tagged via the canonical `SmartOffloadAction.STAGE_LOAD` enum action.
@@ -46,8 +46,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `_resolve_flux2_repo_id_from_path` (function): Chooses the supported FLUX.2 4B/base-4B vendored repo id from a checkpoint path hint.
 - `_validate_supported_flux2_transformer_config` (function): Validates that a FLUX.2 transformer config matches the supported Klein 4B/base-4B slice.
 - `_flux2_signature_from_vendored_hf` (function): Builds a FLUX.2 `ModelSignature` from vendored HF metadata for the supported 4B/base-4B slice.
-- `_qwen_image_signature_from_hf_metadata` (function): Builds a Qwen Image `ModelSignature` from split HF metadata without loading weights.
-- `_qwen_image_bundle_from_diffusers_metadata` (function): Builds the metadata-only Qwen Image bundle before generic Diffusers component loading.
+- `_qwen_image_bundle_from_diffusers_metadata` (function): Validates the exact vendored Edit-2511 metadata surface, then rejects metadata-only model selection.
 - `_sdxl_expected_signature_from_state_dict` (function): Builds an SDXL/SDXL refiner signature from expected-family checkpoint truth, including core-only detection.
 - `_requires_sdxl_checkpoint_keymap` (function): Determines whether SDXL checkpoint keyspace resolution must run for a checkpoint parse call.
 - `_maybe_resolve_expected_family_keyspace` (function): Applies family-scoped GGUF/native keyspace interpretation for expected-family loads.
@@ -92,6 +91,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from transformers import modeling_utils  # noqa: F401
 
 from apps.backend.huggingface.assets import ensure_repo_minimal_files
+from apps.backend.core.contracts.text_encoder_slots import classify_text_encoder_slot
 from apps.backend.infra.config.args import args
 from apps.backend.infra.config.vae_layout_lane import VaeLayoutLane
 from apps.backend.runtime import trace as _trace
@@ -121,15 +121,15 @@ from apps.backend.runtime.families.qwen_image.config import (
     QWEN_IMAGE_EDIT_REPO_ID,
     QWEN_IMAGE_EDIT_VARIANT,
     QWEN_IMAGE_ENGINE_ID,
-    QWEN_IMAGE_TXT2IMG_PIPELINE_CLASS,
-    QWEN_IMAGE_TXT2IMG_REPO_ID,
-    QWEN_IMAGE_TXT2IMG_VARIANT,
     QWEN_IMAGE_VARIANT_KEY,
 )
 from apps.backend.runtime.families.qwen_image.scheduler import qwen_image_scheduler_config_from_mapping
 from apps.backend.runtime.families.qwen_image.text_encoder import qwen_image_text_encoder_config_from_mapping
 from apps.backend.runtime.families.qwen_image.transformer import qwen_image_transformer_config_from_mapping
-from apps.backend.runtime.families.qwen_image.vae import qwen_image_vae_config_from_mapping
+from apps.backend.runtime.families.qwen_image.vae import (
+    qwen_image_validate_external_vae_path,
+    qwen_image_vae_config_from_mapping,
+)
 from apps.backend.runtime.model_registry.errors import ModelRegistryError
 from apps.backend.runtime.model_registry.loader import detect_from_state_dict as registry_detect
 from apps.backend.runtime.model_registry.signals import build_bundle, count_blocks
@@ -289,7 +289,6 @@ _SUPPORTED_FLUX2_TRANSFORMER_CONFIG: Dict[str, object] = {
 }
 
 _QWEN_IMAGE_PIPELINE_VARIANTS: Dict[str, tuple[str, str]] = {
-    QWEN_IMAGE_TXT2IMG_PIPELINE_CLASS.lower(): (QWEN_IMAGE_TXT2IMG_REPO_ID, QWEN_IMAGE_TXT2IMG_VARIANT),
     QWEN_IMAGE_EDIT_PIPELINE_CLASS.lower(): (QWEN_IMAGE_EDIT_REPO_ID, QWEN_IMAGE_EDIT_VARIANT),
 }
 
@@ -804,24 +803,17 @@ def _qwen_image_variant_from_metadata(
     repo_dir: str,
 ) -> tuple[str, str]:
     pipeline_cls = str(model_index.get("_class_name") or "").strip().lower()
-    if pipeline_cls in _QWEN_IMAGE_PIPELINE_VARIANTS:
-        return _QWEN_IMAGE_PIPELINE_VARIANTS[pipeline_cls]
-
-    normalized_path = str(repo_dir or "").replace("\\", "/").lower()
-    if "qwen-image-edit-2511" in normalized_path:
-        return (QWEN_IMAGE_EDIT_REPO_ID, QWEN_IMAGE_EDIT_VARIANT)
-    if "qwen-image-2512" in normalized_path:
-        return (QWEN_IMAGE_TXT2IMG_REPO_ID, QWEN_IMAGE_TXT2IMG_VARIANT)
-
-    zero_cond_t = transformer_config.get("zero_cond_t")
-    if zero_cond_t is True:
-        return (QWEN_IMAGE_EDIT_REPO_ID, QWEN_IMAGE_EDIT_VARIANT)
-    if zero_cond_t in (None, False):
-        return (QWEN_IMAGE_TXT2IMG_REPO_ID, QWEN_IMAGE_TXT2IMG_VARIANT)
-    raise RuntimeError(
-        "Unsupported Qwen Image transformer config for %s: zero_cond_t must be true, false, or absent; got %r."
-        % (repo_dir, zero_cond_t)
-    )
+    if pipeline_cls != QWEN_IMAGE_EDIT_PIPELINE_CLASS.lower():
+        raise RuntimeError(
+            "Unsupported Qwen Image metadata for %s: only pipeline class %r is executable; got %r."
+            % (repo_dir, QWEN_IMAGE_EDIT_PIPELINE_CLASS, pipeline_cls or "<missing>")
+        )
+    if transformer_config.get("zero_cond_t") is not True:
+        raise RuntimeError(
+            "Unsupported Qwen Image transformer config for %s: Edit-2511 requires zero_cond_t=true."
+            % repo_dir
+        )
+    return _QWEN_IMAGE_PIPELINE_VARIANTS[pipeline_cls]
 
 
 def _validate_supported_qwen_image_transformer_config(
@@ -843,53 +835,6 @@ def _validate_qwen_image_vae_config(vae_cfg: Mapping[str, Any], *, context: str)
 
 def _validate_qwen_image_scheduler_config(scheduler_cfg: Mapping[str, Any], *, context: str) -> None:
     qwen_image_scheduler_config_from_mapping(scheduler_cfg, context=context)
-
-
-def _qwen_image_signature_from_hf_metadata(
-    *,
-    repo_hint: str,
-    variant: str,
-    transformer_cfg: Mapping[str, Any],
-    text_encoder_cfg: Mapping[str, Any],
-    vae_cfg: Mapping[str, Any],
-) -> ModelSignature:
-    context_dim = int(transformer_cfg["joint_attention_dim"])
-    channels_in = int(transformer_cfg["in_channels"])
-    channels_out = int(transformer_cfg["out_channels"])
-    num_layers = int(transformer_cfg["num_layers"])
-    latent_channels = int(vae_cfg["z_dim"])
-
-    return ModelSignature(
-        family=ModelFamily.QWEN_IMAGE,
-        repo_hint=repo_hint,
-        prediction=PredictionKind.FLOW,
-        latent_format=LatentFormat.QWEN_IMAGE,
-        quantization=QuantizationHint(),
-        core=CodexCoreSignature(
-            architecture=CodexCoreArchitecture.FLOW_TRANSFORMER,
-            channels_in=channels_in,
-            channels_out=channels_out,
-            context_dim=context_dim,
-            temporal=False,
-            depth=num_layers,
-            key_prefixes=["transformer."],
-        ),
-        text_encoders=[
-            TextEncoderSignature(
-                name="qwen2_5_vl_7b",
-                key_prefix="text_encoder.",
-                expected_dim=int(text_encoder_cfg["hidden_size"]),
-                tokenizer_hint=f"{repo_hint}/tokenizer",
-            )
-        ],
-        vae=VAESignature(key_prefix="vae.", latent_channels=latent_channels),
-        extras={
-            QWEN_IMAGE_VARIANT_KEY: variant,
-            "zero_cond_t": bool(transformer_cfg.get("zero_cond_t") is True),
-            "guidance_embed": bool(transformer_cfg.get("guidance_embeds", False)),
-            "signature_source": "hf_metadata",
-        },
-    )
 
 
 def _qwen_image_bundle_from_diffusers_metadata(
@@ -942,7 +887,7 @@ def _qwen_image_bundle_from_diffusers_metadata(
     vae_cfg = _read_json(repo_path / "vae" / "config.json")
     scheduler_cfg = _read_json(repo_path / "scheduler" / "scheduler_config.json")
 
-    repo_hint, variant = _qwen_image_variant_from_metadata(
+    _, variant = _qwen_image_variant_from_metadata(
         model_index=model_index,
         transformer_config=transformer_cfg,
         repo_dir=repo_dir,
@@ -952,46 +897,17 @@ def _qwen_image_bundle_from_diffusers_metadata(
     _validate_qwen_image_vae_config(vae_cfg, context=context)
     _validate_qwen_image_scheduler_config(scheduler_cfg, context=context)
 
-    if variant == QWEN_IMAGE_EDIT_VARIANT:
-        _require_component_class(
-            model_index,
-            component_name="processor",
-            expected_class_name="Qwen2VLProcessor",
-            context=context,
-        )
-    elif _component_class_name(model_index, "processor"):
-        raise RuntimeError("Qwen Image 2512 metadata for %s must not declare an edit processor component." % context)
+    _require_component_class(
+        model_index,
+        component_name="processor",
+        expected_class_name="Qwen2VLProcessor",
+        context=context,
+    )
 
-    signature = _qwen_image_signature_from_hf_metadata(
-        repo_hint=repo_hint,
-        variant=variant,
-        transformer_cfg=transformer_cfg,
-        text_encoder_cfg=text_encoder_cfg,
-        vae_cfg=vae_cfg,
-    )
-    estimated_config = _SimpleEstimated(
-        huggingface_repo=repo_hint,
-        core_config=dict(transformer_cfg),
-        pipeline_class=str(model_index.get("_class_name") or ""),
-        text_encoder_map={"qwen2_5_vl_7b": "text_encoder"},
-    )
-    return _build_diffusion_bundle(
-        model_ref=repo_dir,
-        family=ModelFamily.QWEN_IMAGE,
-        estimated_config=estimated_config,
-        components={},
-        signature=signature,
-        source="diffusers_metadata",
-        metadata={
-            "engine_key": QWEN_IMAGE_ENGINE_ID,
-            "repo_id": repo_hint,
-            QWEN_IMAGE_VARIANT_KEY: variant,
-            "pipeline_class": str(model_index.get("_class_name") or ""),
-            "core_config": dict(transformer_cfg),
-            "text_encoder_config": dict(text_encoder_cfg),
-            "vae_config": dict(vae_cfg),
-            "scheduler_config": dict(scheduler_cfg),
-        },
+    raise RuntimeError(
+        "Qwen Image Edit-2511 metadata directory %r is not an executable model. "
+        "Select the exact core transformer GGUF and provide the external Qwen2.5-VL GGUF and VAE SafeTensors assets."
+        % repo_dir
     )
 
 
@@ -1275,6 +1191,18 @@ def _maybe_resolve_expected_family_keyspace(
 
         return resolve_flux2_transformer_keyspace(state_dict).view
 
+    if expected_family is ModelFamily.QWEN_IMAGE:
+        if inspection.format != "gguf":
+            raise RuntimeError(
+                "Qwen Image Edit-2511 requires the exact core transformer GGUF; "
+                f"got format={inspection.format!r} for {inspection.path!r}."
+            )
+        from apps.backend.runtime.state_dict.keymap_qwen_image_transformer import (
+            resolve_qwen_image_edit_transformer_keyspace,
+        )
+
+        return resolve_qwen_image_edit_transformer_keyspace(state_dict).view
+
     if inspection.format == "gguf" and expected_family is ModelFamily.ZIMAGE:
         from apps.backend.runtime.state_dict.keymap_zimage_transformer import resolve_zimage_transformer_keyspace
 
@@ -1302,6 +1230,13 @@ def _parse_checkpoint(
         base_state = resolve_sdxl_checkpoint_keyspace(base_state).view
     if expected_family is ModelFamily.ZIMAGE:
         signature = _zimage_signature_from_vendored_hf(model_path=primary_path)
+    elif expected_family is ModelFamily.QWEN_IMAGE:
+        signature = registry_detect(base_state)
+        if signature.family is not ModelFamily.QWEN_IMAGE:
+            raise ValueError(
+                "Expected Qwen Image Edit-2511 checkpoint, but registry detected "
+                f"{signature.family.value!r}."
+            )
     elif expected_family is ModelFamily.ZIMAGE_L2P:
         signature = registry_detect(base_state)
         if signature.family is not ModelFamily.ZIMAGE_L2P:
@@ -1332,6 +1267,11 @@ def _parse_checkpoint(
         signature = registry_detect(base_state)
     config = parse_state_dict(base_state, signature)
 
+    if additional_paths and expected_family is ModelFamily.QWEN_IMAGE:
+        raise RuntimeError(
+            "Qwen Image Edit-2511 accepts exactly one core transformer GGUF; additional checkpoint files are unsupported."
+        )
+
     if additional_paths:
         replacements: Dict[str, Mapping[str, Any]] = {}
         for extra in additional_paths:
@@ -1348,6 +1288,11 @@ def _parse_checkpoint(
                 extra_state = resolve_sdxl_checkpoint_keyspace(extra_state).view
             if expected_family is ModelFamily.ZIMAGE:
                 extra_signature = _zimage_signature_from_vendored_hf(model_path=extra)
+            elif expected_family is ModelFamily.QWEN_IMAGE:
+                raise RuntimeError(
+                    "Qwen Image Edit-2511 accepts exactly one core transformer GGUF; "
+                    f"additional checkpoint is unsupported: {extra!r}."
+                )
             elif expected_family is ModelFamily.ZIMAGE_L2P:
                 extra_signature = registry_detect(extra_state)
                 if extra_signature.family is not ModelFamily.ZIMAGE_L2P:
@@ -2636,21 +2581,43 @@ def codex_loader(
         and signature.vae is None
         and bool(extras.get("core_only"))
     )
-    needs_external_vae = is_flux_core_gguf or is_flux2_core_only
+    is_qwen_image_core_only = (
+        isinstance(signature, ModelSignature)
+        and signature.family is ModelFamily.QWEN_IMAGE
+        and getattr(quant, "kind", None) is QuantizationKind.GGUF
+        and bool(extras.get("core_only"))
+    )
+    needs_external_vae = is_flux_core_gguf or is_flux2_core_only or is_qwen_image_core_only
     if needs_external_vae:
         if not isinstance(vae_path, str) or not vae_path.strip():
-            family_label = "FLUX.2" if is_flux2_core_only else "Flux GGUF"
+            if is_qwen_image_core_only:
+                family_label = "Qwen Image Edit-2511"
+            elif is_flux2_core_only:
+                family_label = "FLUX.2"
+            else:
+                family_label = "Flux GGUF"
             raise RuntimeError(
                 f"{family_label} core-only checkpoint requires an external VAE (sha-selected). "
                 "Provide a VAE via request extras.vae_sha so the API can pass a valid vae_path."
             )
         vae_path = os.path.expanduser(vae_path.strip())
-        if not os.path.isfile(vae_path):
+        if is_qwen_image_core_only:
+            vae_path = qwen_image_validate_external_vae_path(
+                vae_path,
+                context="Qwen Image Edit-2511 external VAE",
+            )
+        elif not os.path.isfile(vae_path):
             raise RuntimeError(f"Core-only VAE path not found: {vae_path}")
         _assert_core_only_vae_path_not_checkpoint(
             model_ref=sd_path,
             vae_path=vae_path,
-            family_label="FLUX.2" if is_flux2_core_only else "Flux GGUF",
+            family_label=(
+                "Qwen Image Edit-2511"
+                if is_qwen_image_core_only
+                else "FLUX.2"
+                if is_flux2_core_only
+                else "Flux GGUF"
+            ),
         )
 
     te_override_cfg = text_encoder_override
@@ -2700,6 +2667,7 @@ def codex_loader(
         raise RuntimeError(str(exc)) from exc
 
     resolved_flux2_tenc_path: str | None = None
+    resolved_qwen_image_tenc_path: str | None = None
     if is_flux2_core_only:
         if te_override_cfg is None:
             raise RuntimeError(
@@ -2718,7 +2686,58 @@ def codex_loader(
         if not os.path.isfile(resolved_flux2_tenc_path):
             raise RuntimeError(f"FLUX.2 text encoder path not found: {resolved_flux2_tenc_path}")
 
+    if is_qwen_image_core_only:
+        if te_override_cfg is None:
+            raise RuntimeError(
+                "Qwen Image Edit-2511 requires the exact external Qwen2.5-VL text encoder GGUF (sha-selected). "
+                "Provide one via request extras.tenc_sha so the API can pass a valid tenc_path."
+            )
+        resolved_tenc_candidates = [
+            value.strip() for value in te_override_paths.values() if isinstance(value, str) and value.strip()
+        ]
+        if len(resolved_tenc_candidates) != 1:
+            raise RuntimeError(
+                "Qwen Image Edit-2511 text encoder override resolution failed: "
+                f"expected exactly one non-empty external path, got {len(resolved_tenc_candidates)}."
+            )
+        resolved_qwen_image_tenc_path = os.path.expanduser(resolved_tenc_candidates[0])
+        if not os.path.isfile(resolved_qwen_image_tenc_path):
+            raise RuntimeError(
+                f"Qwen Image Edit-2511 text encoder path not found: {resolved_qwen_image_tenc_path}"
+            )
+        resolved_slot = classify_text_encoder_slot(resolved_qwen_image_tenc_path)
+        if resolved_slot != "qwen2_5_vl_7b":
+            raise RuntimeError(
+                "Qwen Image Edit-2511 requires text encoder slot 'qwen2_5_vl_7b'; "
+                f"got {resolved_slot!r} for {resolved_qwen_image_tenc_path!r}."
+            )
+
     component_states = {name: comp.state_dict for name, comp in config.components.items()}
+
+    if is_qwen_image_core_only:
+        if resolved_qwen_image_tenc_path is None or not isinstance(vae_path, str):
+            raise RuntimeError("Qwen Image Edit-2511 external component resolution did not complete.")
+        return _build_diffusion_bundle(
+            model_ref=sd_path,
+            family=parsed.signature.family,
+            estimated_config=config,
+            components=component_states,
+            signature=parsed.signature,
+            source="state_dict",
+            metadata={
+                "engine_key": QWEN_IMAGE_ENGINE_ID,
+                "core_only": True,
+                "requires_vae": True,
+                QWEN_IMAGE_VARIANT_KEY: QWEN_IMAGE_EDIT_VARIANT,
+                "zero_cond_t": True,
+                "tenc_override_paths": dict(te_override_paths),
+                "tenc_path": resolved_qwen_image_tenc_path,
+                "vae_path": vae_path,
+                "metadata_root": str(
+                    _BACKEND_ROOT / "huggingface" / "Qwen" / "Qwen-Image-Edit-2511"
+                ),
+            },
+        )
 
     if parsed.signature.family is ModelFamily.ANIMA:
         # Anima is not a diffusers repository and must not rely on `model_index.json`/DiffusionPipeline config.

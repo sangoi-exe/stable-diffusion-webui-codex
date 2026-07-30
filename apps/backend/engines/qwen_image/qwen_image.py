@@ -6,12 +6,12 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Qwen Image engine facade for the single `qwen_image` architecture family.
-Validates router-derived internal variants (`2512` txt2img, `edit_2511` img2img edit), required external Qwen Image assets,
-Qwen Image VAE config metadata, and the loader-produced metadata-only Qwen Image bundle before native runtime execution is implemented.
+Purpose: Qwen Image Edit-2511 engine facade for the single `qwen_image` architecture family.
+Validates the fixed internal `edit_2511` identity, required external Qwen Image assets, exact VAE/header contracts,
+and the loader-produced core-only bundle before native img2img runtime execution.
 
 Symbols (top-level; keep in sync; no ghosts):
-- `QwenImageEngine` (class): Registered engine facade for `qwen_image`; validates load contracts and fails loud for unimplemented native generation.
+- `QwenImageEngine` (class): Registered Edit-only engine facade for `qwen_image`; validates strict load contracts and delegates img2img once the native runtime is assembled.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from apps.backend.runtime.families.qwen_image.config import (
     QWEN_IMAGE_EDIT_VARIANT,
     QWEN_IMAGE_ENGINE_ID,
     QWEN_IMAGE_SUPPORTED_VARIANTS,
-    QWEN_IMAGE_TXT2IMG_VARIANT,
     QWEN_IMAGE_VARIANT_KEY,
     require_qwen_image_variant,
 )
@@ -137,7 +136,7 @@ class QwenImageEngine(BaseInferenceEngine):
         self._model_ref = str(model_ref)
         self._variant = variant
         self.mark_loaded()
-        logger.info("Loaded Qwen Image metadata bundle: model_ref=%s variant=%s", self._model_ref, variant)
+        logger.info("Loaded Qwen Image Edit-2511 core bundle: model_ref=%s variant=%s", self._model_ref, variant)
 
     def unload(self) -> None:
         self._bundle = None
@@ -154,13 +153,6 @@ class QwenImageEngine(BaseInferenceEngine):
         if self._bundle is not None:
             data["bundle_source"] = self._bundle.source
         return data
-
-    def txt2img(self, request: Any, **kwargs: Any) -> Iterator[Any]:
-        del request, kwargs
-        self.ensure_loaded()
-        if self._variant != QWEN_IMAGE_TXT2IMG_VARIANT:
-            raise RuntimeError("Qwen Image txt2img requires loaded variant '2512'.")
-        raise NotImplementedError("Qwen Image txt2img native runtime not yet implemented")
 
     def img2img(self, request: Any, **kwargs: Any) -> Iterator[Any]:
         del request, kwargs

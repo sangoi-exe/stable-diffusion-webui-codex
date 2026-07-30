@@ -15,7 +15,7 @@ Status: Draft
 - `capabilities.py` owns parked exact-engine truth for `lens` while Lens runtime is absent. Do not add `SemanticEngine.LENS`, runnable `ENGINE_SURFACES`, `ENGINE_ID_TO_SEMANTIC_ENGINE`, `_ENGINE_ID_PRIMARY_FAMILY`, or asset-contract rows until a runtime tranche explicitly un-parks Lens.
 - 2025-12-14: `ModelSignature` gained a legacy `unet` alias for `core`, keeping older call sites working while the new contract stays `signature.core`.
 - 2025-12-14: Qwen Image detector reintroduced (`detectors/qwen_image.py`) and enums extended (`ModelFamily.QWEN_IMAGE`, `LatentFormat.QWEN_IMAGE`).
-- 2026-05-17: Qwen Image capability/runtime metadata now treats `qwen_image` as the single architecture family; `Qwen-Image-2512` and `Qwen-Image-Edit-2511` are internal variants, not separate engine or family ids.
+- 2026-07-30: `qwen_image` is Edit-2511-only in the live runtime contract: exact core GGUF plus external Qwen2.5-VL GGUF and VAE SafeTensors, with single-image img2img enabled and txt2img disabled.
 - 2026-05-23: Z-Image L2P GGUF denoiser discovery requires both native L2P tensor-key evidence and dedicated Codex profile metadata (`codex.zimage_l2p.profile_id=zimage_l2p_denoiser`, component `denoiser`, family `zimage_l2p`, pixel-space/no-VAE facts). SafeTensors L2P discovery remains header-key based.
 - 2025-12-12: Z Image runtime metadata was corrected (`context_dim=2560`, `flow_shift=3.0`) to match the canonical HF assets for Z-Image Turbo.
 - 2025-12-13: Z Image Turbo default steps adjusted to 9 to match diffusers `ZImagePipeline` recommendation (≈8 effective updates; last `dt=0`).

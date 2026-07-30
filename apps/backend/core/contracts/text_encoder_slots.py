@@ -8,8 +8,8 @@ Required Notice: see NOTICE
 
 Purpose: Header-only text encoder slot classification for sha-selected assets.
 Provides a fast, import-light helper used by API request paths to classify a resolved text encoder weights file into
-an explicit slot (`clip_l`, `clip_g`, `t5xxl`, `qwen3_4b`, `qwen3_06b`, `qwen2_5_vl_7b`, `gemma3_12b`) without loading any tensors.
-Dedicated Z-Image L2P Qwen3-4B GGUFs are classified from their Codex profile metadata, not from the generic Llama architecture name.
+an explicit slot (`clip_l`, `clip_g`, `t5xxl`, `qwen3_4b`, `qwen3_06b`, `qwen2_5_vl_7b`, `gemma3_12b`) without loading tensor payloads.
+Dedicated Z-Image L2P Qwen3-4B and Qwen Image Edit-2511 Qwen2.5-VL GGUFs require their exact Codex metadata and tensor topology.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `TextEncoderSlotError` (class): Raised when a weights file cannot be classified into a known slot.
@@ -22,8 +22,12 @@ from __future__ import annotations
 import json
 import os
 import struct
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
+
+from apps.backend.quantization.gguf import GGMLQuantizationType, GGUFReader
+from apps.backend.runtime.state_dict.keymap_qwen_text_encoder import resolve_qwen2_5_vl_multimodal_keyspace
 
 
 class TextEncoderSlotError(ValueError):
@@ -68,12 +72,13 @@ def classify_text_encoder_slot(path: str) -> str:
     if suffix == ".gguf":
         try:
             kv = _read_gguf_kv(p)
+            descriptors = _read_gguf_tensor_descriptors(p)
         except TextEncoderSlotError:
             raise
         except Exception as exc:
             raise TextEncoderSlotError(f"Failed to read GGUF metadata for slot classification: {p}: {exc}") from exc
         try:
-            return _classify_gguf_kv(kv, context=str(p))
+            return _classify_gguf_kv(kv, tensor_descriptors=descriptors, context=str(p))
         except TextEncoderSlotError:
             raise
         except Exception as exc:
@@ -221,6 +226,13 @@ _GGUF_VALUE_FLOAT64 = 12
 _SAFE_MAX_GGUF_ARRAY_ITEMS = 256
 
 
+@dataclass(frozen=True, slots=True)
+class _GGUFTensorDescriptor:
+    shape: tuple[int, ...]
+    tensor_type: GGMLQuantizationType
+    n_bytes: int
+
+
 def _read_exact(handle, n: int) -> bytes:
     data = handle.read(n)
     if len(data) != n:
@@ -311,7 +323,105 @@ def _read_gguf_kv(path: Path) -> dict[str, object]:
     return kv
 
 
-def _classify_gguf_kv(kv: Mapping[str, object], *, context: str) -> str:
+def _read_gguf_tensor_descriptors(path: Path) -> dict[str, _GGUFTensorDescriptor]:
+    reader = GGUFReader(path)
+    descriptors: dict[str, _GGUFTensorDescriptor] = {}
+    for tensor in reader.tensors:
+        descriptors[tensor.name] = _GGUFTensorDescriptor(
+            shape=tuple(int(dim) for dim in reversed(tensor.shape.tolist())),
+            tensor_type=tensor.tensor_type,
+            n_bytes=int(tensor.n_bytes),
+        )
+    return descriptors
+
+
+def _metadata_int(kv: Mapping[str, object], key: str) -> int | None:
+    raw = kv.get(key)
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return int(raw)
+    if isinstance(raw, float) and float(raw).is_integer():
+        return int(raw)
+    if isinstance(raw, str):
+        value = raw.strip()
+        if value.isdigit():
+            return int(value)
+    return None
+
+
+def _validate_qwen_image_qwen2_5_vl_gguf(
+    kv: Mapping[str, object],
+    tensor_descriptors: Mapping[str, _GGUFTensorDescriptor],
+    *,
+    context: str,
+) -> None:
+    expected_strings = {
+        "model.architecture": "qwen2_5_vl",
+        "model.name": "qwen_image_qwen2_5_vl_text_encoder",
+        "codex.quant_policy": "qwen_image_tenc_mq_v2",
+        "codex.quant_policy_preset": "MQ",
+        "codex.quant_base_type": "Q8_0",
+        "codex.quant_recipe": "Q8_0",
+    }
+    for key, expected in expected_strings.items():
+        actual = str(kv.get(key) or "").strip()
+        if actual != expected:
+            raise TextEncoderSlotError(
+                f"Qwen Image Qwen2.5-VL GGUF metadata mismatch for {context}: "
+                f"{key}={actual or '<missing>'!r}, expected {expected!r}."
+            )
+    expected_ints = {
+        "general.file_type": 7,
+        "model.attention.head_count": 28,
+        "model.attention.head_count_kv": 4,
+        "model.block_count": 28,
+        "model.context_length": 128000,
+        "model.embedding_length": 3584,
+    }
+    for key, expected in expected_ints.items():
+        actual = _metadata_int(kv, key)
+        if actual != expected:
+            raise TextEncoderSlotError(
+                f"Qwen Image Qwen2.5-VL GGUF metadata mismatch for {context}: "
+                f"{key}={actual!r}, expected {expected!r}."
+            )
+
+    descriptor_mapping = dict(tensor_descriptors)
+    try:
+        resolved = resolve_qwen2_5_vl_multimodal_keyspace(descriptor_mapping)
+    except Exception as exc:
+        raise TextEncoderSlotError(
+            f"Qwen Image Qwen2.5-VL GGUF tensor topology is invalid for {context}: {exc}"
+        ) from exc
+    if len(resolved.view) != 728:
+        raise TextEncoderSlotError(
+            f"Qwen Image Qwen2.5-VL runtime key count mismatch for {context}: "
+            f"got={len(resolved.view)} expected=728."
+        )
+
+    for key in ("model.embed_tokens.weight", "lm_head.weight"):
+        descriptor = tensor_descriptors.get(key)
+        if descriptor is None:
+            raise TextEncoderSlotError(f"Qwen Image Qwen2.5-VL GGUF is missing {key!r}: {context}")
+        if descriptor.tensor_type is not GGMLQuantizationType.Q8_0:
+            raise TextEncoderSlotError(
+                f"Qwen Image Qwen2.5-VL GGUF requires {key!r} in Q8_0 for {context}; "
+                f"got={descriptor.tensor_type.name}."
+            )
+        if descriptor.n_bytes != 579_059_712:
+            raise TextEncoderSlotError(
+                f"Qwen Image Qwen2.5-VL GGUF byte-size mismatch for {key!r} in {context}: "
+                f"got={descriptor.n_bytes} expected=579059712."
+            )
+
+
+def _classify_gguf_kv(
+    kv: Mapping[str, object],
+    *,
+    tensor_descriptors: Mapping[str, _GGUFTensorDescriptor],
+    context: str,
+) -> str:
     if _looks_like_mmproj_context(context) or _gguf_is_multimodal_projector(kv):
         raise TextEncoderSlotError(f"GGUF multimodal projector files are not supported text encoder slots: {context}")
 
@@ -337,30 +447,14 @@ def _classify_gguf_kv(kv: Mapping[str, object], *, context: str) -> str:
     tok_model = str(kv.get("tokenizer.ggml.model") or "").strip().lower()
     hint = arch or tok_model
 
-    def _get_int(key: str) -> int | None:
-        raw = kv.get(key)
-        if isinstance(raw, bool):
-            return None
-        if isinstance(raw, int):
-            return int(raw)
-        if isinstance(raw, float):
-            if float(raw).is_integer():
-                return int(raw)
-            return None
-        if isinstance(raw, str):
-            s = raw.strip()
-            if s and s.isdigit():
-                return int(s)
-        return None
-
     def _resolve_embed_dim() -> int | None:
         return (
-            _get_int("llama.embedding_length")
-            or _get_int("qwen.embedding_length")
-            or _get_int("gemma3.embedding_length")
-            or _get_int("gemma.embedding_length")
-            or _get_int("model.embedding_length")
-            or _get_int("general.embedding_length")
+            _metadata_int(kv, "llama.embedding_length")
+            or _metadata_int(kv, "qwen.embedding_length")
+            or _metadata_int(kv, "gemma3.embedding_length")
+            or _metadata_int(kv, "gemma.embedding_length")
+            or _metadata_int(kv, "model.embedding_length")
+            or _metadata_int(kv, "general.embedding_length")
         )
 
     if "t5" in hint:
@@ -376,12 +470,11 @@ def _classify_gguf_kv(kv: Mapping[str, object], *, context: str) -> str:
         if embed == 1024:
             return "qwen3_06b"
         if embed == 3584:
-            raise TextEncoderSlotError(
-                f"GGUF Qwen2.5-VL-7B slot classification is unsupported without visual-tower tensor evidence: {context}"
-            )
+            _validate_qwen_image_qwen2_5_vl_gguf(kv, tensor_descriptors, context=context)
+            return "qwen2_5_vl_7b"
         raise TextEncoderSlotError(
             f"Unrecognized GGUF Qwen embed dim {embed} for {context} "
-            "(expected 2560 (Qwen3-4B) or 1024 (Qwen3-0.6B); 3584 Qwen2.5-VL requires safetensors visual evidence)."
+            "(expected 3584 (exact Qwen Image Qwen2.5-VL), 2560 (Qwen3-4B), or 1024 (Qwen3-0.6B))."
         )
     if "gemma" in hint:
         embed = _resolve_embed_dim()

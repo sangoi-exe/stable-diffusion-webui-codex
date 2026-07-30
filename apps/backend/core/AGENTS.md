@@ -29,7 +29,7 @@ Status: Active
 - 2025-12-30: `InferenceOrchestrator` now reloads an already-loaded engine when load-affecting `engine_options` change (e.g. `text_encoder_override`, VAE override, core streaming), so overrides actually apply and caches don’t go stale across requests.
 - 2026-01-06: `InferenceOrchestrator` reload fingerprint now includes explicit `engine_options.vae_source`/`engine_options.tenc_source` to ensure built-in vs external asset selection changes trigger reloads.
 - 2026-01-28: `InferenceOrchestrator` reload fingerprint now includes `engine_options.zimage_variant` so Z-Image Turbo/Base switches trigger a reload.
-- 2026-05-17: `InferenceOrchestrator` reload fingerprint now includes internal `engine_options.qwen_image_variant` so Qwen Image txt2img (`2512`) and img2img edit (`edit_2511`) cannot reuse stale cached runtime state across variant switches.
+- 2026-07-30: `InferenceOrchestrator` reload fingerprint retains the backend-derived `engine_options.qwen_image_variant` field for exact Edit-2511 cache identity; Qwen txt2img is no longer a live route.
 - 2026-05-24: `InferenceOrchestrator` reload fingerprint now includes internal `engine_options.lens_variant` plus the internally-derived Lens text-encoder quant policy for the parked Lens bootstrap so future variant/quant-policy switches cannot reuse stale cached runtime state once Lens loading lands.
 - 2026-01-01: `InferenceOrchestrator` now purges VRAM (unload cached engines + memory manager unload/empty_cache) before a generation when the requested `(checkpoint, text encoders)` signature differs from the previous generation (prevents OOM on model swaps).
 - 2026-01-02: Added standardized file header docstrings across `apps/backend/core/**` modules (doc-only change; part of rollout).

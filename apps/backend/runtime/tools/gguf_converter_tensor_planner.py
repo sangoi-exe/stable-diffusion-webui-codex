@@ -27,7 +27,6 @@ Symbols (top-level; keep in sync; no ghosts):
 - `normalize_zimage_l2p_text_encoder_metadata_config` (function): Adapts exact Qwen3-4B config fields to metadata helper inputs.
 - `is_flux_transformer_config` (function): Returns True when a config.json represents a Flux transformer export.
 - `normalize_flux_transformer_metadata_config` (function): Adapts Flux transformer config fields to metadata helper inputs.
-- `_qwen_image_variant_from_transformer_config` (function): Derives the internal Qwen Image variant from transformer metadata.
 - `_is_qwen_image_canonical_repo_id` (function): Returns True when a model-name candidate is the canonical Qwen Image repo id for the variant.
 - `_is_path_like_model_name` (function): Returns True when a model-name candidate looks like a local filesystem path.
 - `_safe_qwen_image_model_name` (function): Selects a stable Qwen model name without leaking local filesystem paths.
@@ -57,7 +56,7 @@ import numpy as np
 
 from apps.backend.quantization.gguf import GGMLQuantizationType
 from apps.backend.quantization.gguf.quant_shapes import quant_shape_to_byte_shape
-from apps.backend.runtime.families.qwen_image.config import QWEN_IMAGE_EDIT_VARIANT, QWEN_IMAGE_TXT2IMG_VARIANT
+from apps.backend.runtime.families.qwen_image.config import QWEN_IMAGE_EDIT_VARIANT
 from apps.backend.runtime.families.qwen_image.text_encoder import qwen_image_text_encoder_config_from_mapping
 from apps.backend.runtime.families.qwen_image.transformer import qwen_image_transformer_config_from_mapping
 from apps.backend.runtime.tools.gguf_converter_quantization import select_tensor_ggml_type
@@ -67,7 +66,6 @@ _ZIMAGE_PAD_TOKENS = {"x_pad_token", "cap_pad_token"}
 _QWEN_IMAGE_TEXT_ENCODER_FALLBACK_NAME = "qwen_image_qwen2_5_vl_text_encoder"
 _QWEN_IMAGE_TEXT_ENCODER_CANONICAL_REPO_IDS = frozenset(
     {
-        "Qwen/Qwen-Image-2512",
         "Qwen/Qwen-Image-Edit-2511",
     }
 )
@@ -305,10 +303,6 @@ def is_flux_transformer_config(config: Mapping[str, Any]) -> bool:
     return str(config.get("_class_name") or "") == "FluxTransformer2DModel"
 
 
-def _qwen_image_variant_from_transformer_config(config: Mapping[str, Any]) -> str:
-    return QWEN_IMAGE_EDIT_VARIANT if config.get("zero_cond_t") is True else QWEN_IMAGE_TXT2IMG_VARIANT
-
-
 def _is_qwen_image_canonical_repo_id(value: str, *, fallback: str) -> bool:
     return str(value or "").strip() == fallback
 
@@ -341,7 +335,7 @@ def is_qwen_image_transformer_config(config: Mapping[str, Any]) -> bool:
     try:
         qwen_image_transformer_config_from_mapping(
             config,
-            variant=_qwen_image_variant_from_transformer_config(config),
+            variant=QWEN_IMAGE_EDIT_VARIANT,
             context="Qwen Image GGUF converter profile detection",
         )
     except RuntimeError:
@@ -457,18 +451,13 @@ def normalize_flux_transformer_metadata_config(config: Mapping[str, Any]) -> dic
 def normalize_qwen_image_transformer_metadata_config(config: Mapping[str, Any]) -> dict[str, Any]:
     """Adapt Qwen Image transformer config keys into the metadata helper's expected fields."""
 
-    variant = _qwen_image_variant_from_transformer_config(config)
     qwen_config = qwen_image_transformer_config_from_mapping(
         config,
-        variant=variant,
+        variant=QWEN_IMAGE_EDIT_VARIANT,
         context="Qwen Image GGUF converter metadata",
     )
     hidden = int(qwen_config.num_attention_heads * qwen_config.attention_head_dim)
-    fallback_name = (
-        "Qwen/Qwen-Image-Edit-2511"
-        if qwen_config.variant == QWEN_IMAGE_EDIT_VARIANT
-        else "Qwen/Qwen-Image-2512"
-    )
+    fallback_name = "Qwen/Qwen-Image-Edit-2511"
     name = _safe_qwen_image_model_name(config, fallback=fallback_name)
 
     return {

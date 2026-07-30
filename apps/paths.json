@@ -54,13 +54,13 @@
     "models/flux2-loras"
   ],
   "qwen_image_ckpt": [
-    "models/qwen-image"
+    "/mnt/f/Qwen2511Edit/Qwen-Image-Edit-2511-Q4_K_M-MQ-Codex.gguf"
   ],
   "qwen_image_tenc": [
-    "models/qwen-image-tenc"
+    "/mnt/f/Qwen2511Edit/Qwen-Image-Edit-2511-Tenc-Q8_0-MQ-Codex.gguf"
   ],
   "qwen_image_vae": [
-    "models/qwen-image-vae"
+    "/mnt/f/Qwen2511Edit/Qwen-Image-Edit-2511-VAE.safetensors"
   ],
   "anima_ckpt": [
     "models/anima"

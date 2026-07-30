@@ -6,9 +6,9 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Lightweight public Qwen Image runtime-family contract surface.
-Exports internal variant constants, variant specs, geometry helpers, and scheduler metadata helpers for the single
-`qwen_image` architecture family without importing heavy model/runtime classes.
+Purpose: Lightweight public Qwen Image Edit-2511 runtime-family contract surface.
+Exports the Edit-only internal variant spec, geometry helpers, and scheduler metadata helpers for the single `qwen_image`
+architecture family without importing heavy model/runtime classes.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageVariantSpec` (dataclass): Immutable metadata for one supported internal Qwen Image variant.
@@ -26,7 +26,6 @@ Symbols (top-level; keep in sync; no ghosts):
 - `qwen_image_text_encoder_config_from_mapping` (function): Validate Qwen2.5-VL text-encoder metadata.
 - `qwen_image_transformer_config_from_mapping` (function): Validate Qwen Image transformer metadata.
 - `qwen_image_validate_external_vae_path` (function): Validate selected external Qwen Image VAE path/root/config.
-- `qwen_image_variant_for_mode` (function): Resolve internal variant from canonical route mode.
 - `qwen_image_variant_spec` (function): Resolve the immutable spec for a supported Qwen Image variant.
 - `require_qwen_image_variant` (function): Validate an internal Qwen Image variant value.
 - `validate_qwen_image_dimensions` (function): Enforce Qwen Image output-dimension divisibility.
@@ -52,17 +51,11 @@ from .config import (
     QWEN_IMAGE_SUPPORTED_VARIANTS,
     QWEN_IMAGE_TOKENIZER_MAX_LENGTH,
     QWEN_IMAGE_TRANSFORMER_IN_CHANNELS,
-    QWEN_IMAGE_TXT2IMG_DEFAULT_HEIGHT,
-    QWEN_IMAGE_TXT2IMG_DEFAULT_WIDTH,
-    QWEN_IMAGE_TXT2IMG_PIPELINE_CLASS,
-    QWEN_IMAGE_TXT2IMG_REPO_ID,
-    QWEN_IMAGE_TXT2IMG_VARIANT,
     QWEN_IMAGE_VARIANT_KEY,
     QWEN_IMAGE_VAE_SCALE_FACTOR,
     QwenImageVariantSpec,
     qwen_image_edit_condition_dimensions,
     qwen_image_edit_vae_dimensions,
-    qwen_image_variant_for_mode,
     qwen_image_variant_spec,
     require_qwen_image_variant,
     validate_qwen_image_dimensions,
@@ -105,11 +98,6 @@ __all__ = [
     "QWEN_IMAGE_SUPPORTED_VARIANTS",
     "QWEN_IMAGE_TOKENIZER_MAX_LENGTH",
     "QWEN_IMAGE_TRANSFORMER_IN_CHANNELS",
-    "QWEN_IMAGE_TXT2IMG_DEFAULT_HEIGHT",
-    "QWEN_IMAGE_TXT2IMG_DEFAULT_WIDTH",
-    "QWEN_IMAGE_TXT2IMG_PIPELINE_CLASS",
-    "QWEN_IMAGE_TXT2IMG_REPO_ID",
-    "QWEN_IMAGE_TXT2IMG_VARIANT",
     "QWEN_IMAGE_VARIANT_KEY",
     "QWEN_IMAGE_VAE_SCALE_FACTOR",
     "QwenImageLatentGrid",
@@ -131,7 +119,6 @@ __all__ = [
     "qwen_image_transformer_config_from_mapping",
     "qwen_image_validate_external_vae_path",
     "qwen_image_validate_max_sequence_length",
-    "qwen_image_variant_for_mode",
     "qwen_image_variant_spec",
     "require_qwen_image_variant",
     "validate_qwen_image_dimensions",

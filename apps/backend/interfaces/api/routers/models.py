@@ -12,7 +12,7 @@ surfaces, embeddings, and engine capabilities.
 Inventory payloads include first-class IP-Adapter model and image-encoder lists from the dedicated roots in `apps/paths.json`.
 Capability surfaces include semantic-engine asset contracts (owner-resolved from canonical engine ids), backend-owned exact-engine inpaint-mode maps,
 and backend-owned dependency checks so the UI can enforce sha-only external asset selection and readiness gating deterministically. Also provides prompt token-counting
-(`/api/models/prompt-token-count`) using vendored offline tokenizers for supported prompt-token engine ids, including FLUX.2 Klein 4B, Qwen Image, Z-Image L2P, LTX2, exact WAN ids, and
+(`/api/models/prompt-token-count`) using vendored offline tokenizers for supported prompt-token engine ids, including FLUX.2 Klein 4B, Z-Image L2P, LTX2, exact WAN ids, and
 Anima runtime-equivalent Qwen+T5 prompt tokenization/max-length checks with the same family-owned offline tokenizer rules used by the runtime. Raw `/api/samplers`
 inventory keeps unsupported rows visible with non-executable metadata (`supported=false`, `default_scheduler=null`, `allowed_schedulers=[]`),
 while supported rows must resolve complete executable registry metadata.
@@ -66,7 +66,6 @@ _PROMPT_TOKENIZER_DIRS: Dict[str, Path] = {
     "sdxl": _HF_ROOT / "stabilityai/stable-diffusion-xl-base-1.0/tokenizer",
     "flux1": _HF_ROOT / "black-forest-labs/FLUX.1-dev/tokenizer_2",
     "flux2": _HF_ROOT / "black-forest-labs/FLUX.2-klein-4B/tokenizer",
-    "qwen_image": _HF_ROOT / "Qwen/Qwen-Image-2512/tokenizer",
     "ltx2": _HF_ROOT / "Lightricks/LTX-2/tokenizer",
     "chroma": _HF_ROOT / "Chroma/tokenizer",
     "zimage": _HF_ROOT / "Tongyi-MAI/Z-Image/tokenizer",
@@ -82,7 +81,6 @@ _ENGINE_TOKENIZER_KEY: Dict[str, str] = {
     "flux1": "flux1",
     "flux1_kontext": "flux1",
     "flux2": "flux2",
-    "qwen_image": "qwen_image",
     "ltx2": "ltx2",
     "chroma": "chroma",
     "flux1_chroma": "chroma",

@@ -15,7 +15,7 @@ Status: Active
 ## Notes
 - 2026-05-30: `generation_tasks.py::build_engine_options(..., engine_key=...)` requires the worker-resolved engine key, resolves runtime VAE usage through `EngineAssetContract.uses_vae`, forwards explicit `vae_source` for every VAE-using engine, preserves `requires_vae` as the external-VAE requirement, and rejects `vae_source` / `vae_path` / `vae_sha` for no-VAE engines.
 - 2026-05-24: `generation_tasks.py::build_engine_options(...)` reserves only nested `extras.lens.variant` for Lens variant propagation and rejects `extras.lens` on non-Lens engines; flat aliases such as `extras.lens_variant`, `extras.lensVariant`, `extras.variant`, and `extras.engine_options` fail loud.
-- 2026-05-17: `generation_tasks.py::build_engine_options(...)` forwards internal `extras.qwen_image_variant` values (`2512` / `edit_2511`) into engine options so Qwen Image cache/reload ownership stays variant-aware without accepting a public variant payload key.
+- 2026-07-30: `generation_tasks.py::build_engine_options(...)` forwards the backend-derived fixed Qwen Image identity `edit_2511`; public payloads still cannot own `qwen_image_variant`.
 - This package must remain import-light (avoid importing torch-heavy modules at import time). Prefer local imports inside functions.
 - Cancellation semantics are owned by `apps/backend/interfaces/api/task_registry.py` and must be preserved (always emit `end`).
 - 2026-02-09: Task workers now compare cancellation policy using `TaskCancelMode.IMMEDIATE` (enumized contract from `task_registry.py`) instead of raw string literals.

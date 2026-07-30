@@ -9,7 +9,7 @@ Required Notice: see NOTICE
 Purpose: Model-family → parser-plan dispatch for the Codex model parser.
 Maps `ModelFamily` values to the appropriate `build_plan(...)` implementation and provides a single `resolve_plan(...)` entrypoint used by
 `parse_state_dict(...)`.
-Includes core-only families such as Anima (Cosmos Predict2) and FLUX.2 Klein 4B that rely on sha-selected external assets.
+Includes core-only families such as Anima (Cosmos Predict2), FLUX.2 Klein 4B, and Qwen Image Edit-2511 that rely on sha-selected external assets.
 Includes LTX2 monolithic-checkpoint planning for strict component seam extraction (`transformer`, `connectors`, `vae`, `audio_vae`, `vocoder`).
 WAN22 family variants are dispatched explicitly (`WAN22_5B`/`WAN22_14B`/`WAN22_ANIMATE`).
 Z-Image L2P is dispatched separately from latent Z-Image because it is a no-VAE pixel-space checkpoint.
@@ -27,7 +27,7 @@ from apps.backend.runtime.model_registry.specs import ModelFamily, ModelSignatur
 
 from ..errors import UnsupportedFamilyError
 from ..specs import ParserPlanBundle
-from . import anima, chroma, flux, flux2, ltx2, sd1, sd2, sd3, sdxl, wan22, zimage, zimage_l2p
+from . import anima, chroma, flux, flux2, ltx2, qwen_image, sd1, sd2, sd3, sdxl, wan22, zimage, zimage_l2p
 
 
 _BUILDERS: Dict[ModelFamily, Callable[[ModelSignature], ParserPlanBundle]] = {
@@ -43,6 +43,7 @@ _BUILDERS: Dict[ModelFamily, Callable[[ModelSignature], ParserPlanBundle]] = {
     ModelFamily.LTX2: ltx2.build_plan,
     ModelFamily.CHROMA: chroma.build_plan,
     ModelFamily.ANIMA: anima.build_plan,
+    ModelFamily.QWEN_IMAGE: qwen_image.build_plan,
     ModelFamily.WAN22_5B: wan22.build_plan,
     ModelFamily.WAN22_14B: wan22.build_plan,
     ModelFamily.WAN22_ANIMATE: wan22.build_plan,

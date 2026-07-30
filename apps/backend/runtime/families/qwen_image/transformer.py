@@ -6,9 +6,8 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Qwen Image transformer metadata validation.
-Owns the lightweight `QwenImageTransformer2DModel` config contract for the supported `qwen_image` variants without
-building or loading the heavyweight MMDiT transformer.
+Purpose: Qwen Image Edit-2511 transformer metadata validation.
+Owns the lightweight exact `QwenImageTransformer2DModel` config contract without building or loading the heavyweight MMDiT transformer.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageTransformerConfig` (dataclass): Strict metadata contract for `QwenImageTransformer2DModel`.
@@ -26,7 +25,6 @@ from .config import (
     QWEN_IMAGE_LATENT_CHANNELS,
     QWEN_IMAGE_PATCH_SIZE,
     QWEN_IMAGE_TRANSFORMER_IN_CHANNELS,
-    QWEN_IMAGE_TXT2IMG_VARIANT,
     require_qwen_image_variant,
 )
 
@@ -75,10 +73,10 @@ class QwenImageTransformerConfig:
             raise ValueError(f"Qwen Image num_layers must be {QWEN_IMAGE_NUM_LAYERS}")
         if self.patch_size != QWEN_IMAGE_PATCH_SIZE:
             raise ValueError(f"Qwen Image transformer patch_size must be {QWEN_IMAGE_PATCH_SIZE}")
-        if self.variant == QWEN_IMAGE_EDIT_VARIANT and self.zero_cond_t is not True:
+        if self.variant != QWEN_IMAGE_EDIT_VARIANT:
+            raise ValueError(f"Qwen Image transformer variant must be {QWEN_IMAGE_EDIT_VARIANT!r}")
+        if self.zero_cond_t is not True:
             raise ValueError("Qwen Image Edit-2511 transformer must set zero_cond_t=true")
-        if self.variant == QWEN_IMAGE_TXT2IMG_VARIANT and self.zero_cond_t is True:
-            raise ValueError("Qwen Image 2512 transformer must not set zero_cond_t=true")
 
 
 def _int_tuple(values: object, *, field: str, context: str) -> tuple[int, ...]:

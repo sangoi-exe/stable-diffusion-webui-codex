@@ -13,7 +13,7 @@ Status: Active
 - `zimage_l2p/` — public `zhen-nan/L2P` pixel-space no-VAE runtime owner; separate from latent Z-Image Turbo/Base.
 - `ltx2/` — native-only LTX2 runtime seam (video + audio + external Gemma3 asset contract) with family-owned model, scheduler, and execution code under `apps/**`.
 - `netflix_void/` — native-only Netflix VOID vid2vid scaffold (explicit base bundle + literal Pass 1/Pass 2 overlays; execution still fail-loud until the repo-owned runtime port lands).
-- `qwen_image/` — Qwen Image architecture-family runtime contracts for the internal `2512` txt2img and `edit_2511` img2img edit variants.
+- `qwen_image/` — Qwen Image Edit-2511 native single-image img2img runtime contracts.
 - `lens/` — Microsoft Lens architecture-family skeleton contracts for internal `default|turbo|base` variants, official buckets, schedule helpers, and the fail-loud sampler seam; real runtime is not implemented.
 
 ## Notes
