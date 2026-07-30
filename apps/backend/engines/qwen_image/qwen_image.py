@@ -8,8 +8,8 @@ Required Notice: see NOTICE
 
 Purpose: Qwen Image Edit-2511 engine facade for the single `qwen_image` architecture family.
 Validates the fixed internal `edit_2511` identity, required external Qwen Image assets, exact VAE/header contracts,
-assembles patcher-backed native components through the common diffusion engine, and delegates img2img to the canonical
-use-case pipeline.
+assembles patcher-backed native components plus the family runtime through the common diffusion engine, and delegates
+img2img to the canonical use-case pipeline.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageEngine` (class): Registered Edit-only common diffusion engine with strict native component assembly.
@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 from apps.backend.core.engine_interface import EngineCapabilities, TaskType
 from apps.backend.engines.common.base import CodexDiffusionEngine, CodexObjects, TextEncoderHandle
+from apps.backend.engines.common.runtime_lifecycle import require_runtime
 from apps.backend.infra.config.paths import get_paths_for
 from apps.backend.runtime.families.qwen_image.config import (
     QWEN_IMAGE_ENGINE_ID,
@@ -36,6 +37,7 @@ from apps.backend.runtime.model_registry.specs import ModelFamily
 
 if TYPE_CHECKING:
     from apps.backend.runtime.families.qwen_image.loader import QwenImageComponentAssembly
+    from apps.backend.runtime.families.qwen_image.runtime import QwenImageRuntime
     from apps.backend.runtime.models.loader import DiffusionModelBundle
 
 
@@ -110,6 +112,7 @@ class QwenImageEngine(CodexDiffusionEngine):
     def __init__(self) -> None:
         super().__init__()
         self._assembly: QwenImageComponentAssembly | None = None
+        self._runtime: QwenImageRuntime | None = None
         self._variant: str | None = None
 
     def capabilities(self) -> EngineCapabilities:
@@ -174,9 +177,11 @@ class QwenImageEngine(CodexDiffusionEngine):
         options: Mapping[str, object],
     ) -> CodexObjects:
         from apps.backend.runtime.families.qwen_image.loader import load_qwen_image_components
+        from apps.backend.runtime.families.qwen_image.runtime import QwenImageRuntime
 
         assembly = load_qwen_image_components(bundle, options=options)
         self._assembly = assembly
+        self._runtime = QwenImageRuntime(assembly)
         self._variant = assembly.variant
         self.use_distilled_cfg_scale = False
         return CodexObjects(
@@ -190,7 +195,15 @@ class QwenImageEngine(CodexDiffusionEngine):
             },
         )
 
+    def _require_runtime(self) -> QwenImageRuntime:
+        return require_runtime(self._runtime, label=self.engine_id)
+
+    @property
+    def qwen_image_runtime(self) -> QwenImageRuntime:
+        return self._require_runtime()
+
     def _on_unload(self) -> None:
+        self._runtime = None
         self._assembly = None
         self._variant = None
 

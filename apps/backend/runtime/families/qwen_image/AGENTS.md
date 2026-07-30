@@ -10,7 +10,9 @@ Status: Active
 ## Key Files
 - `apps/backend/runtime/families/qwen_image/config.py` - Edit-2511 metadata, prompt-template constants, dimensions, and image geometry helpers.
 - `apps/backend/runtime/families/qwen_image/loader.py` - Strict native transformer/TEnc/VAE construction, lazy keyspace binding, scheduler metadata, and patcher ownership.
-- `apps/backend/runtime/families/qwen_image/scheduler.py` - Diffusers-free FlowMatch Euler scheduler metadata validation plus Qwen Image sequence-length/shift helpers.
+- `apps/backend/runtime/families/qwen_image/runtime.py` - Single-image condition/reference preprocessing, multimodal prompt encoding, true-CFG denoise, VAE decode, and component lifecycle.
+- `apps/backend/runtime/families/qwen_image/runtime_latents.py` - CPU-staged runtime value objects, native 2x2 latent pack/unpack, and true-CFG norm rescaling.
+- `apps/backend/runtime/families/qwen_image/scheduler.py` - Diffusers-free FlowMatch Euler scheduler metadata validation, exact sigma ladder, Euler update, and sequence geometry.
 - `apps/backend/runtime/families/qwen_image/text_encoder.py` - Qwen2.5-VL config validation, exact processor batch contract, prompt-template planning, and base-model forward boundary.
 - `apps/backend/runtime/families/qwen_image/transformer.py` - Edit-2511 `QwenImageTransformer2DModel` config, topology, forward contract, and zero-conditioning validation.
 - `apps/backend/runtime/families/qwen_image/transformer_layers.py` - Checkpoint-owned dual-stream attention, modulation, feed-forward, and timestep layers.
@@ -24,5 +26,7 @@ Status: Active
 - `qwen_image_variant` is fixed internal runtime/task metadata for Edit-2511. Public request payloads must fail loud if they carry it.
 - Qwen Image VAE assets must come from `qwen_image_vae` API roots, match the exact 194-tensor BF16 header, and use the vendored Edit-2511 `vae/config.json`; sibling config files beside weights are not runtime authority.
 - The transformer and Qwen2.5-VL text encoder keep their stored native keys unchanged. Dedicated keymaps may expose lazy runtime lookup names only.
+- The runtime interface is exactly `encode_conditioning`, `encode_reference`, `denoise`, and `decode`; component stages use canonical patcher load/unload telemetry and return intermediate tensors to CPU between stages.
+- Reference-image VAE encoding uses posterior `mode()` and Qwen per-channel normalization exactly once.
 - Reference trees under `.refs/**` and metadata mirrors under `apps/backend/huggingface/Qwen/**` are source frontiers only. Active code must stay repo-owned and Diffusers-free.
 - Header/keyspace work must obey the root keymap law: do not strip prefixes, rewrite punctuation, materialize remapped state dicts, or normalize stored checkpoint layer names.

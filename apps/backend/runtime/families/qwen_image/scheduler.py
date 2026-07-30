@@ -6,13 +6,16 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Qwen Image FlowMatch Euler scheduler metadata and geometry helpers.
-Validates HF-style scheduler metadata, derives packed image sequence lengths, and resolves Qwen Image dynamic shift
-without importing Diffusers or building a generation-time scheduler before the native runtime is wired.
+Purpose: Qwen Image FlowMatch Euler scheduler metadata, geometry, and native step helpers.
+Validates HF-style scheduler metadata, derives packed image sequence lengths, builds the exact dynamically shifted
+sigma/timestep ladder, and applies the deterministic FP32 Euler update without importing Diffusers.
 
 Symbols (top-level; keep in sync; no ghosts):
+- `QwenImageFlowSchedule` (dataclass): Exact inference sigma/timestep tensors for one Qwen Image denoise run.
 - `QwenImageLatentGrid` (dataclass): Derived latent/packed-grid dimensions for one Qwen Image output size.
 - `QwenImageSchedulerConfig` (dataclass): Strict scheduler metadata contract for supported Qwen Image payloads.
+- `qwen_image_flow_euler_step` (function): Apply one deterministic FlowMatch Euler update in FP32.
+- `qwen_image_flow_schedule` (function): Build the exact shifted/stretched Qwen Image sigma ladder.
 - `qwen_image_flow_shift` (function): Resolve dynamic FlowMatch shift from packed image sequence length.
 - `qwen_image_flow_shift_for_dimensions` (function): Resolve dynamic FlowMatch shift from output dimensions.
 - `qwen_image_latent_grid` (function): Derive Qwen Image latent/packed-grid dimensions.
@@ -26,7 +29,35 @@ import math
 from dataclasses import dataclass
 from typing import Mapping
 
+import numpy as np
+import torch
+
 from .config import QWEN_IMAGE_IMAGE_MULTIPLE, QWEN_IMAGE_PATCH_SIZE, QWEN_IMAGE_VAE_SCALE_FACTOR, validate_qwen_image_dimensions
+
+
+@dataclass(frozen=True, slots=True)
+class QwenImageFlowSchedule:
+    sigmas: torch.Tensor
+    timesteps: torch.Tensor
+
+    def __post_init__(self) -> None:
+        if self.sigmas.ndim != 1 or self.timesteps.ndim != 1:
+            raise RuntimeError("Qwen Image flow schedule sigmas/timesteps must be one-dimensional.")
+        if int(self.sigmas.shape[0]) != int(self.timesteps.shape[0]) + 1:
+            raise RuntimeError(
+                "Qwen Image flow schedule must carry one terminal sigma beyond its timesteps; "
+                f"sigmas={int(self.sigmas.shape[0])} timesteps={int(self.timesteps.shape[0])}."
+            )
+        if self.sigmas.dtype is not torch.float32 or self.timesteps.dtype is not torch.float32:
+            raise RuntimeError("Qwen Image flow schedule sigmas/timesteps must use torch.float32.")
+        if self.sigmas.device != self.timesteps.device:
+            raise RuntimeError("Qwen Image flow schedule sigmas/timesteps must share one device.")
+        if not bool(torch.isfinite(self.sigmas).all().item()) or not bool(torch.isfinite(self.timesteps).all().item()):
+            raise RuntimeError("Qwen Image flow schedule contains non-finite values.")
+        if float(self.sigmas[-1].item()) != 0.0:
+            raise RuntimeError("Qwen Image flow schedule terminal sigma must be exactly zero.")
+        if bool((self.sigmas[:-1] <= self.sigmas[1:]).any().item()):
+            raise RuntimeError("Qwen Image flow schedule sigmas must be strictly decreasing.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,10 +230,78 @@ def qwen_image_flow_shift_for_dimensions(
     return qwen_image_flow_shift(qwen_image_sequence_length(width, height), scheduler_config=scheduler_config)
 
 
+def qwen_image_flow_schedule(
+    num_inference_steps: object,
+    *,
+    image_seq_len: object,
+    scheduler_config: QwenImageSchedulerConfig = QWEN_IMAGE_SUPPORTED_SCHEDULER_CONFIG,
+    device: torch.device | str | None = None,
+) -> QwenImageFlowSchedule:
+    try:
+        step_count = int(num_inference_steps)  # type: ignore[arg-type]
+    except Exception as exc:  # noqa: BLE001 - strict runtime validation
+        raise RuntimeError("Qwen Image num_inference_steps must be an integer.") from exc
+    if step_count < 2:
+        raise RuntimeError(f"Qwen Image num_inference_steps must be at least 2; got {step_count}.")
+
+    shift = qwen_image_flow_shift(image_seq_len, scheduler_config=scheduler_config)
+    sigmas_array = np.linspace(
+        1.0,
+        1.0 / float(step_count),
+        step_count,
+    ).astype(np.float32)
+    exponent = math.exp(shift)
+    sigmas_array = exponent / (exponent + (1.0 / sigmas_array - 1.0))
+
+    one_minus = 1.0 - sigmas_array
+    terminal_denominator = 1.0 - float(scheduler_config.shift_terminal)
+    if terminal_denominator <= 0.0:
+        raise RuntimeError(
+            "Qwen Image scheduler shift_terminal must be less than 1.0; "
+            f"got {scheduler_config.shift_terminal!r}."
+        )
+    scale_factor = one_minus[-1] / terminal_denominator
+    if not bool(np.isfinite(scale_factor)) or float(scale_factor) <= 0.0:
+        raise RuntimeError(f"Qwen Image scheduler terminal stretch scale is invalid: {scale_factor!r}.")
+    sigmas_array = 1.0 - (one_minus / scale_factor)
+    sigmas = torch.from_numpy(sigmas_array).to(dtype=torch.float32, device=device)
+    timesteps = sigmas * float(scheduler_config.num_train_timesteps)
+    sigmas = torch.cat((sigmas, torch.zeros(1, device=sigmas.device, dtype=torch.float32)))
+    return QwenImageFlowSchedule(sigmas=sigmas, timesteps=timesteps)
+
+
+def qwen_image_flow_euler_step(
+    model_output: torch.Tensor,
+    sample: torch.Tensor,
+    *,
+    current_sigma: torch.Tensor,
+    next_sigma: torch.Tensor,
+) -> torch.Tensor:
+    if tuple(model_output.shape) != tuple(sample.shape):
+        raise RuntimeError(
+            "Qwen Image Euler step requires matching model_output/sample shapes; "
+            f"model_output={tuple(model_output.shape)} sample={tuple(sample.shape)}."
+        )
+    if current_sigma.numel() != 1 or next_sigma.numel() != 1:
+        raise RuntimeError("Qwen Image Euler step sigmas must each contain exactly one value.")
+    delta = next_sigma.to(device=sample.device, dtype=torch.float32) - current_sigma.to(
+        device=sample.device,
+        dtype=torch.float32,
+    )
+    previous = sample.to(dtype=torch.float32) + delta * model_output
+    previous = previous.to(dtype=model_output.dtype)
+    if not bool(torch.isfinite(previous).all().item()):
+        raise RuntimeError("Qwen Image Euler step produced non-finite latents.")
+    return previous
+
+
 __all__ = [
     "QWEN_IMAGE_SUPPORTED_SCHEDULER_CONFIG",
+    "QwenImageFlowSchedule",
     "QwenImageLatentGrid",
     "QwenImageSchedulerConfig",
+    "qwen_image_flow_euler_step",
+    "qwen_image_flow_schedule",
     "qwen_image_flow_shift",
     "qwen_image_flow_shift_for_dimensions",
     "qwen_image_latent_grid",

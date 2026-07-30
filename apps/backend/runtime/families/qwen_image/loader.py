@@ -8,7 +8,8 @@ Required Notice: see NOTICE
 
 Purpose: Native Qwen Image Edit-2511 component assembly.
 Builds and strictly binds the exact transformer GGUF, Qwen2.5-VL GGUF, Codex3D VAE SafeTensors, offline processor,
-and scheduler metadata while preserving lazy checkpoint keyspaces and canonical patcher ownership.
+and scheduler metadata while preserving lazy checkpoint keyspaces, canonical patcher ownership, and deterministic
+posterior-mode reference encoding.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageComponentAssembly` (dataclass): Strictly loaded native components plus patcher/runtime ownership.
@@ -88,6 +89,22 @@ _VAE_EXECUTABLE_KEYS = 194
 _LM_HEAD_LOGICAL_SHAPE = (152064, 3584)
 _LM_HEAD_QTYPE = "Q8_0"
 _LM_HEAD_PACKED_BYTES = 579_059_712
+
+
+def _posterior_mode(posterior: object) -> torch.Tensor:
+    mode = getattr(posterior, "mode", None)
+    if not callable(mode):
+        raise RuntimeError(
+            "Qwen Image VAE posterior must expose callable mode(); "
+            f"got {type(posterior).__name__}."
+        )
+    value = mode()
+    if not isinstance(value, torch.Tensor):
+        raise RuntimeError(
+            "Qwen Image VAE posterior mode() must return a torch.Tensor; "
+            f"got {type(value).__name__}."
+        )
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,6 +394,7 @@ def _load_vae(
         dtype=compute_dtype,
         family=ModelFamily.QWEN_IMAGE,
     )
+    vae.patcher.set_model_vae_regulation(_posterior_mode)
     return vae_model, vae
 
 

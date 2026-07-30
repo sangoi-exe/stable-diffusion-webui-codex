@@ -8,7 +8,8 @@ Required Notice: see NOTICE
 
 Purpose: Qwen Image Edit-2511 transformer metadata validation and native runtime model.
 Owns the exact `QwenImageTransformer2DModel` config contract plus the Diffusers-free 60-block implementation whose
-module names bind directly to the native 1,933-key GGUF checkpoint without changing stored tensor names.
+module names bind directly to the native 1,933-key GGUF checkpoint without changing stored tensor names, including
+the shared per-block sampling progress callback seam.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageTransformerConfig` (dataclass): Strict metadata contract for `QwenImageTransformer2DModel`.
@@ -25,6 +26,8 @@ from typing import Any, Mapping, Sequence
 
 import torch
 from torch import nn
+
+from apps.backend.runtime.sampling.block_progress import resolve_block_progress_callback
 
 from .config import (
     QWEN_IMAGE_CONTEXT_DIM,
@@ -196,6 +199,7 @@ class QwenImageTransformer2DModel(nn.Module):
         img_shapes: Sequence[Sequence[Sequence[object]]],
         guidance: torch.Tensor | None = None,
         attention_kwargs: Mapping[str, Any] | None = None,
+        transformer_options: Mapping[str, Any] | None = None,
         controlnet_block_samples: object = None,
         additional_t_cond: object = None,
         return_dict: bool = True,
@@ -292,7 +296,13 @@ class QwenImageTransformer2DModel(nn.Module):
             text_sequence_length=text_sequence_length,
             device=image_hidden_states.device,
         )
-        for block in self.transformer_blocks:
+        block_progress_callback = resolve_block_progress_callback(transformer_options)
+        total_blocks = int(len(self.transformer_blocks))
+        if block_progress_callback is not None and total_blocks <= 0:
+            raise RuntimeError("Qwen Image transformer block progress requires at least one transformer block.")
+        for block_index, block in enumerate(self.transformer_blocks):
+            if block_progress_callback is not None:
+                block_progress_callback(int(block_index + 1), total_blocks)
             text_hidden_states, image_hidden_states = block(
                 image_hidden_states,
                 text_hidden_states,
