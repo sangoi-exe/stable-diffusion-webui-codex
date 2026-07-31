@@ -9,7 +9,7 @@ Required Notice: see NOTICE
 Purpose: Static engine configs (defaults + capability flags) for the WebUI.
 Defines engine types and per-engine defaults/capabilities used by dynamic tabs and composables to pick UI defaults and gate fields.
 Variant-dependent engines (for example Z-Image Turbo/Base and FLUX.2 Klein distilled/base-4B) must be gated by per-tab checkpoint state
-in views/payload builders, not by these static flags.
+in views/payload builders, not by these static flags. Qwen Image is the exact Edit-2511 img2img-only public surface.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `EngineType` (type): Known engine identifiers used by the UI config (includes `flux2`, `qwen_image`, `zimage_l2p`, `anima`, and `ltx2`).
@@ -152,7 +152,7 @@ const ENGINE_CONFIGS: Record<EngineType, EngineConfig> = {
     id: 'qwen_image',
     label: 'Qwen Image',
     capabilities: {
-      tasks: ['txt2img', 'img2img'],
+      tasks: ['img2img'],
       usesCfg: true,
       usesDistilledCfg: false,
       usesNegativePrompt: true,

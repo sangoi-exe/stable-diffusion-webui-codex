@@ -6,8 +6,9 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Prompt input box with label + token count.
-Wraps `PromptEditor` with a label and a backend-backed token counter (`/api/models/prompt-token-count`) used by generation views.
+Purpose: Prompt input box with label + optional token count.
+Wraps `PromptEditor` with a label and, when a truthful token-engine id is supplied, a backend-backed token counter
+(`/api/models/prompt-token-count`) used by generation views.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `PromptBox` (component): Prompt editor wrapper with label + token-count badge.
@@ -50,7 +51,9 @@ const tokenError = ref('')
 const requestSeq = ref(0)
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
-const showTokenBadge = computed(() => inner.value.trim().length > 0)
+const showTokenBadge = computed(
+  () => String(props.tokenEngine || '').trim().length > 0 && inner.value.trim().length > 0,
+)
 
 function scheduleTokenCount(engine: string, prompt: string): void {
   if (debounceTimer !== null) {
@@ -97,7 +100,11 @@ watch(
     const engine = String(engineRaw || '').trim()
     if (!engine) {
       tokenCount.value = 0
-      tokenError.value = 'missing token engine'
+      requestSeq.value += 1
+      if (debounceTimer !== null) {
+        clearTimeout(debounceTimer)
+        debounceTimer = null
+      }
       return
     }
 

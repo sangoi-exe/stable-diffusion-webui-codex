@@ -1,6 +1,6 @@
 # apps/backend/use_cases Overview
 Date: 2025-10-30
-Last Review: 2026-05-17
+Last Review: 2026-07-31
 Status: Active
 
 ## Purpose
@@ -15,6 +15,7 @@ Status: Active
 - Shared orchestration logic now lives in `apps/backend/runtime/pipeline_stages/`; use cases should prefer these helpers over bespoke copies of sampler/prompt setup.
 
 ## Notes
+- 2026-07-31: `img2img.py` now branches exact `engine_id="qwen_image"` before classic backend resolution. The canonical use-case owns Edit-2511 prepare/conditioning/reference-encode/denoise/decode events and result assembly, while `runtime/families/qwen_image/runtime.py` retains Qwen tensor math and component lifecycle. The branch rejects classic conditioning, masks/inpaint, HiRes, LoRA, scripts, IP-Adapter, SUPIR, batches, subseeds, non-derived output geometry, and non-`euler`/`simple` sampling without entering `sampling_execute.py`.
 - 2026-02-28: `img2vid.py` removed runtime `chunk` mode routing; accepted temporal modes are now `solo|sliding|svi2|svi2_pro`, and `img2vid_mode='chunk'` fails loud.
 - 2026-03-06: `txt2img_pipeline/runner.py` and `img2img.py` hires second-pass now consume family-dispatched hires prep outputs and support non-SD image families (`flux1`, `flux1_chroma`, `zimage`, `anima`) plus Kontext-specific `image_latents` continuation (`init_latent=None`). The dedicated FLUX.2 engine seam reuses the same hires-prep dispatcher but keeps its second-pass continuation local. `_build_hires_plan(...)` still fails loud when engine capability surface declares `supports_hires=false`.
 - 2026-03-09: image hires second-pass paths record hires-effective execution details in `info.effective_hires_sampling` and keep top-level image `info` fields aligned with the base processing object; hires sampler/scheduler/size remain request-owned overrides.

@@ -22,8 +22,8 @@ shared no-stretch img2vid guide controls (`img2vidImageScale`, `img2vidCropOffse
 persists explicit `executionProfile` state, and leaves stale/blank profile values visible until the active checkpoint metadata or user choice resolves
 them truthfully without silently rewriting stored raw profile ids.
 Image-tab sampler/scheduler defaults are consumed only from backend capabilities; when those defaults are unavailable the store leaves fields blank for request-boundary validation instead of inventing frontend fallback values.
-Qwen Image tabs are capability-derived like Anima/LTX2, use the single canonical `qwen_image` image-tab type, and reject persisted text-encoder labels
-that are not `qwen_image/<path>` selections. Z-Image L2P tabs are capability-derived exact txt2img tabs, keep fixed 1024 defaults, and reject persisted text-encoder labels
+Qwen Image tabs are capability-derived like Anima/LTX2, use the single canonical `qwen_image` image-tab type, normalize persisted state to the
+Edit-2511 img2img-only contract, and reject text-encoder labels that are not `qwen_image/<path>` selections. Z-Image L2P tabs are capability-derived exact txt2img tabs, keep fixed 1024 defaults, and reject persisted text-encoder labels
 that are not shared `zimage/<path>` selections.
 
 Symbols (top-level; keep in sync; no ghosts):
@@ -815,6 +815,11 @@ function defaultParams<T extends BaseTabType>(
   }
   if (type === 'zimage') {
     imageDefaults.zimageTurbo = true
+  }
+  if (type === 'qwen_image') {
+    imageDefaults.useInitImage = true
+    imageDefaults.denoiseStrength = 1
+    imageDefaults.steps = Math.max(2, Math.trunc(Number(imageDefaults.steps)))
   }
   return imageDefaults as TabParamsByType[T]
 }
@@ -1748,6 +1753,64 @@ function normalizeParamsForType<T extends BaseTabType>(
   }
   if (type === 'qwen_image') {
     normalized.textEncoders = normalizeQwenImageTextEncoders(normalized.textEncoders)
+    normalized.useInitImage = true
+    normalized.useMask = false
+    normalized.maskImageData = ''
+    normalized.maskImageName = ''
+    normalized.clipSkip = 0
+    normalized.batchCount = 1
+    normalized.batchSize = 1
+    normalized.runAction = 'generate'
+    normalized.denoiseStrength = 1
+    const qwenSteps = Number(normalized.steps)
+    normalized.steps = Number.isFinite(qwenSteps)
+      ? Math.max(2, Math.trunc(qwenSteps))
+      : Math.max(2, Math.trunc(Number((defaults as ImageBaseParams).steps)))
+    normalized.initSource = {
+      ...normalized.initSource,
+      mode: 'img',
+      folderPath: '',
+      selectionMode: 'all',
+      count: 1,
+      order: 'sorted',
+      sortBy: 'name',
+      useCrop: false,
+    }
+    normalized.hires = {
+      ...normalized.hires,
+      enabled: false,
+      swapModel: undefined,
+      refiner: normalized.hires.refiner
+        ? { ...normalized.hires.refiner, enabled: false, model: undefined }
+        : normalized.hires.refiner,
+    }
+    normalized.swapModel = { ...normalized.swapModel, enabled: false, model: undefined }
+    normalized.refiner = { ...normalized.refiner, enabled: false, model: undefined }
+    normalized.supir = { ...normalized.supir, enabled: false }
+    normalized.ipAdapter = {
+      ...normalized.ipAdapter,
+      enabled: false,
+      model: '',
+      imageEncoder: '',
+      source: {
+        ...normalized.ipAdapter.source,
+        mode: 'img',
+        sameAsInit: false,
+        referenceImageData: '',
+        referenceImageName: '',
+        folderPath: '',
+        selectionMode: 'all',
+        count: 1,
+        order: 'sorted',
+        sortBy: 'name',
+      },
+    }
+    normalized.guidanceAdvanced = {
+      ...normalized.guidanceAdvanced,
+      enabled: false,
+      apgEnabled: false,
+      cfgTruncEnabled: false,
+    }
   }
   if (type === 'zimage_l2p') {
     normalized.textEncoders = normalizeZImageL2PTextEncoders(normalized.textEncoders)

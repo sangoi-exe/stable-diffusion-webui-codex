@@ -7,7 +7,10 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Image-to-image use case orchestration and canonical streaming wrapper (init image + optional hires pass).
-Builds prompt/sampling plans from `CodexProcessingImg2Img`, prepares init-image bundles/latents, dispatches classic img2img conditioning by executable family, runs the sampler loop, optionally routes SDXL img2img/inpaint through native SUPIR mode, and optionally performs a hires second pass with family-specific continuation semantics.
+Builds prompt/sampling plans from `CodexProcessingImg2Img`, routes exact Qwen Image Edit-2511 through its native
+conditioning/reference/denoise/decode runtime before classic sampling, prepares classic init-image bundles/latents,
+dispatches classic img2img conditioning by executable family, optionally routes SDXL img2img/inpaint through native
+SUPIR mode, and optionally performs a hires second pass with family-specific continuation semantics.
 Masked img2img (“inpaint”) uses Forge/A1111 “Only masked” semantics and supports optional ADetailer-style multi-region passes for disconnected masks.
 Exact-engine SDXL `fooocus_inpaint` and `brushnet` stay on request-scoped family helper seams while the shared masked stage remains generic-only; the canonical sampling stage now enters those exact-engine sessions after LoRA activation instead of mutating only the pre-sampling active snapshot.
 The hires pass init is prepared via the global family-dispatched hires-fix stage (`apps/backend/runtime/pipeline_stages/hires_fix.py`).
@@ -20,7 +23,7 @@ Worker-thread smart runtime overrides are propagated through `_image_streaming._
 Base img2img/inpaint now use the shared proportional denoise-step contract, while hires continuations opt into the internal fixed-step seam explicitly.
 
 Symbols (top-level; keep in sync; no ghosts):
-- `_resolve_img2img_variant` (function): Decide which img2img variant to run (classic vs Flux Kontext).
+- `_resolve_img2img_variant` (function): Decide which img2img variant to run (classic, Flux Kontext, or Qwen Image Edit).
 - `_resolve_classic_img2img_backend` (function): Decide whether classic img2img uses SD-style image conditioning or flow-family zero-conditioning fallback.
 - `_resolve_requested_exact_inpaint_mode` (function): Classify whether the current request asks for an exact SDXL inpaint runtime.
 - `_validate_exact_inpaint_runtime_state` (function): Fail loud when exact SDXL inpaint reaches runtime without its required masked bundle or alongside SUPIR.
@@ -37,6 +40,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `_compute_conditioning_payload` (function): Ensure (cond/uncond) conditioning exists for a prompt context.
 - `_generate_kontext_img2img` (function): Flux Kontext img2img implementation (init image as `image_latents`, no denoise schedule).
 - `_derive_seeds` (function): Normalizes seed/subseed inputs from processing config.
+- `_generate_qwen_image_img2img` (function): Orchestrate exact single-image Edit-2511 runtime stages before classic sampling.
 - `generate_img2img` (function): Canonical img2img implementation; selects the variant and executes sampling.
 - `run_img2img` (function): Canonical img2img mode wrapper (progress polling + decode + result events) used by engines/orchestrator.
 """
@@ -105,6 +109,13 @@ from apps.backend.runtime.pipeline_stages.sampling_plan import (
     resolve_sampler_scheduler_override,
 )
 from apps.backend.runtime.pipeline_stages.scripts import run_process_scripts
+from apps.backend.runtime.families.qwen_image.config import (
+    QWEN_IMAGE_EDIT_VARIANT,
+    QWEN_IMAGE_ENGINE_ID,
+    QWEN_IMAGE_PUBLIC_SAMPLER,
+    QWEN_IMAGE_PUBLIC_SCHEDULER,
+    qwen_image_edit_vae_dimensions,
+)
 from apps.backend.runtime.families.supir.runtime import run_supir_img2img
 from apps.backend.runtime.families.sd.brushnet import apply_brushnet_for_sampling
 from apps.backend.runtime.families.sd.fooocus_inpaint import apply_fooocus_inpaint_for_sampling
@@ -148,6 +159,8 @@ _PREFERRED_KONTEXT_RESOLUTIONS: list[tuple[int, int]] = [
 
 def _resolve_img2img_variant(processing: CodexProcessingImg2Img) -> str:
     engine_id = str(getattr(getattr(processing, "sd_model", None), "engine_id", "") or "")
+    if engine_id == QWEN_IMAGE_ENGINE_ID:
+        return QWEN_IMAGE_ENGINE_ID
     return "kontext" if engine_id == "flux1_kontext" else "classic"
 
 
@@ -877,6 +890,203 @@ def _derive_seeds(processing: CodexProcessingImg2Img) -> tuple[list[int], list[i
     return seeds, subseeds, strength
 
 
+def _generate_qwen_image_img2img(
+    processing: CodexProcessingImg2Img,
+    conditioning: object,
+    unconditional_conditioning: object,
+    prompts: Sequence[str],
+    *,
+    seeds: Sequence[int] | None,
+    subseeds: Sequence[int] | None,
+    subseed_strength: float | None,
+) -> GenerationResult:
+    if conditioning is not None or unconditional_conditioning is not None:
+        raise RuntimeError(
+            "Qwen Image prepare stage does not accept precomputed classic conditioning; "
+            "multimodal conditioning is owned by QwenImageRuntime."
+        )
+    if processing.batch_total != 1:
+        raise NotImplementedError("Qwen Image Edit-2511 supports exactly one image per img2img request.")
+    if len(prompts) != 1:
+        raise NotImplementedError("Qwen Image Edit-2511 supports exactly one prompt per img2img request.")
+    if processing.has_mask() or getattr(processing, "inpaint_mode", None) is not None:
+        raise NotImplementedError("Qwen Image Edit-2511 does not support masks or inpaint modes.")
+    if bool(getattr(getattr(processing, "hires", None), "enabled", False)):
+        raise NotImplementedError("Qwen Image Edit-2511 does not support HiRes.")
+    if getattr(processing, "supir", None) is not None:
+        raise NotImplementedError("Qwen Image Edit-2511 does not support SUPIR.")
+    if getattr(processing, "ip_adapter", None) is not None:
+        raise NotImplementedError("Qwen Image Edit-2511 does not support IP-Adapter.")
+    if getattr(processing, "scripts", None) is not None or tuple(getattr(processing, "script_args", ()) or ()):
+        raise NotImplementedError("Qwen Image Edit-2511 does not support script-owned img2img mutations.")
+    if list(getattr(processing, "init_images", ()) or ()):
+        raise NotImplementedError("Qwen Image Edit-2511 supports one canonical init_image, not init_images.")
+
+    init_image = getattr(processing, "init_image", None)
+    if not isinstance(init_image, Image.Image):
+        raise TypeError(
+            "Qwen Image Edit-2511 requires processing.init_image as PIL.Image.Image; "
+            f"got {type(init_image).__name__}."
+        )
+
+    denoise_strength = float(getattr(processing, "denoising_strength", 0.0) or 0.0)
+    if not math.isclose(denoise_strength, 1.0, rel_tol=0.0, abs_tol=1e-9):
+        raise NotImplementedError(
+            "Qwen Image Edit-2511 owns full native edit denoising and requires denoising_strength=1.0."
+        )
+    if getattr(processing, "image_cfg_scale", None) is not None:
+        raise NotImplementedError("Qwen Image Edit-2511 does not support image_cfg_scale.")
+
+    expected_width, expected_height = qwen_image_edit_vae_dimensions(*init_image.size)
+    output_width = int(getattr(processing, "width", 0) or 0)
+    output_height = int(getattr(processing, "height", 0) or 0)
+    if (output_width, output_height) != (expected_width, expected_height):
+        raise RuntimeError(
+            "Qwen Image Edit-2511 output dimensions must be derived from the canonical VAE reference geometry; "
+            f"got {output_width}x{output_height}, expected {expected_width}x{expected_height} "
+            f"for source {init_image.width}x{init_image.height}."
+        )
+
+    prompt_context = build_prompt_context(processing, prompts)
+    if prompt_context.loras:
+        raise NotImplementedError("Qwen Image Edit-2511 does not support LoRA selections or prompt LoRA tags.")
+    if prompt_context.clip_skip is not None:
+        raise NotImplementedError("Qwen Image Edit-2511 does not support clip_skip.")
+    apply_prompt_context(processing, prompt_context)
+
+    seed_list, subseed_list, subseed_value = _derive_seeds(processing)
+    if seeds is not None:
+        seed_list = list(seeds)
+    if subseeds is not None:
+        subseed_list = list(subseeds)
+    if subseed_strength is not None:
+        subseed_value = float(subseed_strength)
+
+    plan = build_sampling_plan(processing, seed_list, subseed_list, subseed_value)
+    if str(plan.sampler_name or "").strip().lower() != QWEN_IMAGE_PUBLIC_SAMPLER:
+        raise RuntimeError(
+            f"Qwen Image Edit-2511 requires sampler {QWEN_IMAGE_PUBLIC_SAMPLER!r}; "
+            f"got {plan.sampler_name!r}."
+        )
+    if str(plan.scheduler_name or "").strip().lower() != QWEN_IMAGE_PUBLIC_SCHEDULER:
+        raise RuntimeError(
+            f"Qwen Image Edit-2511 requires scheduler {QWEN_IMAGE_PUBLIC_SCHEDULER!r}; "
+            f"got {plan.scheduler_name!r}."
+        )
+    if plan.steps < 2:
+        raise RuntimeError(f"Qwen Image Edit-2511 requires at least 2 denoise steps; got {plan.steps}.")
+    if len(plan.seeds) != 1:
+        raise RuntimeError(f"Qwen Image Edit-2511 requires exactly one seed; got {len(plan.seeds)}.")
+    if not math.isclose(float(plan.subseed_strength), 0.0, rel_tol=0.0, abs_tol=1e-12):
+        raise NotImplementedError("Qwen Image Edit-2511 does not support subseed variation.")
+    if any(int(value) != -1 for value in plan.subseeds):
+        raise NotImplementedError("Qwen Image Edit-2511 does not support explicit subseeds.")
+
+    processing.seeds = list(plan.seeds)
+    processing.subseeds = list(plan.subseeds)
+    processing.guidance_scale = plan.guidance_scale
+    processing.cfg_scale = plan.guidance_scale
+    processing.steps = plan.steps
+    processing.prepare_prompt_data()
+
+    progress_owner_token = str(getattr(processing, "_codex_progress_owner_token", "") or "").strip()
+    if not progress_owner_token:
+        raise RuntimeError("Qwen Image Edit-2511 prepare stage requires a non-empty progress owner token.")
+
+    engine = getattr(processing, "sd_model", None)
+    if str(getattr(engine, "engine_id", "") or "") != QWEN_IMAGE_ENGINE_ID:
+        raise RuntimeError("Qwen Image Edit-2511 prepare stage requires the canonical qwen_image engine.")
+    try:
+        runtime = engine.qwen_image_runtime
+    except Exception as exc:
+        raise RuntimeError(f"Qwen Image Edit-2511 prepare stage could not resolve the loaded family runtime: {exc}") from exc
+    if str(getattr(runtime, "variant", "") or "") != QWEN_IMAGE_EDIT_VARIANT:
+        raise RuntimeError(
+            "Qwen Image Edit-2511 prepare stage resolved an incompatible runtime variant: "
+            f"{getattr(runtime, 'variant', None)!r}."
+        )
+
+    _emit_pipeline_event(
+        processing,
+        "pipeline.stage.complete",
+        stage="prepare.complete",
+        stage_name="prepare",
+        engine_id=QWEN_IMAGE_ENGINE_ID,
+        variant=QWEN_IMAGE_EDIT_VARIANT,
+        hires_enabled=False,
+        has_mask=False,
+        output_width=output_width,
+        output_height=output_height,
+        steps=int(plan.steps),
+        true_cfg_scale=float(plan.guidance_scale),
+    )
+
+    qwen_conditioning = runtime.encode_conditioning(
+        prompt=processing.primary_prompt,
+        negative_prompt=processing.primary_negative_prompt,
+        image=init_image,
+    )
+    _emit_pipeline_event(
+        processing,
+        "pipeline.stage.complete",
+        stage="conditioning.complete",
+        stage_name="conditioning",
+        condition_width=int(qwen_conditioning.condition_width),
+        condition_height=int(qwen_conditioning.condition_height),
+        positive_tokens=int(qwen_conditioning.positive_embeddings.shape[1]),
+        negative_tokens=int(qwen_conditioning.negative_embeddings.shape[1]),
+    )
+
+    reference = runtime.encode_reference(image=init_image)
+    _emit_pipeline_event(
+        processing,
+        "pipeline.stage.complete",
+        stage="encode.complete",
+        stage_name="encode",
+        reference_shape=tuple(int(dimension) for dimension in reference.packed_latents.shape),
+        reference_width=int(reference.grid.width),
+        reference_height=int(reference.grid.height),
+    )
+
+    denoised = runtime.denoise(
+        conditioning=qwen_conditioning,
+        reference=reference,
+        width=output_width,
+        height=output_height,
+        steps=plan.steps,
+        seed=plan.seeds[0],
+        progress_owner_token=progress_owner_token,
+        true_cfg_scale=plan.guidance_scale,
+        noise_settings=plan.noise_settings,
+    )
+    _emit_pipeline_event(
+        processing,
+        "pipeline.stage.complete",
+        stage="base_sampling.complete",
+        stage_name="base_sampling",
+        samples_shape=tuple(int(dimension) for dimension in denoised.packed_latents.shape),
+        seed=int(denoised.seed),
+        steps=int(denoised.steps),
+    )
+
+    decoded = runtime.decode(denoised=denoised)
+    _emit_pipeline_event(
+        processing,
+        "pipeline.stage.complete",
+        stage="decode.complete",
+        stage_name="decode",
+        decoded_shape=tuple(int(dimension) for dimension in decoded.shape),
+    )
+
+    result_metadata = _conditioning_cache_hit_metadata(processing)
+    result_metadata["qwen_image_variant"] = QWEN_IMAGE_EDIT_VARIANT
+    return GenerationResult(
+        samples=denoised.packed_latents,
+        decoded=decoded,
+        metadata=result_metadata,
+    )
+
+
 def generate_img2img(
     processing,
     conditioning,
@@ -905,6 +1115,27 @@ def generate_img2img(
         variant=variant,
         engine_id=engine_id or "unknown",
     )
+
+    if engine_id == QWEN_IMAGE_ENGINE_ID:
+        result = _generate_qwen_image_img2img(
+            processing,
+            conditioning,
+            unconditional_conditioning,
+            prompts,
+            seeds=seeds,
+            subseeds=subseeds,
+            subseed_strength=subseed_strength,
+        )
+        _emit_pipeline_event(
+            processing,
+            "pipeline.run.complete",
+            stage="run.complete",
+            variant=variant,
+            hires_enabled=False,
+            samples_shape=tuple(int(dimension) for dimension in result.samples.shape),
+            decoded_shape=tuple(int(dimension) for dimension in result.decoded.shape),
+        )
+        return result
 
     if variant == "kontext":
         if processing.has_mask():

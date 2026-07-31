@@ -33,9 +33,10 @@ against inventory metadata instead of probing checkpoint families or inferring c
 Z-Image L2P requests are exact txt2img-only, pixel-space, no-VAE 1024x1024 requests; the router rejects stale VAE, variant, hires, refiner,
 swap-model, IP-Adapter, LoRA, clip-skip, unsupported sampler/scheduler, unsupported model-format state, wrong-family denoisers, denoiser GGUFs
 without the dedicated L2P profile metadata, wrong-root Qwen3-4B text encoders, and TEnc GGUFs without the dedicated L2P profile metadata before task creation.
-Qwen Image is Edit-2511 img2img-only: txt2img fails before task creation, and stale public variant, foreign-family selectors,
-classic denoise/resize/mask/hires/IP-Adapter/LoRA/SUPIR surfaces fail before task creation. Transformer, VAE, and text-encoder
-SHA selection is scoped to exact Qwen roots and strict Edit-2511 metadata/topology; the VAE must match the vendored `AutoencoderKLQwenImage` config.
+Qwen Image is Edit-2511 img2img-only: txt2img and image automation fail before task creation, and stale public variant, foreign-family selectors,
+classic denoise/resize/mask/hires/IP-Adapter/LoRA/SUPIR surfaces fail before task creation. Its public sampling contract is
+exact `euler` / `simple` with at least two steps. Transformer, VAE, and text-encoder SHA selection is scoped to exact Qwen
+roots and strict Edit-2511 metadata/topology; the VAE must match the vendored `AutoencoderKLQwenImage` config.
 Lens is parked in this tranche: explicit `engine="lens"` txt2img/img2img/image-automation requests fail before task creation, and
 the only accepted Lens variant owner is nested `extras.lens.variant` for txt2img or `img2img_extras.lens.variant` for img2img.
 Resolves `extras.lora_sha` / `img2img_extras.lora_sha` into server-side `lora_path` overrides only for engines with `supports_lora=True`
@@ -4518,7 +4519,7 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
         prompt = _require_str_field(payload, "img2img_prompt", allow_empty=True)
         negative_prompt = _require_str_field(payload, "img2img_neg_prompt", allow_empty=True)
         styles = _p.as_list(payload, "img2img_styles") if "img2img_styles" in payload else []
-        steps_val = _require_int_field(payload, "img2img_steps", minimum=1)
+        steps_val = _require_int_field(payload, "img2img_steps", minimum=2)
         if "img2img_cfg_scale" not in payload:
             raise HTTPException(status_code=400, detail="'img2img_cfg_scale' is required for Qwen Image Edit.")
         cfg_scale = _require_float_field(payload, "img2img_cfg_scale")
@@ -5285,6 +5286,8 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
             init_image=init_image,
             mask=None,
             inpaint_mode=None,
+            per_step_blend_strength=1.0,
+            per_step_blend_steps=0,
             denoise_strength=1.0,
             width=core.width,
             height=core.height,
@@ -5345,6 +5348,11 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
             raise HTTPException(
                 status_code=400,
                 detail=f"Engine '{_ZIMAGE_L2P_ENGINE_ID}' does not support image automation.",
+            )
+        if _is_qwen_image_engine(template.get("engine")):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Engine '{_QWEN_IMAGE_ENGINE_ID}' does not support image automation.",
             )
         _reject_lens_parked_request(template, route_label=mode)
         if mode == "txt2img":

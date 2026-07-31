@@ -11,7 +11,7 @@ Builds parameter grid combos, enqueues jobs, starts txt2img tasks (including req
 per-cell results. Hires upscaler values are stable ids (`latent:*` / `spandrel:*`) for hires-fix wiring; hires tile prefs (fallback/min_tile) are propagated from the shared upscalers store.
 Preflight now fails loud when VAE selection is empty before queuing XYZ requests, and queued txt2img payloads reuse the shared image request contract helper so the sweep lane emits the
 same explicit checkpoint/VAE selectors (`model_sha`, `checkpoint_core_only`, `model_format`, `vae_source`), FLUX.2 guidance mode, and asset-contract-backed extras as the main image generation lane.
-Qwen Image sweeps enter the same exported prebuild/apply-axis path and then the shared txt2img payload builder, so unsupported generic axes and stale tab state fail before queuing instead of emitting rejected fields.
+Qwen Image Edit-2511 is excluded from XYZ owner selection and fails before payload construction because it has no txt2img surface.
 The standalone `/xyz` route now pins itself to a compatible image-tab owner (active image tab, then most recently updated image tab, else a new `sdxl` tab) instead of baselining from generic active-tab state.
 Baseline sampler/scheduler resolution validates current params or backend capability defaults against executable sampler/scheduler catalogs before queuing requests.
 
@@ -20,7 +20,6 @@ Symbols (top-level; keep in sync; no ghosts):
 - `StopMode` (type): Stop behavior for a running sweep (`immediate` vs `after_current`).
 - `XyzJob` (interface): Internal job record for each cell (payload/task id/status/result/error).
 - `CompatibleImageTab` (type): Image-tab owner shape accepted by the sweep payload prebuilder.
-- `assertQwenImageXyzTabState` (function): Rejects stale unsupported Qwen tab state before XYZ prebuild can ignore it.
 - `buildXyzBaseForm` / `applyXyzAxis` / `buildXyzTxt2ImgPayload` (function): Exported payload prebuild path used by store runs and focused contract probes.
 - `ensureBaselineImageTab` (function): Resolves the owner image tab for `/xyz` with deterministic fallback.
 - `useXyzStore` (store): Pinia store for XYZ sweeps; builds combos, runs jobs, subscribes to task SSE, and writes results into cells.
@@ -47,7 +46,6 @@ import { isWanTabFamily, normalizeTabFamily, resolveImageRequestEngineId } from 
 type Status = 'idle' | 'running' | 'stopped' | 'error' | 'done'
 type StopMode = 'immediate' | 'after_current'
 const QWEN_IMAGE_ENGINE_ID = 'qwen_image'
-const LORA_TAG_RE = /<\s*lora\s*:\s*([^:>]+)\s*(?::[^>]*)?>/gi
 
 interface XyzJob {
   id: string
@@ -76,65 +74,15 @@ export interface BuildXyzTxt2ImgPayloadInput {
   hiresMinTile?: number
 }
 
-function hasLoraPromptTag(text: string | null | undefined): boolean {
-  LORA_TAG_RE.lastIndex = 0
-  const matched = LORA_TAG_RE.test(String(text || ''))
-  LORA_TAG_RE.lastIndex = 0
-  return matched
-}
-
-function assertNoQwenImageXyzLoraTags(prompt: string | null | undefined, context: string): void {
-  if (!hasLoraPromptTag(prompt)) return
-  throw new Error(`Qwen Image XYZ does not support LoRA prompt tags in ${context}.`)
-}
-
-export function assertQwenImageXyzTabState(tab: CompatibleImageTab): void {
-  if (resolveImageRequestEngineId(tab.type, false) !== QWEN_IMAGE_ENGINE_ID) return
-  const params = tab.params as ImageBaseParams
-  if (params.useInitImage) {
-    throw new Error('Qwen Image XYZ uses txt2img sweeps. Disable IMG2IMG before running XYZ.')
-  }
-  if (params.runAction === 'infinite') {
-    throw new Error('Qwen Image XYZ does not support Infinite generate. Use Generate.')
-  }
-  if (Math.trunc(Number(params.batchSize ?? 1)) !== 1 || Math.trunc(Number(params.batchCount ?? 1)) !== 1) {
-    throw new Error('Qwen Image XYZ requires batch size = 1 and batch count = 1.')
-  }
-  const clipSkip = Number(params.clipSkip ?? 0)
-  if (Number.isFinite(clipSkip) && Math.trunc(clipSkip) > 0) {
-    throw new Error('Qwen Image XYZ does not support CLIP Skip. Reset CLIP Skip to 0.')
-  }
-  if (params.hires?.enabled) {
-    throw new Error('Qwen Image XYZ does not support Hires Fix. Disable Hires before running XYZ.')
-  }
-  if (params.swapModel?.enabled) {
-    throw new Error('Qwen Image XYZ does not support first-pass model swap. Disable model swap before running XYZ.')
-  }
-  if (params.refiner?.enabled) {
-    throw new Error('Qwen Image XYZ does not support refiner. Disable refiner before running XYZ.')
-  }
-  if (params.ipAdapter?.enabled) {
-    throw new Error('Qwen Image XYZ does not support IP-Adapter. Disable IP-Adapter before running XYZ.')
-  }
-  if (params.guidanceAdvanced?.enabled) {
-    throw new Error('Qwen Image XYZ does not support Advanced Guidance/APG. Disable Advanced Guidance before running XYZ.')
-  }
-  assertNoQwenImageXyzLoraTags(params.prompt, 'prompt')
-  assertNoQwenImageXyzLoraTags(params.negativePrompt, 'negative prompt')
-}
-
-function assertQwenImageXyzFormState(form: Txt2ImgFormState): void {
-  if (form.engine !== QWEN_IMAGE_ENGINE_ID) return
-  assertNoQwenImageXyzLoraTags(form.prompt, 'prompt')
-  assertNoQwenImageXyzLoraTags(form.negativePrompt, 'negative prompt')
-}
-
 export function buildXyzBaseForm(tab: CompatibleImageTab, samplingDefaults: SamplingDefaults): Txt2ImgFormState {
   const quick = useQuicksettingsStore()
   const caps = useEngineCapabilitiesStore()
   const params = tab.params as ImageBaseParams
   const tabFamily = tab.type
   const engineKey = resolveImageRequestEngineId(tabFamily, false)
+  if (engineKey === QWEN_IMAGE_ENGINE_ID) {
+    throw new Error('Qwen Image Edit-2511 does not support XYZ.')
+  }
   const checkpoint = String(params.checkpoint || '').trim()
   const modelLabel = checkpoint || quick.currentModel
   const textEncoders = Array.isArray(params.textEncoders)
@@ -254,13 +202,11 @@ export function applyXyzAxis(form: Txt2ImgFormState, param: AxisParam, value: Ax
 }
 
 export function buildXyzTxt2ImgPayload(input: BuildXyzTxt2ImgPayloadInput): Txt2ImgRequest {
-  assertQwenImageXyzTabState(input.tab)
   const form = buildXyzBaseForm(input.tab, input.samplingDefaults)
   for (const axis of input.axes ?? []) {
     if (!axis.enabled || axis.value === null) continue
     applyXyzAxis(form, axis.param, axis.value)
   }
-  assertQwenImageXyzFormState(form)
   return buildTxt2ImgPayload(form, {
     hiresFallbackOnOom: input.hiresFallbackOnOom,
     hiresMinTile: input.hiresMinTile,
@@ -346,7 +292,7 @@ export const useXyzStore = defineStore('xyz', () => {
     if (!tab || typeof tab !== 'object') return false
     const candidate = tab as { type?: unknown; params?: unknown }
     const family = normalizeTabFamily(candidate.type)
-    if (!family || isWanTabFamily(family) || family === 'ltx2') return false
+    if (!family || isWanTabFamily(family) || family === 'ltx2' || family === QWEN_IMAGE_ENGINE_ID) return false
     return Boolean(candidate.params && typeof candidate.params === 'object')
   }
 

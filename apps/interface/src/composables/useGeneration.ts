@@ -20,7 +20,7 @@ FLUX.2 img2img guidance emission is variant-aware (`img2img_cfg_scale` xor `img2
 the nested `img2img_extras.hires` owner while remaining blocked for masked runs. Native SDXL SUPIR mode stays on the single nested frontend owner
 `params.supir` and is emitted only through `img2img_extras.supir` for truthful SDXL img2img/inpaint runs, with diagnostics-backed sampler metadata
 owning the effective runtime sampler/scheduler pair and fail-loud rejection of stale APG/advanced-guidance overlap.
-Qwen Image uses dedicated txt2img/img2img request-state guards and an edit payload allowlist so hidden unsupported state fails loud before `/api/*` submission.
+Qwen Image Edit-2511 uses a dedicated img2img-only request-state guard and payload allowlist so txt2img plus hidden unsupported state fail loud before `/api/*` submission.
 Z-Image L2P uses the shared image shell but is exact 1024x1024 txt2img only, no-VAE, no LoRA/IP/hires/refiner/advanced-guidance, and emits only
 denoiser + Qwen3-4B TEnc asset selectors.
 Non-SUPIR image runs resolve the executable sampler/scheduler pair from strictly validated current params or backend capability defaults before any task start.
@@ -96,6 +96,8 @@ import { resolveSupirSelectionState } from './useSupirDiagnostics'
 
 export type ImageRunStatus = 'running' | 'completed' | 'error' | 'cancelled'
 const QWEN_IMAGE_ENGINE_ID = 'qwen_image'
+const QWEN_IMAGE_PUBLIC_SAMPLER = 'euler'
+const QWEN_IMAGE_PUBLIC_SCHEDULER = 'simple'
 const ZIMAGE_L2P_ENGINE_ID = 'zimage_l2p'
 const QWEN_IMAGE_ASSET_EXTRA_KEYS = new Set([
   'checkpoint_core_only',
@@ -535,6 +537,9 @@ function assertQwenImageRequestState(args: {
   loraNames: readonly string[]
 }): void {
   const params = args.params
+  if (!args.useInitImage) {
+    throw new Error('Qwen Image Edit-2511 supports img2img only. Select an init image.')
+  }
   if (params.runAction === 'infinite') {
     throw new Error('Qwen Image does not support Infinite generate. Use Generate.')
   }
@@ -563,10 +568,10 @@ function assertQwenImageRequestState(args: {
   if (args.loraNames.length > 0) {
     throw new Error('Qwen Image does not support LoRA prompt tags.')
   }
-  if (args.useInitImage && normalizeBooleanParam(params.useMask, false)) {
+  if (normalizeBooleanParam(params.useMask, false)) {
     throw new Error('Qwen Image Edit does not support masks or inpaint. Disable INPAINT before generating.')
   }
-  if (args.useInitImage && params.initSource.mode !== 'img') {
+  if (params.initSource.mode !== 'img') {
     throw new Error('Qwen Image Edit requires a single init image. Switch the initial image source to IMG.')
   }
 }
@@ -633,14 +638,24 @@ function buildQwenImageImg2ImgPayload(args: BuildImg2ImgPayloadArgs): Record<str
   if (!String(params.initImageData || '').trim()) {
     throw new Error('Qwen Image Edit requires an init image.')
   }
+  const steps = Number(params.steps)
+  if (!Number.isInteger(steps) || steps < 2) {
+    throw new Error('Qwen Image Edit requires at least 2 integer denoise steps.')
+  }
   const effectiveSampler = String(args.samplerOverride || params.sampler || '').trim()
   const effectiveScheduler = String(args.schedulerOverride || params.scheduler || '').trim()
+  if (effectiveSampler.toLowerCase() !== QWEN_IMAGE_PUBLIC_SAMPLER) {
+    throw new Error(`Qwen Image Edit requires sampler '${QWEN_IMAGE_PUBLIC_SAMPLER}'.`)
+  }
+  if (effectiveScheduler.toLowerCase() !== QWEN_IMAGE_PUBLIC_SCHEDULER) {
+    throw new Error(`Qwen Image Edit requires scheduler '${QWEN_IMAGE_PUBLIC_SCHEDULER}'.`)
+  }
   const payload: Record<string, unknown> = {
     img2img_init_image: params.initImageData,
     img2img_prompt: params.prompt,
     img2img_neg_prompt: args.supportsNegativePrompt ? params.negativePrompt : '',
     img2img_styles: [],
-    img2img_steps: params.steps,
+    img2img_steps: steps,
     img2img_cfg_scale: params.cfgScale,
     img2img_sampling: effectiveSampler,
     img2img_scheduler: effectiveScheduler,

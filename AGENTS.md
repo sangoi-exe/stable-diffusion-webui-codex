@@ -72,7 +72,7 @@ If you touch an `apps/**` source file, you keep its **file header block** honest
 
 ## WebUI Atlas
 
-Last reviewed on 2026-05-25 during the Microsoft Lens runner-hook contract tranche.
+Last reviewed on 2026-07-31 during the Qwen Image Edit-2511 canonical img2img tranche.
 
 <!-- Merge-safety anchor: this prompt-resident WebUI Atlas replaces the former split-file discovery front door; update it whenever a hot path, owner file, public route, or shipped entrypoint moves. -->
 
@@ -160,12 +160,13 @@ Last reviewed on 2026-05-25 during the Microsoft Lens runner-hook contract tranc
 - Engine wrapper: `apps/backend/engines/common/base.py`
   - Delegates to `run_img2img(...)`.
 - Canonical use-case: `apps/backend/use_cases/img2img.py`
-  - Owns classic-family dispatch, init-image planning, prompt/sampling plans, optional native SUPIR mode, optional masked img2img, exact-engine SDXL Fooocus/BrushNet branching, and optional hires continuation.
+  - Owns the early exact Qwen Image Edit-2511 branch, classic-family dispatch, init-image planning, prompt/sampling plans, optional native SUPIR mode, optional masked img2img, exact-engine SDXL Fooocus/BrushNet branching, and optional hires continuation.
 - Shared stage helpers: `apps/backend/runtime/pipeline_stages/masked_img2img.py`, `apps/backend/runtime/pipeline_stages/sampling_execute.py`, `apps/backend/runtime/families/sd/fooocus_inpaint.py`, `apps/backend/runtime/families/sd/brushnet.py`, and `apps/backend/runtime/pipeline_stages/hires_fix.py`
   - Prepare generic masked bundles/image conditioning/hires latents; `sampling_execute.py` activates the post-LoRA sampling snapshot and enters request-scoped SDXL Fooocus/BrushNet patch sessions before sampler/IP-Adapter.
 - Terminal surfaces: `apps/backend/interfaces/api/tasks/generation_tasks.py` and `apps/backend/interfaces/api/routers/tasks.py`
   - Store the encoded result payload and expose terminal snapshot/SSE state.
 - Branch notes:
+  - Qwen Image Edit-2511 branches before classic backend resolution: the canonical use-case sequences family conditioning, reference VAE encode, native denoise, and final VAE decode, then returns decoded RGB through `GenerationResult` without entering classic `sampling_execute.py`.
   - Classic base img2img resolves SD-vs-flow dispatch locally in `apps/backend/use_cases/img2img.py` before masked/unmasked prep.
   - SDXL SUPIR mode stays inside canonical img2img: route preflight lives in `apps/backend/interfaces/api/routers/generation.py`; request-scoped restore runtime lives in `apps/backend/runtime/families/supir/runtime.py`.
   - SDXL exact-engine inpaint stays inside canonical img2img: exact-engine mode/asset preflight lives in `apps/backend/interfaces/api/routers/generation.py`; `img2img.py` installs the temporary request-scoped sampling-session factory only for non-SUPIR exact modes; `sampling_execute.py` enters the Fooocus/BrushNet session after canonical LoRA activation.

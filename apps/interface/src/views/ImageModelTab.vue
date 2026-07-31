@@ -27,8 +27,8 @@ Generate CTA and run preflight are capability-driven (`/api/engines/capabilities
 current checkpoint/text-encoder/VAE contract is not runnable.
 Run status in the RUN card is centralized via `RunProgressStatus` variants (progress/error/info/success/warning), including dual progress bars (total pipeline + sampling steps), so errors are visible even when Prompt is off-screen.
 When XYZ workflow is enabled, RUN header shows an `XYZ` badge beside `Generate` via the run-card center-adjacent slot while keeping the primary CTA label stable as `Generate`.
-Qwen Image uses the same image workspace shell but hides unsupported generic controls, keeps batch/action state forced to one-shot Generate,
-snaps txt2img dimensions to the backend family resolution step, omits CLIP Skip/swap/refiner/hires/IP-Adapter/advanced-guidance controls, and treats edit output dimensions as backend-derived from the init image.
+Qwen Image uses the same image workspace shell but hides unsupported generic controls and the misleading text-only prompt-token counter, keeps batch/action state forced to one-shot Generate,
+forces single-image Edit-2511 img2img, omits TXT2IMG/XYZ/source-mode/inpaint/CLIP Skip/swap/refiner/hires/IP-Adapter/advanced-guidance controls, and treats edit output dimensions as backend-derived from the init image.
 Z-Image L2P uses the same image workspace shell but hides unsupported generic controls, keeps batch/action state forced to one-shot Generate,
 forces 1024x1024 txt2img, omits VAE/CLIP Skip/swap/refiner/hires/IP-Adapter/advanced-guidance controls, and relies on the QuickSettings L2P TEnc selector.
 
@@ -87,6 +87,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `usesImageAutomation` / `infiniteXyzConflict` / `automationBatchConflict` (const): Derived automation guards for the split-button and backend-owned automation route.
 - `showIpAdapterCard` / `initFolderMissingPath` / `dirInitMaskConflict` / `ipAdapterBlockingReason` (const): Card-visibility + preflight guards for Initial Image DIR mode and the dedicated IP-Adapter owner card.
 - `isQwenImageRequest` / `isZImageL2PRequest` / `showRunBatchControls` (const): Exact one-shot surface guards that hide unsupported generic controls and force one-shot request state.
+- `promptTokenEngine` (const): Omits token-count requests for Qwen Edit because its executable conditioning count includes image-token expansion rather than a truthful text-only total.
 - `missingInpaintMask` (const): Derived guard flag used to disable generation when INPAINT is enabled without an applied mask.
 - `supportsImg2ImgMasking` (const): Truthful backend-capability-driven mask/inpaint support gate for img2img engines.
 - `hideNegativePrompt` (const): Hides the base Negative Prompt field when the active checkpoint/model does not support it or effective base CFG is `<= 1`.
@@ -107,7 +108,7 @@ Symbols (top-level; keep in sync; no ghosts):
         v-model:negative="negativeText"
         :supportsNegative="supportsNegative"
         :hide-negative="hideNegativePrompt"
-        :token-engine="resolvedEngineForMode"
+        :token-engine="promptTokenEngine"
         :enableAssets="enableAssets"
         :enableStyles="enableStyles"
         :toolbarLabel="toolbarLabel"
@@ -116,8 +117,8 @@ Symbols (top-level; keep in sync; no ghosts):
         <div v-if="supportsImg2Img && params.useInitImage" class="panel-section">
           <InitialImageBlock
             :disabled="isRunning"
-            :showSourceModeToggle="true"
-            :showInpaintControls="true"
+            :showSourceModeToggle="!isQwenImageRequest"
+            :showInpaintControls="!isQwenImageRequest"
             :initSource="params.initSource"
             :initImageData="params.initImageData"
             :initImageName="params.initImageName"
@@ -191,6 +192,7 @@ Symbols (top-level; keep in sync; no ghosts):
               :sampler="params.sampler"
               :scheduler="params.scheduler"
               :steps="params.steps"
+              :min-steps="isQwenImageRequest ? 2 : 1"
               :width="params.width"
               :height="params.height"
               :cfg-scale="params.cfgScale"
@@ -223,7 +225,7 @@ Symbols (top-level; keep in sync; no ghosts):
               :disabled="isRunning"
               @update:sampler="onSamplerChange"
               @update:scheduler="(v) => setParams({ scheduler: v })"
-              @update:steps="(v) => setParams({ steps: Math.max(1, Math.trunc(v)) })"
+              @update:steps="(v) => setParams({ steps: Math.max(isQwenImageRequest ? 2 : 1, Math.trunc(v)) })"
               @update:width="(v) => setParams({ width: normalizeImageDimension(v) })"
               @update:height="(v) => setParams({ height: normalizeImageDimension(v) })"
               @update:cfgScale="(v) => setParams({ cfgScale: v })"
@@ -258,6 +260,7 @@ Symbols (top-level; keep in sync; no ghosts):
             :sampler="params.sampler"
             :scheduler="params.scheduler"
             :steps="params.steps"
+            :min-steps="isQwenImageRequest ? 2 : 1"
             :width="params.width"
             :height="params.height"
             :cfg-scale="params.cfgScale"
@@ -282,7 +285,7 @@ Symbols (top-level; keep in sync; no ghosts):
             :disabled="isRunning"
             @update:sampler="onSamplerChange"
             @update:scheduler="(v) => setParams({ scheduler: v })"
-            @update:steps="(v) => setParams({ steps: Math.max(1, Math.trunc(v)) })"
+            @update:steps="(v) => setParams({ steps: Math.max(isQwenImageRequest ? 2 : 1, Math.trunc(v)) })"
             @update:width="(v) => setParams({ width: normalizeImageDimension(v) })"
             @update:height="(v) => setParams({ height: normalizeImageDimension(v) })"
             @update:cfgScale="(v) => setParams({ cfgScale: v })"
@@ -386,6 +389,7 @@ Symbols (top-level; keep in sync; no ghosts):
           />
 
           <XyzSweepCard
+            v-if="!isQwenImageRequest"
             :samplers="xyzSamplerChoices"
             :schedulers="xyzSchedulerChoices"
           />
@@ -413,7 +417,7 @@ Symbols (top-level; keep in sync; no ghosts):
         @update:batchSize="(v) => setParams({ batchSize: Math.max(1, Math.trunc(v)) })"
       >
         <template #header-center-after>
-          <span v-if="xyzStore.enabled" class="run-badge-xyz">XYZ</span>
+          <span v-if="xyzStore.enabled && !isQwenImageRequest" class="run-badge-xyz">XYZ</span>
         </template>
 
         <RunProgressStatus
@@ -823,6 +827,7 @@ const engineConfig = computed(() => getEngineConfig(props.type))
 const resolvedEngineForMode = computed(() => resolveEngineForRequest(props.type, Boolean(params.value.useInitImage)))
 const isQwenImageRequest = computed(() => resolvedEngineForMode.value === 'qwen_image')
 const isZImageL2PRequest = computed(() => resolvedEngineForMode.value === 'zimage_l2p')
+const promptTokenEngine = computed(() => isQwenImageRequest.value ? '' : resolvedEngineForMode.value)
 const isExactOneShotImageRequest = computed(() => isQwenImageRequest.value || isZImageL2PRequest.value)
 const img2imgResizeModeOptions = computed(() => img2imgResizeModeOptionsForEngine(resolvedEngineForMode.value))
 const engineSurface = computed(() => engineCaps.get(resolvedEngineForMode.value))
@@ -1492,8 +1497,23 @@ watch(
   isExactOneShotImageRequest,
   (active) => {
     if (!active) return
+    if (isQwenImageRequest.value && xyzStore.enabled) {
+      xyzStore.enabled = false
+    }
     const nextPatch: Partial<ImageBaseParams> = {}
     let needsPatch = false
+    if (isQwenImageRequest.value && !params.value.useInitImage) {
+      nextPatch.useInitImage = true
+      needsPatch = true
+    }
+    if (isQwenImageRequest.value && params.value.denoiseStrength !== 1) {
+      nextPatch.denoiseStrength = 1
+      needsPatch = true
+    }
+    if (isQwenImageRequest.value && params.value.steps < 2) {
+      nextPatch.steps = 2
+      needsPatch = true
+    }
     if (isZImageL2PRequest.value && (params.value.useInitImage || params.value.initImageData || params.value.initImageName)) {
       nextPatch.useInitImage = false
       nextPatch.initImageData = ''
@@ -1750,6 +1770,11 @@ async function onGenerate(actionMode: ImageRunAction = params.value.runAction): 
   }
   if (unsupportedInpaintMode.value) {
     toast(unsupportedInpaintModeMessage.value)
+    return
+  }
+  if (isQwenImageRequest.value && xyzStore.enabled) {
+    xyzStore.enabled = false
+    toast('Qwen Image Edit-2511 does not support XYZ.')
     return
   }
   if (xyzStore.enabled) {

@@ -17,6 +17,8 @@ with readiness/blocking resolved from the same diagnostics owner used by the bod
 and redirect the user back to a real model-tab owner instead of mutating misleading global checkpoint/VAE/text-encoder state. The non-WAN VAE selector
 also keeps Anima choices scoped to the truthful WanVAE-compatible root instead of laundering unrelated family VAEs into the Anima lane. Z-Image L2P quicksettings
 expose only the denoiser checkpoint and shared `zimage/<path>` Qwen3-4B text-encoder selector; no VAE selector is rendered for that no-VAE engine.
+Qwen Image exposes its exact Edit-2511 IMG2IMG mode as locked-on, does not render a TXT2IMG or INPAINT toggle, and seeds its required
+external VAE fallback into the family-scoped owner before generation readiness is evaluated.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QuickSettingsBar` (component): Main QuickSettings SFC; includes “advanced” UI, per-family subcomponents, and selector filtering logic.
@@ -67,7 +69,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `ltxRefreshTitle` (computed): Tooltip reason for the LTX Refresh button enabled/disabled state.
 - `onLtxModeChange` (function): Toggles the active LTX tab between `txt2vid` and `img2vid` from quick settings.
 - `onUseInitImageChange` (function): Toggles active image-tab mode between txt2img and img2img from quick settings.
-- `canShowModeToggles` (computed): Enables IMG2IMG/INPAINT quicksettings controls when the active image tab supports img2img.
+- `canShowModeToggles` (computed): Enables shared IMG2IMG/INPAINT quicksettings controls when the active image tab supports img2img; Qwen renders its locked Edit-only mode separately.
 - `useInitImage` / `useMask` / `hasInitImage` / `initSourceIsImg` (computed): Shared-header mode/source/materialized-image state for the active image tab.
 - `activeImageRequestEngineId` (computed): Resolves the active image tab to the exact backend request id used for capability and asset-contract lookups.
 - `supirEnabled` / `canShowSupirToggle` / `supirSelectionState` (computed): Shared-header SUPIR toggle state, discoverability, and blocking contract for SDXL img2img/inpaint.
@@ -471,22 +473,13 @@ Symbols (top-level; keep in sync; no ghosts):
             <label class="label-muted">Mode</label>
             <div class="qs-row">
               <button
-                :class="['btn', 'qs-toggle-btn', 'qs-toggle-btn--sm', useInitImage ? 'qs-toggle-btn--on' : 'qs-toggle-btn--off']"
+                class="btn qs-toggle-btn qs-toggle-btn--sm qs-toggle-btn--on"
                 type="button"
-                :aria-pressed="useInitImage"
-                @click="onUseInitImageChange(!useInitImage)"
+                aria-pressed="true"
+                disabled
+                title="Qwen Image Edit-2511 is IMG2IMG-only."
               >
                 IMG2IMG
-              </button>
-              <button
-                :class="['btn', 'qs-toggle-btn', 'qs-toggle-btn--sm', useMask ? 'qs-toggle-btn--on' : 'qs-toggle-btn--off']"
-                type="button"
-                :aria-pressed="useMask"
-                :disabled="inpaintToggleDisabled"
-                :title="inpaintToggleTitle"
-                @click="onUseMaskChange(!useMask)"
-              >
-                INPAINT
               </button>
             </div>
           </div>
@@ -1411,7 +1404,7 @@ watch(
     if (!canonical) return
     const nextVae = canonical.value
     if (canonical.reason === 'fallback') {
-      if (sourceVae) {
+      if (sourceVae || family === 'qwen_image') {
         store.setVaeForFamily(family, nextVae, { persist: false }).catch((error: unknown) => {
           toastQuicksettingsError(error)
         })
@@ -2165,6 +2158,9 @@ async function onUseInitImageChange(value: boolean): Promise<void> {
   try {
     const tab = activeImageTab.value
     if (!tab) return
+    if (tab.type === 'qwen_image' && !value) {
+      throw new Error('Qwen Image Edit-2511 supports IMG2IMG only.')
+    }
     const patch: Partial<ImageBaseParams> = { ...buildUseInitImagePatch(Boolean(value)) }
     await updateImageTabParams(tab.id, patch)
   } catch (error) {
