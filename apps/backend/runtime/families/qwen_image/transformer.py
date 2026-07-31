@@ -6,10 +6,10 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Qwen Image Edit-2511 transformer metadata validation and native runtime model.
+Purpose: Qwen Image Edit-2511 transformer metadata validation and native streamed runtime model.
 Owns the exact `QwenImageTransformer2DModel` config contract plus the Diffusers-free 60-block implementation whose
 module names bind directly to the native 1,933-key GGUF checkpoint without changing stored tensor names, including
-the shared per-block sampling progress callback seam.
+the shared per-block sampling progress callback and one-block residency context seams.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageTransformerConfig` (dataclass): Strict metadata contract for `QwenImageTransformer2DModel`.
@@ -22,11 +22,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 import torch
 from torch import nn
 
+from apps.backend.runtime.memory.streamed_residency import StreamedResidencyPhase
 from apps.backend.runtime.sampling.block_progress import resolve_block_progress_callback
 
 from .config import (
@@ -44,6 +45,9 @@ from .transformer_layers import (
     QwenImageTransformerBlock,
 )
 from .transformer_rope import QwenImageRotaryEmbedding
+
+if TYPE_CHECKING:
+    from .streaming import QwenImageStreamedCoreRuntime
 
 QWEN_IMAGE_ATTENTION_HEAD_DIM = 128
 QWEN_IMAGE_NUM_ATTENTION_HEADS = 24
@@ -188,6 +192,19 @@ class QwenImageTransformer2DModel(nn.Module):
             int(config.patch_size) * int(config.patch_size) * self.out_channels,
             bias=True,
         )
+        self._streamed_core_runtime: QwenImageStreamedCoreRuntime | None = None
+
+    def set_streamed_core_runtime(self, runtime: QwenImageStreamedCoreRuntime) -> None:
+        from .streaming import QwenImageStreamedCoreRuntime
+
+        if not isinstance(runtime, QwenImageStreamedCoreRuntime):
+            raise TypeError(
+                "Qwen Image transformer streamed runtime must be QwenImageStreamedCoreRuntime; "
+                f"got {type(runtime).__name__}."
+            )
+        if self._streamed_core_runtime is not None and self._streamed_core_runtime is not runtime:
+            raise RuntimeError("Qwen Image transformer already owns a different streamed core runtime.")
+        self._streamed_core_runtime = runtime
 
     def forward(
         self,
@@ -247,6 +264,27 @@ class QwenImageTransformer2DModel(nn.Module):
                 f"got {tuple(timestep.shape)} for batch={batch_size}."
             )
 
+        streamed_runtime = self._streamed_core_runtime
+        if streamed_runtime is None:
+            raise RuntimeError(
+                "Qwen Image Edit-2511 transformer requires its explicit streamed core runtime before forward."
+            )
+        residency = streamed_runtime.verify_residency()
+        if residency.phase is not StreamedResidencyPhase.READY:
+            raise RuntimeError(
+                "Qwen Image Edit-2511 transformer forward requires READY streamed residency before any "
+                f"static or block module executes; got {residency.phase.value}."
+            )
+        for tensor_name, tensor in (
+            ("hidden_states", hidden_states),
+            ("encoder_hidden_states", encoder_hidden_states),
+        ):
+            if tensor.device != residency.compute_device:
+                raise RuntimeError(
+                    f"Qwen Image transformer {tensor_name} must be on the streamed compute device "
+                    f"{residency.compute_device}; got {tensor.device}."
+                )
+
         image_hidden_states = self.img_in(hidden_states)
         timestep = timestep.to(device=image_hidden_states.device, dtype=image_hidden_states.dtype)
         generated_timestep = timestep
@@ -303,14 +341,15 @@ class QwenImageTransformer2DModel(nn.Module):
         for block_index, block in enumerate(self.transformer_blocks):
             if block_progress_callback is not None:
                 block_progress_callback(int(block_index + 1), total_blocks)
-            text_hidden_states, image_hidden_states = block(
-                image_hidden_states,
-                text_hidden_states,
-                timestep_embedding=timestep_embedding,
-                rotary_embedding=rotary_embedding,
-                attention_mask=attention_mask,
-                modulate_index=modulate_index,
-            )
+            with streamed_runtime.activate_block(block_index):
+                text_hidden_states, image_hidden_states = block(
+                    image_hidden_states,
+                    text_hidden_states,
+                    timestep_embedding=timestep_embedding,
+                    rotary_embedding=rotary_embedding,
+                    attention_mask=attention_mask,
+                    modulate_index=modulate_index,
+                )
 
         if self.zero_cond_t:
             timestep_embedding = timestep_embedding.chunk(2, dim=0)[0]

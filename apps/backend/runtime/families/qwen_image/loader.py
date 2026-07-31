@@ -6,10 +6,10 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Native Qwen Image Edit-2511 component assembly.
+Purpose: Native Qwen Image Edit-2511 component and streamed-core assembly.
 Builds and strictly binds the exact transformer GGUF, Qwen2.5-VL GGUF, Codex3D VAE SafeTensors, offline processor,
-and scheduler metadata while preserving lazy checkpoint keyspaces, canonical patcher ownership, and deterministic
-posterior-mode reference encoding.
+and scheduler metadata while preserving lazy checkpoint keyspaces, canonical patcher ownership, explicit CPU-backed
+one-block transformer residency, and deterministic posterior-mode reference encoding.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageComponentAssembly` (dataclass): Strictly loaded native components plus patcher/runtime ownership.
@@ -55,6 +55,10 @@ from .config import (
     require_qwen_image_variant,
 )
 from .scheduler import QwenImageSchedulerConfig, qwen_image_scheduler_config_from_mapping
+from .streaming import (
+    QwenImageStreamedCoreRuntime,
+    require_qwen_image_streaming_activation,
+)
 from .text_encoder import (
     QwenImageTextEncoderConfig,
     QwenImageTextEncoderRuntime,
@@ -114,6 +118,7 @@ class QwenImageComponentAssembly:
     transformer_config: QwenImageTransformerConfig
     transformer: QwenImageTransformer2DModel
     denoiser: DenoiserPatcher
+    streamed_core_runtime: QwenImageStreamedCoreRuntime
     text_encoder_config: QwenImageTextEncoderConfig
     text_encoder: QwenImageTextEncoderRuntime
     text_encoder_patcher: ModelPatcher
@@ -227,16 +232,29 @@ def _load_transformer(
     state_dict: MutableMapping[str, torch.Tensor],
     config: QwenImageTransformerConfig,
     compute_dtype: torch.dtype,
-) -> tuple[QwenImageTransformer2DModel, DenoiserPatcher]:
-    mount_device = memory_management.manager.mount_device()
-    if mount_device.type != "cpu":
+) -> tuple[QwenImageTransformer2DModel, DenoiserPatcher, QwenImageStreamedCoreRuntime]:
+    manager = memory_management.manager
+    storage_device = manager.mount_device()
+    compute_device = manager.get_device(DeviceRole.CORE)
+    offload_device = manager.get_offload_device(DeviceRole.CORE)
+    if storage_device.type != "cpu":
         raise RuntimeError(
-            "Qwen Image Edit-2511 transformer requires CPU mount/storage for operation-granular GGUF execution; "
-            f"got mount_device={mount_device}."
+            "Qwen Image Edit-2511 transformer requires CPU mount/storage for streamed GGUF execution; "
+            f"got mount_device={storage_device}."
+        )
+    if compute_device.type != "cuda":
+        raise RuntimeError(
+            "Qwen Image Edit-2511 transformer requires the CORE role on CUDA for streamed execution; "
+            f"got compute_device={compute_device}."
+        )
+    if offload_device != storage_device:
+        raise RuntimeError(
+            "Qwen Image Edit-2511 streamed transformer requires CORE offload to match CPU storage: "
+            f"storage_device={storage_device} offload_device={offload_device}."
         )
     resolved = resolve_qwen_image_edit_transformer_keyspace(state_dict)
     with using_codex_operations(
-        device=mount_device,
+        device=storage_device,
         dtype=compute_dtype,
         manual_cast_enabled=True,
         weight_format="gguf",
@@ -252,16 +270,23 @@ def _load_transformer(
     transformer.requires_grad_(False)
     transformer.storage_dtype = "gguf"
     transformer.computation_dtype = compute_dtype
-    transformer.load_device = mount_device
-    transformer.offload_device = mount_device
-    transformer.initial_device = mount_device
+    transformer.load_device = compute_device
+    transformer.offload_device = storage_device
+    transformer.initial_device = storage_device
+    streamed_core_runtime = QwenImageStreamedCoreRuntime(
+        transformer,
+        storage_device=storage_device,
+        compute_device=compute_device,
+    )
+    transformer.set_streamed_core_runtime(streamed_core_runtime)
     denoiser = DenoiserPatcher(
         transformer,
-        load_device=mount_device,
-        offload_device=mount_device,
-        current_device=mount_device,
+        load_device=compute_device,
+        offload_device=storage_device,
+        current_device=storage_device,
     )
-    return transformer, denoiser
+    denoiser.set_streamed_core_runtime(streamed_core_runtime)
+    return transformer, denoiser, streamed_core_runtime
 
 
 def _load_text_encoder(
@@ -421,6 +446,10 @@ def load_qwen_image_components(
         raise RuntimeError("Qwen Image Edit-2511 requires tenc_source='external'.")
     if options.get("vae_source") != "external":
         raise RuntimeError("Qwen Image Edit-2511 requires vae_source='external'.")
+    require_qwen_image_streaming_activation(
+        options,
+        swap_method=memory_management.manager.config.swap.method,
+    )
 
     variant = require_qwen_image_variant(
         options.get(QWEN_IMAGE_VARIANT_KEY),
@@ -497,7 +526,7 @@ def load_qwen_image_components(
     )
 
     compute_dtype = torch.bfloat16
-    transformer, denoiser = _load_transformer(
+    transformer, denoiser, streamed_core_runtime = _load_transformer(
         state_dict=transformer_state,
         config=transformer_config,
         compute_dtype=compute_dtype,
@@ -518,6 +547,7 @@ def load_qwen_image_components(
         transformer_config=transformer_config,
         transformer=transformer,
         denoiser=denoiser,
+        streamed_core_runtime=streamed_core_runtime,
         text_encoder_config=text_encoder_config,
         text_encoder=text_encoder,
         text_encoder_patcher=text_encoder_patcher,

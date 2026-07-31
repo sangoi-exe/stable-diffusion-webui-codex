@@ -7,8 +7,8 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Native Qwen Image Edit-2511 rotary-position ownership.
-Builds centered three-axis complex RoPE for the generated and single reference-image token grids without registering
-complex checkpoint state or changing the checkpoint-owned tensor keyspace.
+Builds centered three-axis complex RoPE for the generated and single reference-image token grids as non-persistent
+runtime buffers without adding checkpoint state or changing the checkpoint-owned tensor keyspace.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageRotaryEmbedding` (class): Centered three-axis complex RoPE for generated and reference-image token grids.
@@ -64,13 +64,21 @@ class QwenImageRotaryEmbedding(nn.Module):
 
         positive_index = torch.arange(4096, dtype=torch.float32)
         negative_index = torch.arange(4096, dtype=torch.float32).flip(0) * -1 - 1
-        self.pos_freqs = torch.cat(
-            tuple(_rope_params(positive_index, axis_dim, self.theta) for axis_dim in self.axes_dim),
-            dim=1,
+        self.register_buffer(
+            "pos_freqs",
+            torch.cat(
+                tuple(_rope_params(positive_index, axis_dim, self.theta) for axis_dim in self.axes_dim),
+                dim=1,
+            ),
+            persistent=False,
         )
-        self.neg_freqs = torch.cat(
-            tuple(_rope_params(negative_index, axis_dim, self.theta) for axis_dim in self.axes_dim),
-            dim=1,
+        self.register_buffer(
+            "neg_freqs",
+            torch.cat(
+                tuple(_rope_params(negative_index, axis_dim, self.theta) for axis_dim in self.axes_dim),
+                dim=1,
+            ),
+            persistent=False,
         )
 
     def _image_freqs(

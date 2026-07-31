@@ -8,8 +8,8 @@ Required Notice: see NOTICE
 
 Purpose: Native Qwen Image Edit-2511 single-image component runtime.
 Owns condition/reference preprocessing, multimodal prompt encoding, FlowMatch Euler denoising, final VAE decode,
-and canonical patcher lifecycle with primary-stage exception preservation while delegating tensor contracts and latent
-math to `runtime_latents.py`.
+canonical stage-exclusive patcher lifecycle, streamed-core memory admission, and primary-stage exception preservation
+while delegating tensor contracts and latent math to `runtime_latents.py`.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageRuntime` (class): Exact Edit-2511 conditioning, reference encode, denoise, and decode owner.
@@ -18,8 +18,9 @@ Symbols (top-level; keep in sync; no ghosts):
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -30,7 +31,9 @@ from apps.backend.core.rng import ImageRNG, NoiseSettings
 from apps.backend.core.state import state as backend_state
 from apps.backend.runtime.memory import memory_management
 from apps.backend.runtime.memory.config import DeviceRole
+from apps.backend.runtime.memory.streamed_residency import StreamedResidencyPhase
 from apps.backend.runtime.processing.conditioners import normalize_torch_manual_seed
+from apps.backend.runtime.logging import get_backend_logger
 from apps.backend.runtime.sampling.block_progress import (
     BLOCK_PROGRESS_CALLBACK_KEY,
     validate_block_progress_payload,
@@ -59,6 +62,7 @@ from .scheduler import (
     qwen_image_flow_schedule,
     qwen_image_latent_grid,
 )
+from .streaming import QwenImageStreamedCoreRuntime
 from .text_encoder import (
     QwenImageProcessorBatch,
     QwenImageTextEncoderRuntime,
@@ -96,6 +100,19 @@ _DENOISE_COMPONENT = "denoiser"
 _DECODE_SOURCE = "runtime.families.qwen_image.runtime.QwenImageRuntime.decode"
 _DECODE_STAGE = "qwen_image_vae_decode"
 _DECODE_COMPONENT = "vae"
+
+logger = get_backend_logger("backend.runtime.families.qwen_image.runtime")
+
+
+@dataclass(frozen=True, slots=True)
+class _QwenImageDenoiseMemoryBudget:
+    image_tokens: int
+    active_text_tokens: int
+    working_sequence_tokens: int
+    working_set_bytes: int
+    persistent_input_bytes: int
+    memory_required: int
+    hard_memory_preservation: int
 
 
 def _resized_rgb_image(image: Image.Image, *, width: int, height: int, label: str) -> Image.Image:
@@ -147,6 +164,14 @@ def _masked_prompt_features(
     return embeddings, mask
 
 
+def _target_tensor_bytes(tensor: torch.Tensor, *, dtype: torch.dtype) -> int:
+    if not isinstance(tensor, torch.Tensor):
+        raise TypeError(f"Qwen Image memory accounting requires torch.Tensor; got {type(tensor).__name__}.")
+    if not isinstance(dtype, torch.dtype):
+        raise TypeError(f"Qwen Image memory accounting requires torch.dtype; got {type(dtype).__name__}.")
+    return int(tensor.numel()) * int(torch.empty((), dtype=dtype).element_size())
+
+
 @contextmanager
 def _managed_component_stage(
     target: object,
@@ -154,6 +179,8 @@ def _managed_component_stage(
     source: str,
     stage: str,
     component_hint: str,
+    memory_required: int = 0,
+    hard_memory_preservation: int = 0,
 ) -> Iterator[None]:
     manager = memory_management.manager
     manager.load_model(
@@ -161,6 +188,8 @@ def _managed_component_stage(
         source=source,
         stage=stage,
         component_hint=component_hint,
+        memory_required=memory_required,
+        hard_memory_preservation=hard_memory_preservation,
     )
     try:
         yield
@@ -233,11 +262,93 @@ class QwenImageRuntime:
             )
         self.transformer = assembly.transformer
         self.denoiser: DenoiserPatcher = assembly.denoiser
+        if not isinstance(assembly.streamed_core_runtime, QwenImageStreamedCoreRuntime):
+            raise TypeError(
+                "Qwen Image runtime assembly streamed core must be QwenImageStreamedCoreRuntime; "
+                f"got {type(assembly.streamed_core_runtime).__name__}."
+            )
+        if self.denoiser.streamed_core_runtime is not assembly.streamed_core_runtime:
+            raise RuntimeError("Qwen Image denoiser and assembly must share one streamed core runtime owner.")
+        self.streamed_core_runtime = assembly.streamed_core_runtime
         self.text_encoder = assembly.text_encoder
         self.text_encoder_patcher: ModelPatcher = assembly.text_encoder_patcher
         self.vae: VAE = assembly.vae
         self.vae_config: QwenImageVaeConfig = assembly.vae_config
         self.scheduler_config = assembly.scheduler_config
+
+    def _require_stage_exclusivity(
+        self,
+        *,
+        stage: str,
+        forbidden: Sequence[tuple[str, object]],
+    ) -> None:
+        resident = [label for label, target in forbidden if memory_management.manager.is_model_loaded(target)]
+        if resident:
+            raise RuntimeError(
+                f"Qwen Image stage {stage!r} requires exclusive component residency; "
+                f"still_loaded={resident}."
+            )
+
+    def _require_streamed_phase(
+        self,
+        expected: StreamedResidencyPhase,
+        *,
+        stage: str,
+    ) -> None:
+        snapshot = self.streamed_core_runtime.verify_residency()
+        if snapshot.phase is not expected:
+            raise RuntimeError(
+                f"Qwen Image stage {stage!r} requires streamed core phase {expected.value!r}; "
+                f"got {snapshot.phase.value!r}."
+            )
+
+    def _denoise_memory_budget(
+        self,
+        *,
+        conditioning: QwenImageConditioning,
+        reference: QwenImageReferenceLatents,
+        grid: QwenImageLatentGrid,
+        cfg_scale: float,
+        compute_dtype: torch.dtype,
+    ) -> _QwenImageDenoiseMemoryBudget:
+        dtype_bytes = int(torch.empty((), dtype=compute_dtype).element_size())
+        image_tokens = int(grid.sequence_length) + int(reference.grid.sequence_length)
+        positive_text_tokens = int(conditioning.positive_mask.to(dtype=torch.bool).sum().item())
+        negative_text_tokens = int(conditioning.negative_mask.to(dtype=torch.bool).sum().item())
+        use_true_cfg = cfg_scale > 1.0
+        active_text_tokens = max(positive_text_tokens, negative_text_tokens) if use_true_cfg else positive_text_tokens
+        working_sequence_tokens = image_tokens + active_text_tokens
+        working_set_bytes = (
+            64
+            * working_sequence_tokens
+            * int(self.transformer.inner_dim)
+            * dtype_bytes
+        )
+        generated_elements = (
+            int(grid.sequence_length)
+            * int(self.transformer.config.in_channels)
+        )
+        persistent_input_bytes = generated_elements * dtype_bytes
+        persistent_input_bytes += _target_tensor_bytes(reference.packed_latents, dtype=compute_dtype)
+        persistent_input_bytes += _target_tensor_bytes(conditioning.positive_embeddings, dtype=compute_dtype)
+        persistent_input_bytes += _target_tensor_bytes(conditioning.positive_mask, dtype=torch.long)
+        if use_true_cfg:
+            persistent_input_bytes += _target_tensor_bytes(conditioning.negative_embeddings, dtype=compute_dtype)
+            persistent_input_bytes += _target_tensor_bytes(conditioning.negative_mask, dtype=torch.long)
+        memory_required = working_set_bytes + persistent_input_bytes
+        budgets = memory_management.manager.config.budgets
+        configured_hard_bytes = max(0, int(budgets.hard_reservation_mb)) * 1024 * 1024
+        configured_safety_bytes = max(0, int(budgets.safety_margin_mb)) * 1024 * 1024
+        hard_memory_preservation = max(1 << 30, configured_hard_bytes) + configured_safety_bytes
+        return _QwenImageDenoiseMemoryBudget(
+            image_tokens=image_tokens,
+            active_text_tokens=active_text_tokens,
+            working_sequence_tokens=working_sequence_tokens,
+            working_set_bytes=working_set_bytes,
+            persistent_input_bytes=persistent_input_bytes,
+            memory_required=memory_required,
+            hard_memory_preservation=hard_memory_preservation,
+        )
 
     @torch.inference_mode()
     def encode_conditioning(
@@ -251,6 +362,11 @@ class QwenImageRuntime:
             raise TypeError(
                 f"Qwen Image condition image must be a PIL.Image.Image; got {type(image).__name__}."
             )
+        self._require_stage_exclusivity(
+            stage=_CONDITIONING_STAGE,
+            forbidden=(("vae", self.vae.patcher), ("denoiser", self.denoiser)),
+        )
+        self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=_CONDITIONING_STAGE)
         condition_width, condition_height = qwen_image_edit_condition_dimensions(*image.size)
         condition_image = _resized_rgb_image(
             image,
@@ -308,6 +424,11 @@ class QwenImageRuntime:
             raise TypeError(
                 f"Qwen Image VAE reference image must be a PIL.Image.Image; got {type(image).__name__}."
             )
+        self._require_stage_exclusivity(
+            stage=_REFERENCE_STAGE,
+            forbidden=(("text_encoder", self.text_encoder_patcher), ("denoiser", self.denoiser)),
+        )
+        self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=_REFERENCE_STAGE)
         reference_width, reference_height = qwen_image_edit_vae_dimensions(*image.size)
         reference_image = _resized_rgb_image(
             image,
@@ -414,8 +535,17 @@ class QwenImageRuntime:
         reference_tokens = reference.packed_latents.to(device=compute_device, dtype=compute_dtype)
         positive_embeddings = conditioning.positive_embeddings.to(device=compute_device, dtype=compute_dtype)
         positive_mask = conditioning.positive_mask.to(device=compute_device, dtype=torch.long)
-        negative_embeddings = conditioning.negative_embeddings.to(device=compute_device, dtype=compute_dtype)
-        negative_mask = conditioning.negative_mask.to(device=compute_device, dtype=torch.long)
+        use_true_cfg = cfg_scale > 1.0
+        negative_embeddings = (
+            conditioning.negative_embeddings.to(device=compute_device, dtype=compute_dtype)
+            if use_true_cfg
+            else None
+        )
+        negative_mask = (
+            conditioning.negative_mask.to(device=compute_device, dtype=torch.long)
+            if use_true_cfg
+            else None
+        )
         schedule = qwen_image_flow_schedule(
             step_count,
             image_seq_len=grid.sequence_length,
@@ -428,7 +558,6 @@ class QwenImageRuntime:
                 (1, int(reference.grid.packed_height), int(reference.grid.packed_width)),
             ),
         )
-        use_true_cfg = cfg_scale > 1.0
         blocks_per_step = QWEN_IMAGE_NUM_LAYERS * (2 if use_true_cfg else 1)
 
         backend_state.start(
@@ -460,6 +589,8 @@ class QwenImageRuntime:
                     total_blocks=blocks_per_step,
                 )[:, : int(grid.sequence_length)]
                 if use_true_cfg:
+                    if negative_embeddings is None or negative_mask is None:
+                        raise RuntimeError("Qwen Image true CFG inputs were not staged on the compute device.")
                     negative_prediction = self._transformer_prediction(
                         latent_model_input=latent_model_input,
                         timestep=model_timestep,
@@ -559,13 +690,41 @@ class QwenImageRuntime:
                 f"got {type(active_noise_settings).__name__}."
             )
 
+        self._require_stage_exclusivity(
+            stage=_DENOISE_STAGE,
+            forbidden=(("text_encoder", self.text_encoder_patcher), ("vae", self.vae.patcher)),
+        )
+        self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=_DENOISE_STAGE)
+        memory_budget = self._denoise_memory_budget(
+            conditioning=conditioning,
+            reference=reference,
+            grid=grid,
+            cfg_scale=cfg_scale,
+            compute_dtype=compute_dtype,
+        )
+        logger.info(
+            "Qwen Image denoise memory admission: image_tokens=%d active_text_tokens=%d "
+            "working_sequence_tokens=%d working_set_bytes=%d persistent_input_bytes=%d "
+            "memory_required=%d hard_memory_preservation=%d",
+            memory_budget.image_tokens,
+            memory_budget.active_text_tokens,
+            memory_budget.working_sequence_tokens,
+            memory_budget.working_set_bytes,
+            memory_budget.persistent_input_bytes,
+            memory_budget.memory_required,
+            memory_budget.hard_memory_preservation,
+        )
+
         try:
             with _managed_component_stage(
                 self.denoiser,
                 source=_DENOISE_SOURCE,
                 stage=_DENOISE_STAGE,
                 component_hint=_DENOISE_COMPONENT,
+                memory_required=memory_budget.memory_required,
+                hard_memory_preservation=memory_budget.hard_memory_preservation,
             ):
+                self._require_streamed_phase(StreamedResidencyPhase.READY, stage=_DENOISE_STAGE)
                 packed_cpu = self._run_loaded_denoise(
                     conditioning=conditioning,
                     reference=reference,
@@ -578,6 +737,7 @@ class QwenImageRuntime:
                     compute_device=compute_device,
                     compute_dtype=compute_dtype,
                 )
+            self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=_DENOISE_STAGE)
         except Exception as exc:
             raise RuntimeError(
                 f"Qwen Image stage {_DENOISE_STAGE!r} component {_DENOISE_COMPONENT!r} failed: {exc}"
@@ -596,6 +756,11 @@ class QwenImageRuntime:
             raise TypeError(
                 f"Qwen Image decode input must be QwenImageDenoisedLatents; got {type(denoised).__name__}."
             )
+        self._require_stage_exclusivity(
+            stage=_DECODE_STAGE,
+            forbidden=(("text_encoder", self.text_encoder_patcher), ("denoiser", self.denoiser)),
+        )
+        self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=_DECODE_STAGE)
         unpacked_5d = qwen_image_unpack_latents(denoised.packed_latents, denoised.grid)
         if int(unpacked_5d.shape[2]) != 1:
             raise RuntimeError(

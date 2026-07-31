@@ -127,6 +127,10 @@ Last reviewed on 2026-07-31 during the Qwen Image Edit-2511 canonical img2img tr
   - Aliases: engine dispatch; model load/cache; runtime coordinator.
   - Open this for engine resolution, load/unload/cache ownership, or wrapper dispatch.
   - Secondary seams: `apps/backend/core/engine_interface.py`, `apps/backend/engines/common/base.py`.
+- Qwen Streamed Core Residency: `apps/backend/runtime/families/qwen_image/streaming.py`
+  - Aliases: Qwen block streaming; Edit-2511 mixed residency; CPU-backed Qwen transformer.
+  - Open this for mandatory blocked-streaming activation, static residency, one-block CUDA transitions, host-object restoration, or residency telemetry.
+  - Secondary seams: `apps/backend/runtime/families/qwen_image/streaming_slots.py`, `apps/backend/runtime/families/qwen_image/transformer.py`, `apps/backend/runtime/families/qwen_image/loader.py`, `apps/backend/runtime/families/qwen_image/runtime.py`.
 
 ### Pipeline owner paths
 
@@ -167,6 +171,7 @@ Last reviewed on 2026-07-31 during the Qwen Image Edit-2511 canonical img2img tr
   - Store the encoded result payload and expose terminal snapshot/SSE state.
 - Branch notes:
   - Qwen Image Edit-2511 branches before classic backend resolution: the canonical use-case sequences family conditioning, reference VAE encode, native denoise, and final VAE decode, then returns decoded RGB through `GenerationResult` without entering classic `sampling_execute.py`.
+  - Qwen denoise uses the canonical memory-manager streamed-residency contract: the transformer GGUF remains CPU-backed, static owners plus exactly one transformer block are CUDA-resident, and the text encoder and VAE are offloaded before core sampling.
   - Classic base img2img resolves SD-vs-flow dispatch locally in `apps/backend/use_cases/img2img.py` before masked/unmasked prep.
   - SDXL SUPIR mode stays inside canonical img2img: route preflight lives in `apps/backend/interfaces/api/routers/generation.py`; request-scoped restore runtime lives in `apps/backend/runtime/families/supir/runtime.py`.
   - SDXL exact-engine inpaint stays inside canonical img2img: exact-engine mode/asset preflight lives in `apps/backend/interfaces/api/routers/generation.py`; `img2img.py` installs the temporary request-scoped sampling-session factory only for non-SUPIR exact modes; `sampling_execute.py` enters the Fooocus/BrushNet session after canonical LoRA activation.

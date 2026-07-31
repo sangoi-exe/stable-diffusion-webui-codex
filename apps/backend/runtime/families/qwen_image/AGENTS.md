@@ -9,14 +9,16 @@ Status: Active
 
 ## Key Files
 - `apps/backend/runtime/families/qwen_image/config.py` - Edit-2511 metadata, prompt-template constants, dimensions, and image geometry helpers.
-- `apps/backend/runtime/families/qwen_image/loader.py` - Strict native transformer/TEnc/VAE construction, lazy keyspace binding, scheduler metadata, and patcher ownership.
-- `apps/backend/runtime/families/qwen_image/runtime.py` - Single-image condition/reference preprocessing, multimodal prompt encoding, true-CFG denoise, VAE decode, and component lifecycle.
+- `apps/backend/runtime/families/qwen_image/loader.py` - Strict native transformer/TEnc/VAE construction, lazy keyspace binding, CPU-backed transformer storage, streamed-runtime attachment, scheduler metadata, and patcher ownership.
+- `apps/backend/runtime/families/qwen_image/runtime.py` - Single-image condition/reference preprocessing, multimodal prompt encoding, true-CFG denoise, VAE decode, and mutually exclusive text-encoder/VAE/streamed-core component stages.
 - `apps/backend/runtime/families/qwen_image/runtime_latents.py` - CPU-staged runtime value objects, native 2x2 latent pack/unpack, and true-CFG norm rescaling.
 - `apps/backend/runtime/families/qwen_image/scheduler.py` - Diffusers-free FlowMatch Euler scheduler metadata validation, exact sigma ladder, Euler update, and sequence geometry.
 - `apps/backend/runtime/families/qwen_image/text_encoder.py` - Qwen2.5-VL config validation, exact processor batch contract, prompt-template planning, and base-model forward boundary.
-- `apps/backend/runtime/families/qwen_image/transformer.py` - Edit-2511 `QwenImageTransformer2DModel` config, topology, forward contract, and zero-conditioning validation.
+- `apps/backend/runtime/families/qwen_image/streaming.py` - Mandatory blocked-swap activation, streamed residency lifecycle, static/one-block transitions, exact host restoration, and peak CUDA telemetry.
+- `apps/backend/runtime/families/qwen_image/streaming_slots.py` - Complete direct-slot inventory, physical alias/overlap validation, byte accounting, and staged tensor construction without stored-key rewriting.
+- `apps/backend/runtime/families/qwen_image/transformer.py` - Edit-2511 `QwenImageTransformer2DModel` config, topology, early READY/device guard, one-block execution context, and zero-conditioning validation.
 - `apps/backend/runtime/families/qwen_image/transformer_layers.py` - Checkpoint-owned dual-stream attention, modulation, feed-forward, and timestep layers.
-- `apps/backend/runtime/families/qwen_image/transformer_rope.py` - Non-checkpoint centered three-axis RoPE tables and application math.
+- `apps/backend/runtime/families/qwen_image/transformer_rope.py` - Non-checkpoint centered three-axis RoPE tables registered as non-persistent buffers plus application math.
 - `apps/backend/runtime/families/qwen_image/vae.py` - Exact external `AutoencoderKLQwenImage` SafeTensors admission, vendored-config validation, and per-channel latent normalization helpers.
 - `apps/backend/runtime/families/qwen_image/__init__.py` - Lightweight public family-runtime export surface.
 
@@ -28,6 +30,9 @@ Status: Active
 - The transformer and Qwen2.5-VL text encoder keep their stored native keys unchanged. Dedicated keymaps may expose lazy runtime lookup names only.
 - Transformer and Qwen2.5-VL GGUF admission validates every stored logical tensor shape before module binding; exact names and counts are insufficient on their own.
 - The runtime interface is exactly `encode_conditioning`, `encode_reference`, `denoise`, and `decode`; component stages use canonical patcher load/unload telemetry and return intermediate tensors to CPU between stages.
+- Edit-2511 execution requires normalized `core_streaming_enabled=true` with `swap_method='blocked'`; unsupported, asynchronous, or absent streaming states fail before heavy runtime assembly.
+- The transformer GGUF remains CPU-backed. Static transformer owners plus exactly one of the 60 blocks may be CUDA-resident during denoise; no async prefetch, whole-model pinning, LRU window, or second per-weight transfer scheduler belongs to this tranche.
+- Text encoder, VAE, and streamed transformer stages are mutually exclusive. Every block context and every stage cleanup restores the exact original host tensor objects before the next component stage.
 - When a component stage and its cleanup both fail, the stage error remains primary and unload/cache failures are attached as secondary diagnostic notes.
 - Reference-image VAE encoding uses posterior `mode()` and Qwen per-channel normalization exactly once.
 - Reference trees under `.refs/**` and metadata mirrors under `apps/backend/huggingface/Qwen/**` are source frontiers only. Active code must stay repo-owned and Diffusers-free.

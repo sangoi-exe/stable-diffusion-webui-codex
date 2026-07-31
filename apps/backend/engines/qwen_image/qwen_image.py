@@ -7,9 +7,9 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Qwen Image Edit-2511 engine facade for the single `qwen_image` architecture family.
-Validates the fixed internal `edit_2511` identity, required external Qwen Image assets, exact VAE/header contracts,
-assembles patcher-backed native components plus the family runtime through the common diffusion engine, and delegates
-img2img to the canonical use-case pipeline.
+Validates the fixed internal `edit_2511` identity, mandatory blocked Core streaming, required external Qwen Image
+assets, and exact VAE/header contracts; assembles patcher-backed native components plus the family runtime through the
+common diffusion engine and delegates img2img to the canonical use-case pipeline.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageEngine` (class): Registered Edit-only common diffusion engine with strict native component assembly.
@@ -30,8 +30,12 @@ from apps.backend.runtime.families.qwen_image.config import (
     QWEN_IMAGE_VARIANT_KEY,
     require_qwen_image_variant,
 )
+from apps.backend.runtime.families.qwen_image.streaming import (
+    require_qwen_image_streaming_activation,
+)
 from apps.backend.runtime.families.qwen_image.vae import qwen_image_validate_external_vae_path
 from apps.backend.runtime.logging import get_backend_logger
+from apps.backend.runtime.memory import memory_management
 from apps.backend.runtime.model_registry.capabilities import ENGINE_SURFACES, SemanticEngine
 from apps.backend.runtime.model_registry.specs import ModelFamily
 
@@ -140,6 +144,10 @@ class QwenImageEngine(CodexDiffusionEngine):
         return ("qwen2_5_vl_7b",)
 
     def load(self, model_ref: str, **options: Any) -> None:
+        require_qwen_image_streaming_activation(
+            options,
+            swap_method=memory_management.manager.config.swap.method,
+        )
         normalized_options = dict(options)
         variant = _require_variant(options)
         vae_source = options.get("vae_source")
