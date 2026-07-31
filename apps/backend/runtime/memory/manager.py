@@ -6,8 +6,8 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Codex-native runtime memory management service (hardware probe + precision/budget policies + loaded model registry).
-Provides a single manager that decides device/precision defaults, tracks loaded components, and applies swap/offload policies during engine orchestration.
+Purpose: Codex-native runtime memory management service (hardware probe + precision/budget policies + full/streamed residency registry).
+Provides a single manager that decides device/precision defaults, tracks fully resident and explicitly streamed components, and applies swap/offload policies during engine orchestration.
 Resolves explicit main/mount/offload device backends from runtime config and keeps lifecycle device routing centralized.
 Exposes per-role storage vs compute dtype selection (core/TE default to fp16 on accelerator devices, VAE defaults to fp32, CPU remains fp32 unless overridden), supports “native weights dtype” selection via `dtype_for_role(..., native_dtype=...)`, and provides `is_model_loaded(...)` for stage-scoped smart offload decisions.
 Also emits canonical smart-offload INFO audit events for model load/unload transitions and unload no-op requests when smart offload is active.
@@ -22,7 +22,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `_normalize_device_name` (function): Normalizes device name strings for stable matching and policy decisions.
 - `_device_has_native_bf16` (function): Heuristic for whether a device likely supports native BF16 (name + compute capability).
 - `_probe_hardware` (function): Performs hardware probing and returns a `HardwareProbe` (raises `HardwareProbeError` on failure).
-- `_LoadedModelRecord` (dataclass): Tracks one loaded model/component (name/path/device/dtype + per-load telemetry) for introspection and unload decisions.
+- `_LoadedModelRecord` (dataclass): Tracks one loaded model/component, its full/streamed residency contract, verified snapshot, and per-load telemetry.
 - `CodexMemoryManager` (class): Main memory manager; owns runtime config, budget calculation, model registry, and policy decisions
   (contains many methods for load/unload bookkeeping, swap/offload behavior, and “best defaults” selection).
 """
@@ -54,6 +54,13 @@ from .config import (
 )
 from .exceptions import HardwareProbeError, MemoryConfigurationError, MemoryLoadError
 from .smart_offload import SmartOffloadAction, log_smart_offload_action, smart_offload_enabled
+from .streamed_residency import (
+    ResidencyMode,
+    StreamedCoreRuntime,
+    StreamedFootprint,
+    StreamedResidencyPhase,
+    StreamedResidencySnapshot,
+)
 
 
 logger = get_backend_logger("backend.memory.manager")
@@ -257,6 +264,10 @@ class _LoadedModelRecord:
     load_device: torch.device
     offload_device: torch.device
     storage_dtype: torch.dtype
+    residency_mode: ResidencyMode = ResidencyMode.FULL
+    streamed_runtime: StreamedCoreRuntime | None = None
+    streamed_footprint: StreamedFootprint | None = None
+    last_streamed_snapshot: StreamedResidencySnapshot | None = None
     inclusive_memory: int = 0
     exclusive_memory: int = 0
     model_accelerated: bool = False
@@ -927,6 +938,9 @@ class CodexMemoryManager:
         models: List[Dict[str, object]] = []
         total_inclusive = 0
         total_exclusive = 0
+        total_streamed_host = 0
+        total_streamed_peak = 0
+        total_streamed_current = 0
 
         for record in self._loaded_models:
             try:
@@ -939,18 +953,70 @@ class CodexMemoryManager:
             else:
                 module_name = type(record.model).__name__
 
-            load_device = getattr(record.load_device, "type", str(record.load_device))
-            offload_device = getattr(record.offload_device, "type", str(record.offload_device))
+            streamed_footprint = record.streamed_footprint
+            streamed_snapshot = None
+            if record.residency_mode is ResidencyMode.STREAMED:
+                streamed_snapshot = self._verify_streamed_snapshot(record)
+                if streamed_footprint is None:
+                    raise MemoryLoadError(
+                        f"Missing streamed footprint for {self._record_label(record)}."
+                    )
 
             models.append(
                 {
                     "module": module_name,
-                    "load_device": load_device,
-                    "offload_device": offload_device,
+                    "load_device": str(record.load_device),
+                    "offload_device": str(record.offload_device),
                     "storage_dtype": str(record.storage_dtype).replace("torch.", ""),
+                    "residency_mode": record.residency_mode.value,
                     "inclusive_bytes": int(record.inclusive_memory),
                     "exclusive_bytes": int(record.exclusive_memory),
                     "accelerated": bool(record.model_accelerated),
+                    "streamed_host_bytes": (
+                        streamed_footprint.total_host_bytes
+                        if streamed_footprint is not None
+                        else None
+                    ),
+                    "streamed_peak_device_bytes": (
+                        streamed_footprint.peak_device_bytes
+                        if streamed_footprint is not None
+                        else None
+                    ),
+                    "streamed_phase": (
+                        streamed_snapshot.phase.value
+                        if streamed_snapshot is not None
+                        else None
+                    ),
+                    "streamed_storage_device": (
+                        str(streamed_snapshot.storage_device)
+                        if streamed_snapshot is not None
+                        else None
+                    ),
+                    "streamed_compute_device": (
+                        str(streamed_snapshot.compute_device)
+                        if streamed_snapshot is not None
+                        else None
+                    ),
+                    "streamed_static_resident_bytes": (
+                        streamed_snapshot.static_resident_bytes
+                        if streamed_snapshot is not None
+                        else None
+                    ),
+                    "streamed_resident_segment_indices": (
+                        list(streamed_snapshot.resident_segment_indices)
+                        if streamed_snapshot is not None
+                        else None
+                    ),
+                    "streamed_resident_segment_bytes": (
+                        streamed_snapshot.resident_segment_bytes
+                        if streamed_snapshot is not None
+                        else None
+                    ),
+                    "streamed_current_device_bytes": (
+                        streamed_snapshot.current_device_bytes
+                        if streamed_snapshot is not None
+                        else None
+                    ),
                     "load_telemetry_device": record.load_telemetry_device,
                     "load_alloc_delta_bytes": record.load_alloc_delta_bytes,
                     "load_reserved_delta_bytes": record.load_reserved_delta_bytes,
@@ -963,6 +1029,10 @@ class CodexMemoryManager:
             )
             total_inclusive += int(record.inclusive_memory)
             total_exclusive += int(record.exclusive_memory)
+            if streamed_footprint is not None and streamed_snapshot is not None:
+                total_streamed_host += streamed_footprint.total_host_bytes
+                total_streamed_peak += streamed_footprint.peak_device_bytes
+                total_streamed_current += streamed_snapshot.current_device_bytes
 
         budgets = {
             "minimum_inference_mb": int(self._budgets.minimum_inference_mb),
@@ -991,6 +1061,9 @@ class CodexMemoryManager:
             "totals": {
                 "models_inclusive_bytes": total_inclusive,
                 "models_exclusive_bytes": total_exclusive,
+                "streamed_host_bytes": total_streamed_host,
+                "streamed_peak_device_bytes": total_streamed_peak,
+                "streamed_current_device_bytes": total_streamed_current,
             },
         }
 
@@ -1232,9 +1305,18 @@ class CodexMemoryManager:
     ) -> None:
         if not models:
             return
+        if type(memory_required) is not int or memory_required < 0:
+            raise MemoryLoadError(
+                f"memory_required must be an exact non-negative int, got {memory_required!r}."
+            )
+        if type(hard_memory_preservation) is not int or hard_memory_preservation < 0:
+            raise MemoryLoadError(
+                "hard_memory_preservation must be an exact non-negative int, "
+                f"got {hard_memory_preservation!r}."
+            )
 
         execution_start = time.perf_counter()
-        memory_budget = max(self.minimum_inference_memory(), memory_required) + hard_memory_preservation
+        inference_reserve = max(self.minimum_inference_memory(), memory_required)
         models_to_load: List[_LoadedModelRecord] = []
         already_loaded: List[_LoadedModelRecord] = []
         memory_debug_enabled = self._memory_debug_enabled()
@@ -1265,7 +1347,12 @@ class CodexMemoryManager:
             models_to_load.append(candidate)
 
         if models_to_load:
-            self._allocate_memory(models_to_load, memory_budget, already_loaded)
+            self._allocate_memory(
+                models_to_load,
+                inference_reserve,
+                hard_memory_preservation,
+                already_loaded,
+            )
             loaded_this_call: List[_LoadedModelRecord] = []
             current: _LoadedModelRecord | None = None
             try:
@@ -1294,7 +1381,11 @@ class CodexMemoryManager:
                     ) from exc
                 raise
         else:
-            self._cleanup_for_loaded_models(already_loaded, memory_budget)
+            self._cleanup_for_loaded_models(
+                already_loaded,
+                inference_reserve,
+                hard_memory_preservation,
+            )
 
         elapsed = time.perf_counter() - execution_start
         logger.info("Model load completed (%d new, %d existing) in %.2fs.", len(models_to_load), len(already_loaded), elapsed)
@@ -1303,6 +1394,8 @@ class CodexMemoryManager:
         self,
         model: object,
         *,
+        memory_required: int = 0,
+        hard_memory_preservation: int = 0,
         source: str = "runtime.memory.manager.load_model",
         stage: str | None = None,
         component_hint: str | None = None,
@@ -1310,6 +1403,8 @@ class CodexMemoryManager:
     ) -> None:
         self.load_models(
             [model],
+            memory_required=memory_required,
+            hard_memory_preservation=hard_memory_preservation,
             source=source,
             stage=stage,
             component_hint=component_hint,
@@ -1326,6 +1421,7 @@ class CodexMemoryManager:
     ) -> None:
         device = device or self._primary_device
         keep_loaded = keep_loaded or ()
+
         def _targets_requested_device(record: _LoadedModelRecord) -> bool:
             if record.load_device.type != device.type:
                 return False
@@ -1340,18 +1436,27 @@ class CodexMemoryManager:
         ]
         released = 0
 
+        if not free_all and int(self.get_free_memory(device)) >= memory_required:
+            logger.debug("Memory target already satisfied on %s (required=%d).", device, memory_required)
+            return
+
         for record in release_candidates:
+            releasable_bytes = record.exclusive_memory
+            if record.residency_mode is ResidencyMode.STREAMED:
+                releasable_bytes = self._verify_streamed_snapshot(record).current_device_bytes
             self._unload_record(record, avoid_model_moving=free_all, reason="free_memory")
             self._remove_loaded_record(
                 record,
                 reason="free_memory",
                 verify_model_absent=False,
             )
-            released += record.exclusive_memory
-            if not free_all and released >= memory_required:
+            released += releasable_bytes
+            if device.type == DeviceBackend.CUDA.value:
+                torch.cuda.empty_cache()
+            if not free_all and int(self.get_free_memory(device)) >= memory_required:
                 break
 
-        if device.type == DeviceBackend.CUDA.value:
+        if device.type == DeviceBackend.CUDA.value and not release_candidates:
             torch.cuda.empty_cache()
         logger.debug("Freed %d bytes on %s (required=%d).", released, device, memory_required)
 
@@ -1403,6 +1508,74 @@ class CodexMemoryManager:
         if module is not None:
             return module.__class__.__name__
         return type(record.model).__name__
+
+    @staticmethod
+    def _require_streamed_runtime(record: _LoadedModelRecord) -> tuple[StreamedCoreRuntime, StreamedFootprint]:
+        runtime = record.streamed_runtime
+        footprint = record.streamed_footprint
+        if record.residency_mode is not ResidencyMode.STREAMED or runtime is None or footprint is None:
+            raise MemoryLoadError(
+                f"Streamed residency record is incomplete for {CodexMemoryManager._record_label(record)}."
+            )
+        return runtime, footprint
+
+    def _verify_streamed_snapshot(
+        self,
+        record: _LoadedModelRecord,
+        *,
+        expected_phase: StreamedResidencyPhase | None = None,
+    ) -> StreamedResidencySnapshot:
+        runtime, footprint = self._require_streamed_runtime(record)
+        snapshot = runtime.verify_residency()
+        if not isinstance(snapshot, StreamedResidencySnapshot):
+            raise MemoryLoadError(
+                f"Streamed runtime for {self._record_label(record)} returned "
+                f"{type(snapshot).__name__} instead of StreamedResidencySnapshot."
+            )
+        if snapshot.storage_device != record.offload_device:
+            raise MemoryLoadError(
+                f"Streamed runtime for {self._record_label(record)} reported storage_device="
+                f"{snapshot.storage_device}, expected {record.offload_device}."
+            )
+        if snapshot.compute_device != record.load_device:
+            raise MemoryLoadError(
+                f"Streamed runtime for {self._record_label(record)} reported compute_device="
+                f"{snapshot.compute_device}, expected {record.load_device}."
+            )
+        if expected_phase is not None and snapshot.phase is not expected_phase:
+            raise MemoryLoadError(
+                f"Streamed runtime for {self._record_label(record)} reported phase="
+                f"{snapshot.phase.value}, expected {expected_phase.value}."
+            )
+        resident_count = len(snapshot.resident_segment_indices)
+        if resident_count > footprint.max_resident_segments:
+            raise MemoryLoadError(
+                f"Streamed runtime for {self._record_label(record)} exceeds its resident segment limit: "
+                f"resident={resident_count}, maximum={footprint.max_resident_segments}."
+            )
+        if snapshot.resident_segment_bytes > footprint.max_segment_bytes * resident_count:
+            raise MemoryLoadError(
+                f"Streamed runtime for {self._record_label(record)} exceeds its segment byte contract: "
+                f"resident_bytes={snapshot.resident_segment_bytes}, resident_count={resident_count}, "
+                f"max_segment_bytes={footprint.max_segment_bytes}."
+            )
+        if snapshot.phase is not StreamedResidencyPhase.OFFLOADED:
+            if snapshot.static_resident_bytes != footprint.static_device_bytes:
+                raise MemoryLoadError(
+                    f"Streamed runtime for {self._record_label(record)} reported static_resident_bytes="
+                    f"{snapshot.static_resident_bytes}, expected {footprint.static_device_bytes}."
+                )
+            packed_limit = (
+                footprint.static_device_bytes
+                + (footprint.max_segment_bytes * footprint.max_resident_segments)
+            )
+            if snapshot.current_device_bytes > packed_limit:
+                raise MemoryLoadError(
+                    f"Streamed runtime for {self._record_label(record)} exceeds its packed device limit: "
+                    f"current={snapshot.current_device_bytes}, limit={packed_limit}."
+                )
+        record.last_streamed_snapshot = snapshot
+        return snapshot
 
     @staticmethod
     def _bytes_to_mib(value: int) -> float:
@@ -1520,6 +1693,13 @@ class CodexMemoryManager:
                 f"Post-unload residency verification failed for {self._record_label(record)}: "
                 "record is still marked accelerated."
             )
+
+        if record.residency_mode is ResidencyMode.STREAMED:
+            self._verify_streamed_snapshot(
+                record,
+                expected_phase=StreamedResidencyPhase.OFFLOADED,
+            )
+            return
 
         if avoid_model_moving:
             return
@@ -1644,14 +1824,52 @@ class CodexMemoryManager:
         if not callable(storage_dtype_getter):
             storage_dtype_getter = getattr(model, "model_dtype", None)
         storage_dtype = storage_dtype_getter() if callable(storage_dtype_getter) else torch.float32
-        return _LoadedModelRecord(
+        raw_residency_mode = getattr(load_device_source, "residency_mode", ResidencyMode.FULL)
+        if not isinstance(raw_residency_mode, ResidencyMode):
+            raise MemoryLoadError(
+                f"Invalid residency_mode for {type(model).__name__}: {raw_residency_mode!r}."
+            )
+        raw_streamed_runtime = getattr(load_device_source, "streamed_core_runtime", None)
+        streamed_runtime: StreamedCoreRuntime | None = None
+        streamed_footprint: StreamedFootprint | None = None
+        if raw_streamed_runtime is not None:
+            if not isinstance(raw_streamed_runtime, StreamedCoreRuntime):
+                raise MemoryLoadError(
+                    f"Invalid streamed_core_runtime for {type(model).__name__}: "
+                    f"{type(raw_streamed_runtime).__name__}."
+                )
+            if raw_residency_mode is not ResidencyMode.STREAMED:
+                raise MemoryLoadError(
+                    f"{type(model).__name__} exposes a streamed runtime but residency_mode="
+                    f"{raw_residency_mode.value}."
+                )
+            streamed_runtime = raw_streamed_runtime
+            streamed_footprint = streamed_runtime.footprint
+            if not isinstance(streamed_footprint, StreamedFootprint):
+                raise MemoryLoadError(
+                    f"Invalid streamed footprint for {type(model).__name__}: "
+                    f"{type(streamed_footprint).__name__}."
+                )
+        elif raw_residency_mode is ResidencyMode.STREAMED:
+            raise MemoryLoadError(
+                f"{type(model).__name__} declares streamed residency without a streamed runtime."
+            )
+
+        record = _LoadedModelRecord(
             model=model,
             loader=loader,
             base_module=base_module,
             load_device=load_device,
             offload_device=offload_device,
             storage_dtype=storage_dtype,
+            residency_mode=raw_residency_mode,
+            streamed_runtime=streamed_runtime,
+            streamed_footprint=streamed_footprint,
         )
+        if streamed_footprint is not None:
+            record.inclusive_memory = streamed_footprint.total_host_bytes
+            record.exclusive_memory = streamed_footprint.peak_device_bytes
+        return record
 
     @staticmethod
     def _module_compute_dtype(module: torch.nn.Module, *, fallback: torch.dtype | None = None) -> torch.dtype | None:
@@ -1706,10 +1924,17 @@ class CodexMemoryManager:
         memory_debug_enabled = self._memory_debug_enabled()
 
         if memory_debug_enabled:
-            module_size_bytes = self.module_size(module)
+            if record.residency_mode is ResidencyMode.STREAMED:
+                _, streamed_footprint = self._require_streamed_runtime(record)
+                module_size_bytes = streamed_footprint.total_host_bytes
+            else:
+                module_size_bytes = self.module_size(module)
             logger.info(
-                "[memory-debug] _load_record: module=%s size=%.2f GB target_device=%s",
-                target_name, module_size_bytes / 1e9, record.load_device,
+                "[memory-debug] _load_record: module=%s mode=%s host_size=%.2f GB target_device=%s",
+                target_name,
+                record.residency_mode.value,
+                module_size_bytes / 1e9,
+                record.load_device,
             )
 
             try:
@@ -1752,10 +1977,25 @@ class CodexMemoryManager:
                 if memory_debug_enabled:
                     logger.info("[memory-debug] calling codex_patch_model(%s)", record.load_device)
                 loader.codex_patch_model(record.load_device)
-            if hasattr(loader, "current_device"):
+            elif record.residency_mode is ResidencyMode.STREAMED:
+                raise MemoryLoadError(
+                    f"Streamed model {target_name} requires a loader with codex_patch_model(...)."
+                )
+            if record.residency_mode is ResidencyMode.FULL and hasattr(loader, "current_device"):
                 setattr(loader, "current_device", record.load_device)
-            record.inclusive_memory = self.module_size(module)
-            record.exclusive_memory = record.inclusive_memory
+            if record.residency_mode is ResidencyMode.STREAMED:
+                _, streamed_footprint = self._require_streamed_runtime(record)
+                streamed_snapshot = self._verify_streamed_snapshot(
+                    record,
+                    expected_phase=StreamedResidencyPhase.READY,
+                )
+                record.inclusive_memory = streamed_footprint.total_host_bytes
+                record.exclusive_memory = streamed_footprint.peak_device_bytes
+            else:
+                streamed_footprint = None
+                streamed_snapshot = None
+                record.inclusive_memory = self.module_size(module)
+                record.exclusive_memory = record.inclusive_memory
             record.model_accelerated = True
             if memory_debug_enabled and self._primary_device.type == DeviceBackend.CUDA.value:
                 free_bytes, _ = torch.cuda.mem_get_info(self._primary_device)
@@ -1811,14 +2051,32 @@ class CodexMemoryManager:
                         record.load_telemetry_device,
                     )
 
-            logger.info(
-                "[memory] loaded %s to device=%s storage=%s compute=%s mem=%d",
-                target_name,
-                record.load_device,
-                record.storage_dtype,
-                compute_dtype,
-                record.inclusive_memory,
-            )
+            if streamed_footprint is not None and streamed_snapshot is not None:
+                logger.info(
+                    "[memory] loaded %s mode=%s storage_device=%s compute_device=%s "
+                    "storage_dtype=%s compute_dtype=%s host_bytes=%d peak_device_bytes=%d "
+                    "current_device_bytes=%d phase=%s",
+                    target_name,
+                    record.residency_mode.value,
+                    streamed_snapshot.storage_device,
+                    streamed_snapshot.compute_device,
+                    record.storage_dtype,
+                    compute_dtype,
+                    streamed_footprint.total_host_bytes,
+                    streamed_footprint.peak_device_bytes,
+                    streamed_snapshot.current_device_bytes,
+                    streamed_snapshot.phase.value,
+                )
+            else:
+                logger.info(
+                    "[memory] loaded %s mode=%s device=%s storage=%s compute=%s mem=%d",
+                    target_name,
+                    record.residency_mode.value,
+                    record.load_device,
+                    record.storage_dtype,
+                    compute_dtype,
+                    record.inclusive_memory,
+                )
             if smart_offload_enabled():
                 action_memory_after = self._smart_offload_memory_fields(prefix="memory_after")
                 log_smart_offload_action(
@@ -1883,6 +2141,9 @@ class CodexMemoryManager:
                 record.offload_device = target_device
             if hasattr(loader, "codex_unpatch_model"):
                 loader.codex_unpatch_model(target_device)
+            elif record.residency_mode is ResidencyMode.STREAMED:
+                streamed_runtime, _ = self._require_streamed_runtime(record)
+                streamed_runtime.offload_all()
             elif hasattr(loader, "to") and not avoid_model_moving:
                 loader.to(target_device)
             record.model_accelerated = False
@@ -1894,7 +2155,12 @@ class CodexMemoryManager:
                 target_device=target_device,
                 avoid_model_moving=avoid_model_moving,
             )
-            logger.debug("Unloaded model %s (avoid_move=%s).", record.model, avoid_model_moving)
+            logger.debug(
+                "Unloaded model %s mode=%s (avoid_move=%s).",
+                record.model,
+                record.residency_mode.value,
+                avoid_model_moving,
+            )
             if smart_offload_enabled():
                 action_memory_after = self._smart_offload_memory_fields(prefix="memory_after")
                 log_smart_offload_action(
@@ -1916,15 +2182,59 @@ class CodexMemoryManager:
                 f"(avoid_model_moving={avoid_model_moving}, target_device={target_device}): {exc}"
             ) from exc
 
-    def _cleanup_for_loaded_models(self, records: Sequence[_LoadedModelRecord], memory_budget: int) -> None:
+    def _ensure_device_admission(
+        self,
+        *,
+        device: torch.device,
+        model_requirement_bytes: int,
+        inference_reserve_bytes: int,
+        hard_memory_preservation_bytes: int,
+        keep_loaded: Sequence[_LoadedModelRecord],
+    ) -> None:
+        total_required_bytes = (
+            model_requirement_bytes
+            + inference_reserve_bytes
+            + hard_memory_preservation_bytes
+        )
+        self.free_memory(
+            total_required_bytes,
+            device=device,
+            keep_loaded=keep_loaded,
+        )
+        if device.type == DeviceBackend.CPU.value:
+            return
+        free_bytes = int(self.get_free_memory(device))
+        if free_bytes < total_required_bytes:
+            raise MemoryLoadError(
+                "Insufficient device memory after eviction: "
+                f"device={device}, free_bytes={free_bytes}, "
+                f"model_requirement_bytes={model_requirement_bytes}, "
+                f"inference_reserve_bytes={inference_reserve_bytes}, "
+                f"hard_memory_preservation_bytes={hard_memory_preservation_bytes}, "
+                f"total_required_bytes={total_required_bytes}."
+            )
+
+    def _cleanup_for_loaded_models(
+        self,
+        records: Sequence[_LoadedModelRecord],
+        inference_reserve_bytes: int,
+        hard_memory_preservation_bytes: int,
+    ) -> None:
         devices = {record.load_device for record in records if record.load_device.type != DeviceBackend.CPU.value}
         for device in devices:
-            self.free_memory(memory_budget, device=device, keep_loaded=records)
+            self._ensure_device_admission(
+                device=device,
+                model_requirement_bytes=0,
+                inference_reserve_bytes=inference_reserve_bytes,
+                hard_memory_preservation_bytes=hard_memory_preservation_bytes,
+                keep_loaded=records,
+            )
 
     def _allocate_memory(
         self,
         records: Sequence[_LoadedModelRecord],
-        memory_budget: int,
+        inference_reserve_bytes: int,
+        hard_memory_preservation_bytes: int,
         already_loaded: Sequence[_LoadedModelRecord],
     ) -> None:
         total_required: dict[torch.device, int] = {}
@@ -1935,13 +2245,25 @@ class CodexMemoryManager:
                     f"Unable to resolve module for {type(record.model).__name__} while allocating memory."
                 )
             record.base_module = module
-            record.inclusive_memory = self.module_size(module)
-            record.exclusive_memory = record.inclusive_memory
-            total_required[record.load_device] = total_required.get(record.load_device, 0) + record.inclusive_memory
+            if record.residency_mode is ResidencyMode.STREAMED:
+                _, footprint = self._require_streamed_runtime(record)
+                record.inclusive_memory = footprint.total_host_bytes
+                record.exclusive_memory = footprint.peak_device_bytes
+                device_requirement = footprint.peak_device_bytes
+            else:
+                record.inclusive_memory = self.module_size(module)
+                record.exclusive_memory = record.inclusive_memory
+                device_requirement = record.inclusive_memory
+            total_required[record.load_device] = total_required.get(record.load_device, 0) + device_requirement
 
         for device, requirement in total_required.items():
-            target = requirement + memory_budget
-            self.free_memory(target, device=device, keep_loaded=already_loaded)
+            self._ensure_device_admission(
+                device=device,
+                model_requirement_bytes=requirement,
+                inference_reserve_bytes=inference_reserve_bytes,
+                hard_memory_preservation_bytes=hard_memory_preservation_bytes,
+                keep_loaded=already_loaded,
+            )
 
     # --------------------------------------------------------------------- factory
     @classmethod

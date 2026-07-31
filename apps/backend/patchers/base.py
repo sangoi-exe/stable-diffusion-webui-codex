@@ -6,9 +6,9 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Core patcher primitives (model options hooks + LoRA patch registry + object patching + ModelPatcher wrapper).
+Purpose: Core patcher primitives (model options hooks + LoRA patch registry + object patching + full/streamed ModelPatcher residency bridge).
 Provides the shared patch/registry structures that engines use to apply LoRA patches, inject CFG/UNet/VAE wrappers, and manage
-device placement and smart offload interactions.
+device placement, explicit streamed-core residency, and smart offload interactions.
 Host-memory pinning during smart-offload CPU unpatch now also emits canonical INFO audit events via `backend.smart_offload`.
 That audit event is tagged through the canonical `SmartOffloadAction.PIN_HOST_MEMORY` enum action.
 
@@ -21,8 +21,8 @@ Symbols (top-level; keep in sync; no ghosts):
 - `_coerce_patch_replace_block` (function): Validates and normalizes a patch-replace block key tuple before registration.
 - `set_model_options_post_cfg_function` (function): Registers a post-CFG callback in model options.
 - `set_model_options_pre_cfg_function` (function): Registers a pre-CFG callback in model options.
-- `ModelPatcher` (class): Main patcher wrapper around a model; owns LoRA/object patch registries and exposes many methods to
-  register wrappers/patches (CFG hooks, attention patches, VAE wrappers) and apply/unapply them with memory-management integration.
+- `ModelPatcher` (class): Main patcher wrapper around a model; owns LoRA/object patch registries, optional typed streamed-core
+  runtime registration, wrapper/patch hooks, and full-versus-streamed apply/unapply integration with the memory manager.
 """
 
 from __future__ import annotations
@@ -34,9 +34,17 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Tuple
 
+import torch
+
 from apps.backend.runtime import trace as _trace
 from apps.backend.runtime import utils
 from apps.backend.runtime.memory import memory_management
+from apps.backend.runtime.memory.streamed_residency import (
+    ResidencyMode,
+    StreamedCoreRuntime,
+    StreamedFootprint,
+    StreamedResidencyPhase,
+)
 from apps.backend.runtime.memory.smart_offload import (
     SmartOffloadAction,
     log_smart_offload_action,
@@ -245,6 +253,7 @@ class ModelPatcher:
         self._lora_registry = LoraPatchRegistry()
         self._object_registry = ObjectPatchRegistry()
         self._model_options: Dict[str, Any] = {"transformer_options": {}}
+        self._streamed_core_runtime: StreamedCoreRuntime | None = None
         self.patches: Dict[str, List[Any]] = {}
         self.model_size()
         self.load_device = load_device
@@ -294,6 +303,32 @@ class ModelPatcher:
             value = {**value, "transformer_options": {}}
         self._model_options = copy.deepcopy(value)
 
+    @property
+    def streamed_core_runtime(self) -> StreamedCoreRuntime | None:
+        return self._streamed_core_runtime
+
+    @property
+    def residency_mode(self) -> ResidencyMode:
+        if self._streamed_core_runtime is None:
+            return ResidencyMode.FULL
+        return ResidencyMode.STREAMED
+
+    def set_streamed_core_runtime(self, runtime: StreamedCoreRuntime) -> None:
+        if not isinstance(runtime, StreamedCoreRuntime):
+            raise TypeError(
+                "streamed core runtime must implement StreamedCoreRuntime, "
+                f"got {type(runtime).__name__}."
+            )
+        footprint = runtime.footprint
+        if not isinstance(footprint, StreamedFootprint):
+            raise TypeError(
+                "streamed core runtime footprint must be StreamedFootprint, "
+                f"got {type(footprint).__name__}."
+            )
+        if self._streamed_core_runtime is not None and self._streamed_core_runtime is not runtime:
+            raise RuntimeError("ModelPatcher already owns a different streamed core runtime.")
+        self._streamed_core_runtime = runtime
+
     def model_size(self):
         if self.size > 0:
             return self.size
@@ -307,6 +342,8 @@ class ModelPatcher:
         clone._model_options = copy.deepcopy(self._model_options)
         clone.lora_loader = self.lora_loader
         clone.patches = copy.deepcopy(self.patches)
+        if self._streamed_core_runtime is not None:
+            clone.set_streamed_core_runtime(self._streamed_core_runtime)
         logger.debug("Cloned ModelPatcher %s -> %s", id(self), id(clone))
         return clone
 
@@ -550,6 +587,36 @@ class ModelPatcher:
         self._object_registry.apply_to_model(self.model)
 
         if target_device is not None:
+            if self._streamed_core_runtime is not None:
+                storage_device = torch.device(self.offload_device)
+                compute_device = torch.device(target_device)
+                snapshot = self._streamed_core_runtime.prepare_streamed_residency(
+                    storage_device=storage_device,
+                    compute_device=compute_device,
+                )
+                if snapshot.phase is not StreamedResidencyPhase.READY:
+                    raise RuntimeError(
+                        "Streamed core prepare must finish in READY phase, "
+                        f"got {snapshot.phase.value}."
+                    )
+                if snapshot.storage_device != storage_device:
+                    raise RuntimeError(
+                        "Streamed core prepare reported the wrong storage device: "
+                        f"expected={storage_device}, observed={snapshot.storage_device}."
+                    )
+                if snapshot.compute_device != compute_device:
+                    raise RuntimeError(
+                        "Streamed core prepare reported the wrong compute device: "
+                        f"expected={compute_device}, observed={snapshot.compute_device}."
+                    )
+                self.current_device = snapshot.storage_device
+                logger.debug(
+                    "Prepared streamed model residency storage=%s compute=%s current_device_bytes=%d",
+                    snapshot.storage_device,
+                    snapshot.compute_device,
+                    snapshot.current_device_bytes,
+                )
+                return self.model
             try:
                 # Prefer non_blocking=True to leverage pinned host buffers
                 self.model.to(target_device, non_blocking=True)
@@ -561,6 +628,28 @@ class ModelPatcher:
         return self.model
 
     def codex_unpatch_model(self, target_device=None):
+        if self._streamed_core_runtime is not None:
+            self._streamed_core_runtime.offload_all()
+            snapshot = self._streamed_core_runtime.verify_residency()
+            if snapshot.phase is not StreamedResidencyPhase.OFFLOADED:
+                raise RuntimeError(
+                    "Streamed core unpatch must finish in OFFLOADED phase, "
+                    f"got {snapshot.phase.value}."
+                )
+            if target_device is not None and snapshot.storage_device != torch.device(target_device):
+                raise RuntimeError(
+                    "Streamed core unpatch reported the wrong storage device: "
+                    f"expected={torch.device(target_device)}, observed={snapshot.storage_device}."
+                )
+            self.current_device = snapshot.storage_device
+            self._object_registry.restore(self.model)
+            logger.debug(
+                "Offloaded streamed model residency storage=%s compute=%s",
+                snapshot.storage_device,
+                snapshot.compute_device,
+            )
+            return
+
         if target_device is not None:
             self.model.to(target_device)
             self.current_device = target_device

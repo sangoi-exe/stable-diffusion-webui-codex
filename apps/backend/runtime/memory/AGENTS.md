@@ -1,6 +1,6 @@
 # apps/backend/runtime/memory Overview
 Date: 2025-10-28
-Last Review: 2026-05-18
+Last Review: 2026-07-31
 Status: Active
 
 ## Purpose
@@ -8,6 +8,7 @@ Status: Active
 
 ## Notes
 - `manager.py` hosts `CodexMemoryManager`; `memory_management.py` exposes the active singleton as `memory_management.manager` (call sites should use manager methods/properties directly).
+- `streamed_residency.py` owns the generic typed footprint, phase, snapshot, and runtime protocol for cores that keep host payloads offloaded while bounded segments execute on a compute device.
 - `config.py` defines typed configuration (devices, swap policies, attention backends). Update both docs and `apps/backend/infra/config/args.py` when adding new options.
 - Keep policy changes centralized here to ensure consistent behaviour across tasks (engines, patchers, workflows).
 - 2026-01-24: Attention backend can be switched at runtime via `memory_management.set_attention_backend(...)` (used by `POST /api/options` key `codex_attention_backend`); the attention dispatcher is runtime-config-driven (no import-time binding).
@@ -36,5 +37,6 @@ Status: Active
 - 2026-02-22: `CodexMemoryManager._unload_record(...)` now honors `avoid_model_moving=True` for patcher-backed loaders by calling `codex_unpatch_model(None)` (no device migration). This avoids cleanup-time GPU→CPU moves in unload-all paths after runtime OOM boundaries.
 - 2026-02-22: `CodexMemoryManager.unload_model(...)` and `soft_empty_cache(...)` now suppress `torch.cuda.empty_cache()` exceptions (including CUDA OOM in poisoned contexts) at debug level, preventing cleanup-only cache calls from cascading into secondary hard failures.
 - 2026-05-18: `CodexMemoryManager` exposes additive nullable per-item telemetry fields under `memory_snapshot()['models']`; expensive `[memory-debug]` load diagnostics and per-load counter probes are opt-in via `CODEX_MEMORY_DEBUG=1` or DEBUG logging. Debug-disabled loads keep required allocation accounting and stable snapshot keys, but optional per-load counter values may remain `None`.
+- 2026-07-31: `CodexMemoryManager` recognizes explicit streamed residency before patch/load, admits streamed records against `peak_device_bytes` plus caller inference/hard reserves instead of total host payload, verifies READY/OFFLOADED through the runtime, and reports full device strings plus streamed footprint/phase/segment bytes in `memory_snapshot()`.
 - 2026-02-23: Device memory counter reads were consolidated in `CodexMemoryManager._read_device_memory_counters_bytes(...)` and reused by `memory_snapshot()` and `_smart_offload_memory_fields(...)` to avoid backend-branch drift (CUDA/XPU/MPS best-effort).
 - 2026-03-30: Patch modules must follow the live module computation lane when a loader exposes `model_patches_to(...)`. Device moves still target `load_device`, but dtype moves must use the module `computation_dtype` when available instead of blindly recasting patches to storage dtype.

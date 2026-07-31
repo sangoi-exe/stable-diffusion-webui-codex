@@ -1,13 +1,13 @@
 # apps/backend/patchers Overview
 Date: 2025-10-30
-Last Review: 2026-07-30
+Last Review: 2026-07-31
 Status: Active
 
 ## Purpose
 - Hosts runtime patching utilities (LoRA injection, adapter application) that modify networks or inference behavior after models are loaded.
 
 ## Key Files
-- `base.py` — Core `ModelPatcher` with typed registries (LoRA/object patches) and lifecycle hooks.
+- `base.py` — Core `ModelPatcher` with typed registries (LoRA/object patches), explicit streamed-core runtime registration, and full/streamed lifecycle hooks.
 - `lora.py` — Public LoRA facade (re-exports loader/merge/state-dict helpers).
 - `lora_loader.py` — `CodexLoraLoader` transactional applier (backups, GGUF re-quantization, tqdm progress).
 - `lora_merge.py` — Variant-aware weight merge helpers (diff/set/lora/loha/lokr/glora) with strict validation.
@@ -23,6 +23,7 @@ Status: Active
 - Patchers should operate on runtime objects provided by `runtime/` and `engines/` without duplicating loading logic.
 - 2026-07-30: encode outputs that expose both an explicit tensor-valued `latents` field and `latent_dist` use the explicit owner-produced tensor; the generic wrapper must not sample the posterior again or undo owner-controlled rank regulation.
 - 2026-07-30: `VAE` resolves native 3D autoencoder geometry from `scale_factor_spatial` and `z_dim` when diffusers-style `down_block_types` and `latent_channels` are absent; missing or invalid geometry remains fail-loud.
+- 2026-07-31: `ModelPatcher` clones preserve the same registered streamed runtime; streamed patch/unpatch delegates residency to that runtime, keeps `current_device` storage-oriented, and never invokes root `.to(...)` or whole-model pinning.
 - 2026-03-22: `vae.py` encode paths now accept optional `encode_seed` and build a device-local posterior generator for diffusers-style `latent_dist.sample(...)`; regular, tiled, regular->tiled retry, and CPU-fallback encode paths must all recreate generators from the same seed when they restart full-image work, and seeded posterior sampling failures must fail loud instead of silently degrading to mean latents.
 - LoRA merges are transactional: loaders snapshot parameters, track deterministic patch order, surface tqdm progress, and raise on any mismatched tensor metadata.
 - When introducing new patch behaviour, add explicit configuration flags/options and document them in `.sangoi/backend/`.
