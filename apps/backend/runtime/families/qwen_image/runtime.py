@@ -8,7 +8,7 @@ Required Notice: see NOTICE
 
 Purpose: Native Qwen Image Edit-2511 single-image component runtime.
 Owns condition/reference preprocessing, multimodal prompt encoding, FlowMatch Euler denoising, final VAE decode,
-canonical stage-exclusive patcher lifecycle, streamed-core memory admission, and primary-stage exception preservation
+atomic stage-exclusive patcher lifecycle, streamed-core memory admission, and primary-stage exception preservation
 while delegating tensor contracts and latent math to `runtime_latents.py`.
 
 Symbols (top-level; keep in sync; no ghosts):
@@ -18,6 +18,7 @@ Symbols (top-level; keep in sync; no ghosts):
 from __future__ import annotations
 
 import math
+import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -275,19 +276,24 @@ class QwenImageRuntime:
         self.vae: VAE = assembly.vae
         self.vae_config: QwenImageVaeConfig = assembly.vae_config
         self.scheduler_config = assembly.scheduler_config
+        self._component_stage_lock = threading.RLock()
 
-    def _require_stage_exclusivity(
+    @contextmanager
+    def _component_stage_lease(
         self,
         *,
         stage: str,
         forbidden: Sequence[tuple[str, object]],
-    ) -> None:
-        resident = [label for label, target in forbidden if memory_management.manager.is_model_loaded(target)]
-        if resident:
-            raise RuntimeError(
-                f"Qwen Image stage {stage!r} requires exclusive component residency; "
-                f"still_loaded={resident}."
-            )
+    ) -> Iterator[None]:
+        with self._component_stage_lock:
+            resident = [label for label, target in forbidden if memory_management.manager.is_model_loaded(target)]
+            if resident:
+                raise RuntimeError(
+                    f"Qwen Image stage {stage!r} requires exclusive component residency; "
+                    f"still_loaded={resident}."
+                )
+            self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=stage)
+            yield
 
     def _require_streamed_phase(
         self,
@@ -362,11 +368,6 @@ class QwenImageRuntime:
             raise TypeError(
                 f"Qwen Image condition image must be a PIL.Image.Image; got {type(image).__name__}."
             )
-        self._require_stage_exclusivity(
-            stage=_CONDITIONING_STAGE,
-            forbidden=(("vae", self.vae.patcher), ("denoiser", self.denoiser)),
-        )
-        self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=_CONDITIONING_STAGE)
         condition_width, condition_height = qwen_image_edit_condition_dimensions(*image.size)
         condition_image = _resized_rgb_image(
             image,
@@ -386,11 +387,17 @@ class QwenImageRuntime:
         )
 
         try:
-            with _managed_component_stage(
-                self.text_encoder_patcher,
-                source=_CONDITIONING_SOURCE,
-                stage=_CONDITIONING_STAGE,
-                component_hint=_CONDITIONING_COMPONENT,
+            with (
+                self._component_stage_lease(
+                    stage=_CONDITIONING_STAGE,
+                    forbidden=(("vae", self.vae.patcher), ("denoiser", self.denoiser)),
+                ),
+                _managed_component_stage(
+                    self.text_encoder_patcher,
+                    source=_CONDITIONING_SOURCE,
+                    stage=_CONDITIONING_STAGE,
+                    component_hint=_CONDITIONING_COMPONENT,
+                ),
             ):
                 positive_embeddings, positive_mask = _masked_prompt_features(
                     self.text_encoder,
@@ -424,11 +431,6 @@ class QwenImageRuntime:
             raise TypeError(
                 f"Qwen Image VAE reference image must be a PIL.Image.Image; got {type(image).__name__}."
             )
-        self._require_stage_exclusivity(
-            stage=_REFERENCE_STAGE,
-            forbidden=(("text_encoder", self.text_encoder_patcher), ("denoiser", self.denoiser)),
-        )
-        self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=_REFERENCE_STAGE)
         reference_width, reference_height = qwen_image_edit_vae_dimensions(*image.size)
         reference_image = _resized_rgb_image(
             image,
@@ -440,11 +442,17 @@ class QwenImageRuntime:
         grid = qwen_image_latent_grid(reference_width, reference_height)
 
         try:
-            with _managed_component_stage(
-                self.vae.patcher,
-                source=_REFERENCE_SOURCE,
-                stage=_REFERENCE_STAGE,
-                component_hint=_REFERENCE_COMPONENT,
+            with (
+                self._component_stage_lease(
+                    stage=_REFERENCE_STAGE,
+                    forbidden=(("text_encoder", self.text_encoder_patcher), ("denoiser", self.denoiser)),
+                ),
+                _managed_component_stage(
+                    self.vae.patcher,
+                    source=_REFERENCE_SOURCE,
+                    stage=_REFERENCE_STAGE,
+                    component_hint=_REFERENCE_COMPONENT,
+                ),
             ):
                 raw_latents = self.vae.encode(pixels)
                 expected_shape = (
@@ -690,11 +698,6 @@ class QwenImageRuntime:
                 f"got {type(active_noise_settings).__name__}."
             )
 
-        self._require_stage_exclusivity(
-            stage=_DENOISE_STAGE,
-            forbidden=(("text_encoder", self.text_encoder_patcher), ("vae", self.vae.patcher)),
-        )
-        self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=_DENOISE_STAGE)
         memory_budget = self._denoise_memory_budget(
             conditioning=conditioning,
             reference=reference,
@@ -716,13 +719,19 @@ class QwenImageRuntime:
         )
 
         try:
-            with _managed_component_stage(
-                self.denoiser,
-                source=_DENOISE_SOURCE,
-                stage=_DENOISE_STAGE,
-                component_hint=_DENOISE_COMPONENT,
-                memory_required=memory_budget.memory_required,
-                hard_memory_preservation=memory_budget.hard_memory_preservation,
+            with (
+                self._component_stage_lease(
+                    stage=_DENOISE_STAGE,
+                    forbidden=(("text_encoder", self.text_encoder_patcher), ("vae", self.vae.patcher)),
+                ),
+                _managed_component_stage(
+                    self.denoiser,
+                    source=_DENOISE_SOURCE,
+                    stage=_DENOISE_STAGE,
+                    component_hint=_DENOISE_COMPONENT,
+                    memory_required=memory_budget.memory_required,
+                    hard_memory_preservation=memory_budget.hard_memory_preservation,
+                ),
             ):
                 self._require_streamed_phase(StreamedResidencyPhase.READY, stage=_DENOISE_STAGE)
                 packed_cpu = self._run_loaded_denoise(
@@ -756,11 +765,6 @@ class QwenImageRuntime:
             raise TypeError(
                 f"Qwen Image decode input must be QwenImageDenoisedLatents; got {type(denoised).__name__}."
             )
-        self._require_stage_exclusivity(
-            stage=_DECODE_STAGE,
-            forbidden=(("text_encoder", self.text_encoder_patcher), ("denoiser", self.denoiser)),
-        )
-        self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=_DECODE_STAGE)
         unpacked_5d = qwen_image_unpack_latents(denoised.packed_latents, denoised.grid)
         if int(unpacked_5d.shape[2]) != 1:
             raise RuntimeError(
@@ -771,11 +775,17 @@ class QwenImageRuntime:
         denormalized = qwen_image_denormalize_latents(unpacked_4d, self.vae_config)
 
         try:
-            with _managed_component_stage(
-                self.vae.patcher,
-                source=_DECODE_SOURCE,
-                stage=_DECODE_STAGE,
-                component_hint=_DECODE_COMPONENT,
+            with (
+                self._component_stage_lease(
+                    stage=_DECODE_STAGE,
+                    forbidden=(("text_encoder", self.text_encoder_patcher), ("denoiser", self.denoiser)),
+                ),
+                _managed_component_stage(
+                    self.vae.patcher,
+                    source=_DECODE_SOURCE,
+                    stage=_DECODE_STAGE,
+                    component_hint=_DECODE_COMPONENT,
+                ),
             ):
                 decoded = self.vae.decode(denormalized)
                 expected_shape = (1, 3, int(denoised.grid.height), int(denoised.grid.width))

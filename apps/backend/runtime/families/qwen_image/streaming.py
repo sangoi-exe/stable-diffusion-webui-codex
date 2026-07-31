@@ -7,8 +7,9 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Explicit memmap-preserving streamed residency lifecycle for the Qwen Image Edit-2511 transformer core.
-Owns strict activation guards, synchronous static/one-block residency transitions, exact host-object restoration,
-and telemetry; streaming_slots.py owns slot inventory, physical alias validation, and staged tensor construction.
+Owns strict activation guards, the full-transformer execution lease, synchronous static/one-block residency
+transitions, exact host-object restoration, and telemetry; streaming_slots.py owns slot inventory, physical alias
+validation, and staged tensor construction.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageStreamedCoreRuntime` (class): Exact 60-block streamed residency owner for the native Qwen Image transformer.
@@ -342,6 +343,41 @@ class QwenImageStreamedCoreRuntime:
     def verify_residency(self) -> StreamedResidencySnapshot:
         with self._state_lock:
             return self._snapshot_unlocked()
+
+    @contextmanager
+    def transformer_execution_lease(self) -> Iterator[StreamedResidencySnapshot]:
+        with self._execution_lock:
+            with self._state_lock:
+                if self._phase is not StreamedResidencyPhase.READY:
+                    raise RuntimeError(
+                        "Qwen Image transformer execution requires READY streamed residency; "
+                        f"got {self._phase.value}."
+                    )
+                entry_snapshot = self._snapshot_unlocked()
+
+            primary_error: BaseException | None = None
+            try:
+                yield entry_snapshot
+            except BaseException as exc:
+                primary_error = exc
+                raise
+            finally:
+                try:
+                    with self._state_lock:
+                        if self._phase is not StreamedResidencyPhase.READY:
+                            raise RuntimeError(
+                                "Qwen Image transformer execution must finish in READY streamed residency; "
+                                f"got {self._phase.value}."
+                            )
+                        self._snapshot_unlocked()
+                except BaseException as lease_error:
+                    if primary_error is not None:
+                        primary_error.add_note(
+                            "Qwen Image transformer execution lease verification failure: "
+                            f"{type(lease_error).__name__}: {lease_error}"
+                        )
+                    else:
+                        raise
 
     @contextmanager
     def activate_block(self, block_index: int) -> Iterator[None]:

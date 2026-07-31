@@ -9,7 +9,8 @@ Required Notice: see NOTICE
 Purpose: Qwen Image Edit-2511 transformer metadata validation and native streamed runtime model.
 Owns the exact `QwenImageTransformer2DModel` config contract plus the Diffusers-free 60-block implementation whose
 module names bind directly to the native 1,933-key GGUF checkpoint without changing stored tensor names, including
-the shared per-block sampling progress callback and one-block residency context seams.
+the shared per-block sampling progress callback, full-forward streamed execution lease, and one-block residency
+context seams.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageTransformerConfig` (dataclass): Strict metadata contract for `QwenImageTransformer2DModel`.
@@ -27,7 +28,6 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 import torch
 from torch import nn
 
-from apps.backend.runtime.memory.streamed_residency import StreamedResidencyPhase
 from apps.backend.runtime.sampling.block_progress import resolve_block_progress_callback
 
 from .config import (
@@ -269,94 +269,89 @@ class QwenImageTransformer2DModel(nn.Module):
             raise RuntimeError(
                 "Qwen Image Edit-2511 transformer requires its explicit streamed core runtime before forward."
             )
-        residency = streamed_runtime.verify_residency()
-        if residency.phase is not StreamedResidencyPhase.READY:
-            raise RuntimeError(
-                "Qwen Image Edit-2511 transformer forward requires READY streamed residency before any "
-                f"static or block module executes; got {residency.phase.value}."
-            )
-        for tensor_name, tensor in (
-            ("hidden_states", hidden_states),
-            ("encoder_hidden_states", encoder_hidden_states),
-        ):
-            if tensor.device != residency.compute_device:
-                raise RuntimeError(
-                    f"Qwen Image transformer {tensor_name} must be on the streamed compute device "
-                    f"{residency.compute_device}; got {tensor.device}."
-                )
+        with streamed_runtime.transformer_execution_lease() as residency:
+            for tensor_name, tensor in (
+                ("hidden_states", hidden_states),
+                ("encoder_hidden_states", encoder_hidden_states),
+            ):
+                if tensor.device != residency.compute_device:
+                    raise RuntimeError(
+                        f"Qwen Image transformer {tensor_name} must be on the streamed compute device "
+                        f"{residency.compute_device}; got {tensor.device}."
+                    )
 
-        image_hidden_states = self.img_in(hidden_states)
-        timestep = timestep.to(device=image_hidden_states.device, dtype=image_hidden_states.dtype)
-        generated_timestep = timestep
-        if self.zero_cond_t:
-            timestep = torch.cat((generated_timestep, torch.zeros_like(generated_timestep)), dim=0)
-            modulation_rows = [
-                [0] * math.prod(sample_shapes[0])
-                + [1] * sum(math.prod(shape) for shape in sample_shapes[1:])
-                for sample_shapes in normalized_shapes
-            ]
-            modulate_index = torch.tensor(
-                modulation_rows,
-                device=image_hidden_states.device,
-                dtype=torch.int64,
-            )
-        else:
-            modulate_index = None
-
-        text_hidden_states = self.txt_in(self.txt_norm(encoder_hidden_states))
-        text_sequence_length = int(text_hidden_states.shape[1])
-        attention_mask: torch.Tensor | None = None
-        if encoder_hidden_states_mask is not None:
-            if tuple(encoder_hidden_states_mask.shape) != (batch_size, text_sequence_length):
-                raise RuntimeError(
-                    "Qwen Image transformer encoder mask shape mismatch: "
-                    f"got={tuple(encoder_hidden_states_mask.shape)} "
-                    f"expected={(batch_size, text_sequence_length)}."
+            image_hidden_states = self.img_in(hidden_states)
+            timestep = timestep.to(device=image_hidden_states.device, dtype=image_hidden_states.dtype)
+            generated_timestep = timestep
+            if self.zero_cond_t:
+                timestep = torch.cat((generated_timestep, torch.zeros_like(generated_timestep)), dim=0)
+                modulation_rows = [
+                    [0] * math.prod(sample_shapes[0])
+                    + [1] * sum(math.prod(shape) for shape in sample_shapes[1:])
+                    for sample_shapes in normalized_shapes
+                ]
+                modulate_index = torch.tensor(
+                    modulation_rows,
+                    device=image_hidden_states.device,
+                    dtype=torch.int64,
                 )
-            text_mask = encoder_hidden_states_mask.to(
-                device=image_hidden_states.device,
-                dtype=torch.bool,
-            )
-            if not bool(text_mask.all().item()):
-                image_mask = torch.ones(
-                    (batch_size, int(image_hidden_states.shape[1])),
+            else:
+                modulate_index = None
+
+            text_hidden_states = self.txt_in(self.txt_norm(encoder_hidden_states))
+            text_sequence_length = int(text_hidden_states.shape[1])
+            attention_mask: torch.Tensor | None = None
+            if encoder_hidden_states_mask is not None:
+                if tuple(encoder_hidden_states_mask.shape) != (batch_size, text_sequence_length):
+                    raise RuntimeError(
+                        "Qwen Image transformer encoder mask shape mismatch: "
+                        f"got={tuple(encoder_hidden_states_mask.shape)} "
+                        f"expected={(batch_size, text_sequence_length)}."
+                    )
+                text_mask = encoder_hidden_states_mask.to(
                     device=image_hidden_states.device,
                     dtype=torch.bool,
                 )
-                attention_mask = torch.cat((text_mask, image_mask), dim=1)[:, None, None, :]
+                if not bool(text_mask.all().item()):
+                    image_mask = torch.ones(
+                        (batch_size, int(image_hidden_states.shape[1])),
+                        device=image_hidden_states.device,
+                        dtype=torch.bool,
+                    )
+                    attention_mask = torch.cat((text_mask, image_mask), dim=1)[:, None, None, :]
 
-        timestep_embedding = self.time_text_embed(
-            timestep,
-            hidden_dtype=image_hidden_states.dtype,
-        )
-        rotary_embedding = self.pos_embed(
-            normalized_shapes,
-            text_sequence_length=text_sequence_length,
-            device=image_hidden_states.device,
-        )
-        block_progress_callback = resolve_block_progress_callback(transformer_options)
-        total_blocks = int(len(self.transformer_blocks))
-        if block_progress_callback is not None and total_blocks <= 0:
-            raise RuntimeError("Qwen Image transformer block progress requires at least one transformer block.")
-        for block_index, block in enumerate(self.transformer_blocks):
-            if block_progress_callback is not None:
-                block_progress_callback(int(block_index + 1), total_blocks)
-            with streamed_runtime.activate_block(block_index):
-                text_hidden_states, image_hidden_states = block(
-                    image_hidden_states,
-                    text_hidden_states,
-                    timestep_embedding=timestep_embedding,
-                    rotary_embedding=rotary_embedding,
-                    attention_mask=attention_mask,
-                    modulate_index=modulate_index,
-                )
+            timestep_embedding = self.time_text_embed(
+                timestep,
+                hidden_dtype=image_hidden_states.dtype,
+            )
+            rotary_embedding = self.pos_embed(
+                normalized_shapes,
+                text_sequence_length=text_sequence_length,
+                device=image_hidden_states.device,
+            )
+            block_progress_callback = resolve_block_progress_callback(transformer_options)
+            total_blocks = int(len(self.transformer_blocks))
+            if block_progress_callback is not None and total_blocks <= 0:
+                raise RuntimeError("Qwen Image transformer block progress requires at least one transformer block.")
+            for block_index, block in enumerate(self.transformer_blocks):
+                if block_progress_callback is not None:
+                    block_progress_callback(int(block_index + 1), total_blocks)
+                with streamed_runtime.activate_block(block_index):
+                    text_hidden_states, image_hidden_states = block(
+                        image_hidden_states,
+                        text_hidden_states,
+                        timestep_embedding=timestep_embedding,
+                        rotary_embedding=rotary_embedding,
+                        attention_mask=attention_mask,
+                        modulate_index=modulate_index,
+                    )
 
-        if self.zero_cond_t:
-            timestep_embedding = timestep_embedding.chunk(2, dim=0)[0]
-        output = self.proj_out(self.norm_out(image_hidden_states, timestep_embedding))
-        if not return_dict:
-            return (output,)
-        return QwenImageTransformerOutput(sample=output)
+            if self.zero_cond_t:
+                timestep_embedding = timestep_embedding.chunk(2, dim=0)[0]
+            output = self.proj_out(self.norm_out(image_hidden_states, timestep_embedding))
+            if not return_dict:
+                return (output,)
+            return QwenImageTransformerOutput(sample=output)
 
 
 def _int_tuple(values: object, *, field: str, context: str) -> tuple[int, ...]:

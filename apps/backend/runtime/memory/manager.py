@@ -15,6 +15,8 @@ Smart-offload action payloads include best-effort memory windows (`memory_before
 `unload_model(...)` now treats manager-level `offload_device` as authoritative and fail-loud: explicit unload must route to the configured offload target (no legacy CPU-force override path).
 Generic smart-offload action emission (`load`/`unload`/`unload_noop`) is centralized here, with optional caller context fields (`source`/`stage`/`component_hint`/`event_reason`).
 Per-item load telemetry keys remain exposed in `memory_snapshot()['models']`; expensive per-load counter probes are captured only when memory-debug diagnostics are enabled.
+Partial-load rollback covers `BaseException`, preserves the primary failure, physically unloads every attempted record,
+and unregisters only records already present in the residency registry.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `_PrecisionState` (dataclass): Internal precision selection state (derived from hardware + configured flags) used to choose dtypes.
@@ -1366,19 +1368,19 @@ class CodexMemoryManager:
                     )
                     self._loaded_models.insert(0, current)
                     loaded_this_call.append(current)
-            except Exception as exc:
+            except BaseException as load_error:
                 rollback_targets: List[_LoadedModelRecord] = []
                 if current is not None:
                     rollback_targets.append(current)
                 rollback_targets.extend(reversed(loaded_this_call))
 
                 rollback_failures = self._rollback_partially_loaded_records(rollback_targets)
-                if rollback_failures:
-                    details = self._format_record_failures(rollback_failures)
-                    raise MemoryLoadError(
-                        "Failed to rollback partially loaded models "
-                        f"after load failure ({exc}): {details}"
-                    ) from exc
+                for record, rollback_error in rollback_failures:
+                    load_error.add_note(
+                        "Memory manager secondary rollback failure after the primary load error: "
+                        f"model={self._record_label(record)} "
+                        f"error={type(rollback_error).__name__}: {rollback_error}"
+                    )
                 raise
         else:
             self._cleanup_for_loaded_models(
@@ -1647,14 +1649,14 @@ class CodexMemoryManager:
 
         return fields
 
-    def _format_record_failures(self, failures: Sequence[Tuple[_LoadedModelRecord, Exception]]) -> str:
+    def _format_record_failures(self, failures: Sequence[Tuple[_LoadedModelRecord, BaseException]]) -> str:
         return "; ".join(f"{self._record_label(record)}: {exc}" for record, exc in failures)
 
     def _rollback_partially_loaded_records(
         self,
         records: Sequence[_LoadedModelRecord],
-    ) -> List[Tuple[_LoadedModelRecord, Exception]]:
-        failures: List[Tuple[_LoadedModelRecord, Exception]] = []
+    ) -> List[Tuple[_LoadedModelRecord, BaseException]]:
+        failures: List[Tuple[_LoadedModelRecord, BaseException]] = []
         seen: Set[int] = set()
 
         for record in records:
@@ -1664,8 +1666,10 @@ class CodexMemoryManager:
             seen.add(ident)
             try:
                 self._unload_record(record, reason="rollback_after_load_failure")
-            except Exception as exc:
+            except BaseException as exc:
                 failures.append((record, exc))
+                continue
+            if not any(loaded_record is record for loaded_record in self._loaded_models):
                 continue
             try:
                 self._remove_loaded_record(
@@ -1673,7 +1677,7 @@ class CodexMemoryManager:
                     reason="rollback_after_load_failure",
                     verify_model_absent=False,
                 )
-            except Exception as exc:
+            except BaseException as exc:
                 failures.append((record, exc))
 
         return failures
