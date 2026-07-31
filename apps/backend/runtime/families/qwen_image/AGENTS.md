@@ -1,6 +1,6 @@
 # apps/backend/runtime/families/qwen_image
 Date: 2026-05-17
-Last Review: 2026-07-30
+Last Review: 2026-07-31
 Status: Active
 
 ## Purpose
@@ -26,7 +26,9 @@ Status: Active
 - `qwen_image_variant` is fixed internal runtime/task metadata for Edit-2511. Public request payloads must fail loud if they carry it.
 - Qwen Image VAE assets must come from `qwen_image_vae` API roots, match the exact 194-tensor BF16 header, and use the vendored Edit-2511 `vae/config.json`; sibling config files beside weights are not runtime authority.
 - The transformer and Qwen2.5-VL text encoder keep their stored native keys unchanged. Dedicated keymaps may expose lazy runtime lookup names only.
+- Transformer and Qwen2.5-VL GGUF admission validates every stored logical tensor shape before module binding; exact names and counts are insufficient on their own.
 - The runtime interface is exactly `encode_conditioning`, `encode_reference`, `denoise`, and `decode`; component stages use canonical patcher load/unload telemetry and return intermediate tensors to CPU between stages.
+- When a component stage and its cleanup both fail, the stage error remains primary and unload/cache failures are attached as secondary diagnostic notes.
 - Reference-image VAE encoding uses posterior `mode()` and Qwen per-channel normalization exactly once.
 - Reference trees under `.refs/**` and metadata mirrors under `apps/backend/huggingface/Qwen/**` are source frontiers only. Active code must stay repo-owned and Diffusers-free.
 - Header/keyspace work must obey the root keymap law: do not strip prefixes, rewrite punctuation, materialize remapped state dicts, or normalize stored checkpoint layer names.

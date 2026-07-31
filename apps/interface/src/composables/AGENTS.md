@@ -1,7 +1,7 @@
 # apps/interface/src/composables Overview
 <!-- tags: frontend, composables -->
 Date: 2025-12-09
-Last Review: 2026-04-12
+Last Review: 2026-07-31
 Status: Active
 
 ## Purpose
@@ -15,7 +15,7 @@ Status: Active
 - 2026-03-20: `useGeneration(tabId)` now delegates explicit image selector/extras resolution to `utils/image_request_contract.ts`; checkpoint metadata validation, FLUX.2 guidance-mode resolution, asset-contract lookup, required `tenc_sha`/`vae_sha`, `vae_source`, and ZImage variant extras must stay owned by that shared helper instead of drifting back into the composable.
 - 2026-04-29: `useGeneration(tabId)` resolves executable image sampler/scheduler pairs from strictly validated current params or backend capability defaults only. It may fetch sampler/scheduler catalogs to validate a pair, but it must fail before task start instead of substituting first catalog rows, frontend fallback tables, or stale sampler defaults.
 - 2026-03-20: `useGeneration(tabId)` now requires canonical checkpoint inventory metadata (`hash`, `format`, `core_only`) and emits explicit image selectors `model_sha`, `checkpoint_core_only`, `model_format`, and `vae_source`; masked img2img remains request-owned, not model-class inferred.
-- 2026-07-31: `useGeneration(tabId)` owns the img2img-only `qwen_image` Edit-2511 payload branch. Requests require one init image, at least two integer steps, exact `euler`/`simple` sampling, and the dedicated edit allowlist plus root-resolved Qwen asset extras; txt2img and stale CLIP Skip, batch, Hires, swap/refiner, IP-Adapter, Advanced Guidance, LoRA prompt tags, mask/inpaint, and automation state fail before task start.
+- 2026-07-31: `useGeneration(tabId)` owns the img2img-only `qwen_image` Edit-2511 payload branch. Requests require one init image, at least two integer steps, exact `euler`/`simple` sampling, and the dedicated edit allowlist plus root-resolved Qwen asset extras; `img2img_extras.model_sha` is the only transformer selector and top-level `model` is never emitted. Txt2img and stale CLIP Skip, batch, Hires, swap/refiner, IP-Adapter, Advanced Guidance, LoRA prompt tags, mask/inpaint, and automation state fail before task start.
 - 2026-03-23: `useLtxVideoGeneration(tabId)` now preflights the strict LTX generic-video contract before submit and requires checkpoint-scoped execution metadata: base lanes must already satisfy the `32px` grid, `two_stage` keeps width/height as final output dimensions and therefore requires both divisible by `64`, frame counts must already satisfy `8n+1`, `steps` / `fps` / `seed` must already be exact integers, `cfgScale` must already be finite and `>= 0`, `unknown` checkpoints are blocked, and the chosen `executionProfile` must be both explicit and allowed by the selected checkpoint metadata instead of being silently synthesized by the composable or payload builder.
 - 2026-03-30: `useGeneration(tabId)` and `useVideoGeneration(tabId)` now consume task `code` / `error_code` first and fall back to string matching only for backward compatibility; terminal task snapshot/history loads must clear stale result media before surfacing the error.
 - 2026-04-09: WAN video composables are now exact-lane owners: `useVideoGeneration(tabId)` is the 14B/two-stage lane only, and `useWan22_5bVideoGeneration(tabId)` is the 5B/single-stage lane with its own `wan_single` payload contract. Do not reintroduce a generic WAN composable that guesses 5B vs 14B from shared params.

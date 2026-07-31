@@ -20,7 +20,8 @@ FLUX.2 img2img guidance emission is variant-aware (`img2img_cfg_scale` xor `img2
 the nested `img2img_extras.hires` owner while remaining blocked for masked runs. Native SDXL SUPIR mode stays on the single nested frontend owner
 `params.supir` and is emitted only through `img2img_extras.supir` for truthful SDXL img2img/inpaint runs, with diagnostics-backed sampler metadata
 owning the effective runtime sampler/scheduler pair and fail-loud rejection of stale APG/advanced-guidance overlap.
-Qwen Image Edit-2511 uses a dedicated img2img-only request-state guard and payload allowlist so txt2img plus hidden unsupported state fail loud before `/api/*` submission.
+Qwen Image Edit-2511 uses a dedicated img2img-only request-state guard and payload allowlist so txt2img plus hidden unsupported state fail loud before `/api/*` submission;
+its transformer selector is exclusively `img2img_extras.model_sha`, with no top-level `model` shadow selector.
 Z-Image L2P uses the shared image shell but is exact 1024x1024 txt2img only, no-VAE, no LoRA/IP/hires/refiner/advanced-guidance, and emits only
 denoiser + Qwen3-4B TEnc asset selectors.
 Non-SUPIR image runs resolve the executable sampler/scheduler pair from strictly validated current params or backend capability defaults before any task start.
@@ -120,7 +121,6 @@ const QWEN_IMAGE_IMG2IMG_ALLOWED_KEYS = new Set([
   'img2img_seed',
   'img2img_steps',
   'img2img_styles',
-  'model',
   'settings_revision',
 ])
 
@@ -663,7 +663,6 @@ function buildQwenImageImg2ImgPayload(args: BuildImg2ImgPayloadArgs): Record<str
     device: args.device,
     settings_revision: args.settingsRevision,
     engine: QWEN_IMAGE_ENGINE_ID,
-    model: args.modelOverride,
     img2img_extras: buildQwenImageAssetExtras(args.extras, 'img2img_extras'),
   }
   assertAllowedRecordKeys(payload, QWEN_IMAGE_IMG2IMG_ALLOWED_KEYS, 'Qwen Image img2img payload')

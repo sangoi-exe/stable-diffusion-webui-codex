@@ -8,8 +8,8 @@ Required Notice: see NOTICE
 
 Purpose: Canonical key-style detection + explicit source-style mapping for Qwen text-encoder state_dict keys.
 Provides the generic Qwen text-backbone resolver plus an exact Qwen Image Edit-2511 multimodal resolver that maps stored
-`model.*` keys to the runtime `language_model.*` lookup space, keeps stored `visual.*` keys intact, validates topology lazily,
-and excludes only the separately validated stored `lm_head.weight` tensor.
+`model.*` keys to the runtime `language_model.*` lookup space, keeps stored `visual.*` keys intact, validates topology and every
+logical source shape lazily, and excludes only the separately validated stored `lm_head.weight` tensor.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `resolve_qwen_text_encoder_keyspace` (function): Resolves Qwen text-checkpoint source styles into canonical backbone keys (`model.*`) and drops known auxiliary heads.
@@ -76,63 +76,103 @@ _QWEN2_5_VL_LANGUAGE_LAYER_COUNT = 28
 _QWEN2_5_VL_VISUAL_BLOCK_COUNT = 32
 _QWEN2_5_VL_LANGUAGE_LAYER_PATTERN = re.compile(r"^model\.layers\.(\d+)\.(.+)$")
 _QWEN2_5_VL_VISUAL_BLOCK_PATTERN = re.compile(r"^visual\.blocks\.(\d+)\.(.+)$")
-_QWEN2_5_VL_LANGUAGE_ROOT_KEYS = frozenset(
-    {
-        "model.embed_tokens.weight",
-        "model.norm.weight",
-    }
-)
-_QWEN2_5_VL_VISUAL_ROOT_KEYS = frozenset(
-    {
-        "visual.merger.ln_q.weight",
-        "visual.merger.mlp.0.bias",
-        "visual.merger.mlp.0.weight",
-        "visual.merger.mlp.2.bias",
-        "visual.merger.mlp.2.weight",
-        "visual.patch_embed.proj.weight",
-    }
-)
-_QWEN2_5_VL_LANGUAGE_LAYER_SUFFIXES = frozenset(
-    {
-        "input_layernorm.weight",
-        "mlp.down_proj.weight",
-        "mlp.gate_proj.weight",
-        "mlp.up_proj.weight",
-        "post_attention_layernorm.weight",
-        "self_attn.k_proj.bias",
-        "self_attn.k_proj.weight",
-        "self_attn.o_proj.weight",
-        "self_attn.q_proj.bias",
-        "self_attn.q_proj.weight",
-        "self_attn.v_proj.bias",
-        "self_attn.v_proj.weight",
-    }
-)
-_QWEN2_5_VL_VISUAL_BLOCK_SUFFIXES = frozenset(
-    {
-        "attn.proj.bias",
-        "attn.proj.weight",
-        "attn.qkv.bias",
-        "attn.qkv.weight",
-        "mlp.down_proj.bias",
-        "mlp.down_proj.weight",
-        "mlp.gate_proj.bias",
-        "mlp.gate_proj.weight",
-        "mlp.up_proj.bias",
-        "mlp.up_proj.weight",
-        "norm1.weight",
-        "norm2.weight",
-    }
-)
-_QWEN2_5_VL_AUX_KEYS = frozenset({"lm_head.weight"})
-_QWEN2_5_VL_CRITICAL_SHAPES = {
+_QWEN2_5_VL_TEXT_HIDDEN_SIZE = 3584
+_QWEN2_5_VL_TEXT_INTERMEDIATE_SIZE = 18944
+_QWEN2_5_VL_TEXT_KV_SIZE = 512
+_QWEN2_5_VL_VISUAL_HIDDEN_SIZE = 1280
+_QWEN2_5_VL_VISUAL_INTERMEDIATE_SIZE = 3420
+_QWEN2_5_VL_VISUAL_QKV_SIZE = 3840
+_QWEN2_5_VL_VISUAL_MERGED_SIZE = 5120
+_QWEN2_5_VL_LANGUAGE_ROOT_SHAPES = {
     "model.embed_tokens.weight": (152064, 3584),
     "model.norm.weight": (3584,),
-    "model.layers.0.self_attn.q_proj.weight": (3584, 3584),
-    "model.layers.27.self_attn.q_proj.weight": (3584, 3584),
+}
+_QWEN2_5_VL_VISUAL_ROOT_SHAPES = {
+    "visual.merger.ln_q.weight": (_QWEN2_5_VL_VISUAL_HIDDEN_SIZE,),
+    "visual.merger.mlp.0.bias": (_QWEN2_5_VL_VISUAL_MERGED_SIZE,),
+    "visual.merger.mlp.0.weight": (
+        _QWEN2_5_VL_VISUAL_MERGED_SIZE,
+        _QWEN2_5_VL_VISUAL_MERGED_SIZE,
+    ),
+    "visual.merger.mlp.2.bias": (_QWEN2_5_VL_TEXT_HIDDEN_SIZE,),
+    "visual.merger.mlp.2.weight": (
+        _QWEN2_5_VL_TEXT_HIDDEN_SIZE,
+        _QWEN2_5_VL_VISUAL_MERGED_SIZE,
+    ),
     "visual.patch_embed.proj.weight": (1280, 3, 2, 14, 14),
+}
+_QWEN2_5_VL_LANGUAGE_LAYER_SUFFIX_SHAPES = {
+    "input_layernorm.weight": (_QWEN2_5_VL_TEXT_HIDDEN_SIZE,),
+    "mlp.down_proj.weight": (
+        _QWEN2_5_VL_TEXT_HIDDEN_SIZE,
+        _QWEN2_5_VL_TEXT_INTERMEDIATE_SIZE,
+    ),
+    "mlp.gate_proj.weight": (
+        _QWEN2_5_VL_TEXT_INTERMEDIATE_SIZE,
+        _QWEN2_5_VL_TEXT_HIDDEN_SIZE,
+    ),
+    "mlp.up_proj.weight": (
+        _QWEN2_5_VL_TEXT_INTERMEDIATE_SIZE,
+        _QWEN2_5_VL_TEXT_HIDDEN_SIZE,
+    ),
+    "post_attention_layernorm.weight": (_QWEN2_5_VL_TEXT_HIDDEN_SIZE,),
+    "self_attn.k_proj.bias": (_QWEN2_5_VL_TEXT_KV_SIZE,),
+    "self_attn.k_proj.weight": (
+        _QWEN2_5_VL_TEXT_KV_SIZE,
+        _QWEN2_5_VL_TEXT_HIDDEN_SIZE,
+    ),
+    "self_attn.o_proj.weight": (
+        _QWEN2_5_VL_TEXT_HIDDEN_SIZE,
+        _QWEN2_5_VL_TEXT_HIDDEN_SIZE,
+    ),
+    "self_attn.q_proj.bias": (_QWEN2_5_VL_TEXT_HIDDEN_SIZE,),
+    "self_attn.q_proj.weight": (
+        _QWEN2_5_VL_TEXT_HIDDEN_SIZE,
+        _QWEN2_5_VL_TEXT_HIDDEN_SIZE,
+    ),
+    "self_attn.v_proj.bias": (_QWEN2_5_VL_TEXT_KV_SIZE,),
+    "self_attn.v_proj.weight": (
+        _QWEN2_5_VL_TEXT_KV_SIZE,
+        _QWEN2_5_VL_TEXT_HIDDEN_SIZE,
+    ),
+}
+_QWEN2_5_VL_VISUAL_BLOCK_SUFFIX_SHAPES = {
+    "attn.proj.bias": (_QWEN2_5_VL_VISUAL_HIDDEN_SIZE,),
+    "attn.proj.weight": (
+        _QWEN2_5_VL_VISUAL_HIDDEN_SIZE,
+        _QWEN2_5_VL_VISUAL_HIDDEN_SIZE,
+    ),
+    "attn.qkv.bias": (_QWEN2_5_VL_VISUAL_QKV_SIZE,),
+    "attn.qkv.weight": (
+        _QWEN2_5_VL_VISUAL_QKV_SIZE,
+        _QWEN2_5_VL_VISUAL_HIDDEN_SIZE,
+    ),
+    "mlp.down_proj.bias": (_QWEN2_5_VL_VISUAL_HIDDEN_SIZE,),
+    "mlp.down_proj.weight": (
+        _QWEN2_5_VL_VISUAL_HIDDEN_SIZE,
+        _QWEN2_5_VL_VISUAL_INTERMEDIATE_SIZE,
+    ),
+    "mlp.gate_proj.bias": (_QWEN2_5_VL_VISUAL_INTERMEDIATE_SIZE,),
+    "mlp.gate_proj.weight": (
+        _QWEN2_5_VL_VISUAL_INTERMEDIATE_SIZE,
+        _QWEN2_5_VL_VISUAL_HIDDEN_SIZE,
+    ),
+    "mlp.up_proj.bias": (_QWEN2_5_VL_VISUAL_INTERMEDIATE_SIZE,),
+    "mlp.up_proj.weight": (
+        _QWEN2_5_VL_VISUAL_INTERMEDIATE_SIZE,
+        _QWEN2_5_VL_VISUAL_HIDDEN_SIZE,
+    ),
+    "norm1.weight": (_QWEN2_5_VL_VISUAL_HIDDEN_SIZE,),
+    "norm2.weight": (_QWEN2_5_VL_VISUAL_HIDDEN_SIZE,),
+}
+_QWEN2_5_VL_AUX_SHAPES = {
     "lm_head.weight": (152064, 3584),
 }
+_QWEN2_5_VL_LANGUAGE_ROOT_KEYS = frozenset(_QWEN2_5_VL_LANGUAGE_ROOT_SHAPES)
+_QWEN2_5_VL_VISUAL_ROOT_KEYS = frozenset(_QWEN2_5_VL_VISUAL_ROOT_SHAPES)
+_QWEN2_5_VL_LANGUAGE_LAYER_SUFFIXES = frozenset(_QWEN2_5_VL_LANGUAGE_LAYER_SUFFIX_SHAPES)
+_QWEN2_5_VL_VISUAL_BLOCK_SUFFIXES = frozenset(_QWEN2_5_VL_VISUAL_BLOCK_SUFFIX_SHAPES)
+_QWEN2_5_VL_AUX_KEYS = frozenset(_QWEN2_5_VL_AUX_SHAPES)
 
 
 def _is_supported_qwen_root_key(key: str) -> bool:
@@ -263,10 +303,14 @@ def _logical_shape(state_dict: MutableMapping[str, _T], key: str) -> tuple[int, 
     if callable(shape_getter):
         try:
             shape = shape_getter(key)
-        except Exception:
-            shape = None
-        if shape is not None:
-            return tuple(int(dim) for dim in shape)
+        except Exception as exc:
+            raise KeyMappingError(
+                "qwen2_5_vl_multimodal: lazy logical-shape inspection failed. "
+                f"key={key!r}"
+            ) from exc
+        if shape is None:
+            return None
+        return tuple(int(dim) for dim in shape)
     try:
         value = state_dict[key]
     except Exception:
@@ -386,11 +430,33 @@ def _validate_exact_qwen2_5_vl_keyspace(state_dict: MutableMapping[str, _T]) -> 
                 f"extra={sorted(found - _QWEN2_5_VL_VISUAL_BLOCK_SUFFIXES)}"
             )
 
-    for key, expected_shape in _QWEN2_5_VL_CRITICAL_SHAPES.items():
+    for key in keys:
+        expected_shape = _QWEN2_5_VL_LANGUAGE_ROOT_SHAPES.get(key)
+        if expected_shape is None:
+            expected_shape = _QWEN2_5_VL_VISUAL_ROOT_SHAPES.get(key)
+        if expected_shape is None:
+            expected_shape = _QWEN2_5_VL_AUX_SHAPES.get(key)
+        if expected_shape is None:
+            language_match = _QWEN2_5_VL_LANGUAGE_LAYER_PATTERN.fullmatch(key)
+            if language_match is not None:
+                expected_shape = _QWEN2_5_VL_LANGUAGE_LAYER_SUFFIX_SHAPES.get(
+                    language_match.group(2)
+                )
+        if expected_shape is None:
+            visual_match = _QWEN2_5_VL_VISUAL_BLOCK_PATTERN.fullmatch(key)
+            if visual_match is not None:
+                expected_shape = _QWEN2_5_VL_VISUAL_BLOCK_SUFFIX_SHAPES.get(
+                    visual_match.group(2)
+                )
+        if expected_shape is None:
+            raise KeyMappingError(
+                "qwen2_5_vl_multimodal: validated topology has no logical-shape contract. "
+                f"key={key!r}"
+            )
         actual_shape = _logical_shape(state_dict, key)
         if actual_shape != expected_shape:
             raise KeyMappingError(
-                "qwen2_5_vl_multimodal: critical logical shape mismatch. "
+                "qwen2_5_vl_multimodal: source logical shape mismatch. "
                 f"key={key!r} got={actual_shape!r} expected={expected_shape!r}"
             )
     return keys
@@ -435,6 +501,7 @@ def resolve_qwen2_5_vl_multimodal_keyspace(
             "language_layers": _QWEN2_5_VL_LANGUAGE_LAYER_COUNT,
             "visual_blocks": _QWEN2_5_VL_VISUAL_BLOCK_COUNT,
             "excluded_auxiliary_keys": tuple(sorted(_QWEN2_5_VL_AUX_KEYS)),
+            "validated_source_shapes": len(keys),
         },
         view=KeyspaceLookupView(state_dict, canonical_to_source),
     )

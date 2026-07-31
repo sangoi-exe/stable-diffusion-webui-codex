@@ -33,10 +33,12 @@ against inventory metadata instead of probing checkpoint families or inferring c
 Z-Image L2P requests are exact txt2img-only, pixel-space, no-VAE 1024x1024 requests; the router rejects stale VAE, variant, hires, refiner,
 swap-model, IP-Adapter, LoRA, clip-skip, unsupported sampler/scheduler, unsupported model-format state, wrong-family denoisers, denoiser GGUFs
 without the dedicated L2P profile metadata, wrong-root Qwen3-4B text encoders, and TEnc GGUFs without the dedicated L2P profile metadata before task creation.
-Qwen Image is Edit-2511 img2img-only: txt2img and image automation fail before task creation, and stale public variant, foreign-family selectors,
-classic denoise/resize/mask/hires/IP-Adapter/LoRA/SUPIR surfaces fail before task creation. Its public sampling contract is
-exact `euler` / `simple` with at least two steps. Transformer, VAE, and text-encoder SHA selection is scoped to exact Qwen
-roots and strict Edit-2511 metadata/topology; the VAE must match the vendored `AutoencoderKLQwenImage` config.
+Qwen Image is Edit-2511 img2img-only: txt2img and image automation fail before task creation, and its exact top-level allowlist,
+required core fields, stale public variant, foreign-family selectors, classic denoise/resize/mask/hires/IP-Adapter/LoRA/SUPIR surfaces,
+and removed top-level `model` selector are validated before task registration. Its public sampling contract is exact `euler` / `simple`
+with at least two steps, and `img2img_extras.model_sha` is the sole transformer selector. Transformer, VAE, and text-encoder SHA
+selection is scoped to exact Qwen roots and strict Edit-2511 metadata/topology; the VAE must match the vendored
+`AutoencoderKLQwenImage` config.
 Lens is parked in this tranche: explicit `engine="lens"` txt2img/img2img/image-automation requests fail before task creation, and
 the only accepted Lens variant owner is nested `extras.lens.variant` for txt2img or `img2img_extras.lens.variant` for img2img.
 Resolves `extras.lora_sha` / `img2img_extras.lora_sha` into server-side `lora_path` overrides only for engines with `supports_lora=True`
@@ -238,6 +240,37 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
         "vae_sha",
         "vae_source",
     }
+    _QWEN_IMAGE_IMG2IMG_ALLOWED_KEYS = {
+        "device",
+        "engine",
+        "img2img_batch_count",
+        "img2img_batch_size",
+        "img2img_cfg_scale",
+        "img2img_extras",
+        "img2img_init_image",
+        "img2img_neg_prompt",
+        "img2img_prompt",
+        "img2img_sampling",
+        "img2img_scheduler",
+        "img2img_seed",
+        "img2img_steps",
+        "img2img_styles",
+        "settings_revision",
+    }
+    _QWEN_IMAGE_IMG2IMG_REQUIRED_KEYS = (
+        "device",
+        "engine",
+        "img2img_cfg_scale",
+        "img2img_extras",
+        "img2img_init_image",
+        "img2img_neg_prompt",
+        "img2img_prompt",
+        "img2img_sampling",
+        "img2img_scheduler",
+        "img2img_seed",
+        "img2img_steps",
+        "settings_revision",
+    )
     _QWEN_IMAGE_IMG2IMG_REJECTED_TOP_LEVEL_KEYS = {
         "img2img_clip_skip",
         "img2img_denoising_strength",
@@ -2525,21 +2558,16 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
         )
 
     def _validate_pre_task_img2img_payload(payload: Mapping[str, Any]) -> None:
+        raw_engine = payload.get("engine")
+        if raw_engine is None:
+            raise HTTPException(status_code=400, detail="Missing 'engine'")
+        if not isinstance(raw_engine, str) or not raw_engine.strip():
+            raise HTTPException(status_code=400, detail="'engine' must be a non-empty string")
         _reject_lens_parked_request(payload, route_label="img2img")
         _reject_removed_img2img_second_pass_keys(payload)
         _reject_public_qwen_image_variant(payload, context="img2img")
-        if _is_qwen_image_engine(payload.get("engine")):
-            _reject_qwen_image_img2img_surfaces(payload)
-            raw_extras = payload.get("img2img_extras")
-            if isinstance(raw_extras, Mapping):
-                _reject_public_qwen_image_variant(raw_extras, context="img2img_extras")
-                _reject_unknown_keys(raw_extras, _QWEN_IMAGE_ASSET_EXTRAS_KEYS, "img2img_extras")
-            elif raw_extras is not None:
-                raise HTTPException(status_code=400, detail="'img2img_extras' must be an object")
-            _preflight_qwen_image_asset_selector_payload(
-                raw_extras if isinstance(raw_extras, Mapping) else {},
-                field_prefix="img2img_extras",
-            )
+        if _is_qwen_image_engine(raw_engine):
+            _validate_qwen_image_img2img_core_fields(payload)
             return
         hires_cfg = _parse_img2img_nested_hires_from_extras(
             payload.get("img2img_extras"),
@@ -3193,6 +3221,58 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
             raise HTTPException(status_code=400, detail="'img2img_batch_count' must be 1 for Qwen Image Edit.")
         if batch_size != 1:
             raise HTTPException(status_code=400, detail="'img2img_batch_size' must be 1 for Qwen Image Edit.")
+
+    def _validate_qwen_image_img2img_core_fields(payload: Mapping[str, Any]) -> None:
+        _reject_unknown_keys(payload, _QWEN_IMAGE_IMG2IMG_ALLOWED_KEYS, "img2img")
+        for required_key in _QWEN_IMAGE_IMG2IMG_REQUIRED_KEYS:
+            if required_key not in payload or payload.get(required_key) is None:
+                raise HTTPException(status_code=400, detail=f"Missing '{required_key}'")
+        _reject_qwen_image_img2img_surfaces(payload)
+        init_image_data = payload.get("img2img_init_image")
+        if not isinstance(init_image_data, str) or not init_image_data.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="'img2img_init_image' must be a non-empty string",
+            )
+        try:
+            init_image = media.decode_image(init_image_data)
+            init_width, init_height = init_image.size  # type: ignore[attr-defined]
+            qwen_image_edit_vae_dimensions(int(init_width), int(init_height))
+            qwen_image_edit_condition_dimensions(int(init_width), int(init_height))
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=public_http_error_detail(
+                    exc,
+                    fallback="Invalid Qwen Image 'img2img_init_image' payload",
+                ),
+            ) from None
+        _require_str_field(payload, "img2img_prompt", allow_empty=True)
+        _require_str_field(payload, "img2img_neg_prompt", allow_empty=True)
+        if "img2img_styles" in payload:
+            _p.as_list(payload, "img2img_styles")
+        _require_int_field(payload, "img2img_steps", minimum=2)
+        _require_float_field(payload, "img2img_cfg_scale")
+        sampler_name = _require_str_field(payload, "img2img_sampling")
+        scheduler_name = _require_str_field(payload, "img2img_scheduler")
+        _require_qwen_image_sampling_pair(
+            sampler_name=sampler_name,
+            scheduler_name=scheduler_name,
+            sampler_field="img2img_sampling",
+            scheduler_field="img2img_scheduler",
+        )
+        _require_int_field(payload, "img2img_seed")
+        _require_int_field(payload, "settings_revision", minimum=0)
+
+        raw_extras = payload.get("img2img_extras")
+        if not isinstance(raw_extras, Mapping):
+            raise HTTPException(status_code=400, detail="'img2img_extras' must be an object")
+        _reject_public_qwen_image_variant(raw_extras, context="img2img_extras")
+        _reject_unknown_keys(raw_extras, _QWEN_IMAGE_ASSET_EXTRAS_KEYS, "img2img_extras")
+        _preflight_qwen_image_asset_selector_payload(
+            raw_extras,
+            field_prefix="img2img_extras",
+        )
 
     def _parse_optional_sampler_field(*, value: object, field_name: str) -> str | None:
         if value is None:
@@ -4514,7 +4594,7 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
         engine_key = _canonical_engine_key(payload.get("engine"))
         if not _is_qwen_image_engine(engine_key):
             raise HTTPException(status_code=400, detail=f"Engine '{engine_key}' is not a Qwen Image engine.")
-        _reject_qwen_image_img2img_surfaces(payload)
+        _validate_qwen_image_img2img_core_fields(payload)
 
         prompt = _require_str_field(payload, "img2img_prompt", allow_empty=True)
         negative_prompt = _require_str_field(payload, "img2img_neg_prompt", allow_empty=True)
@@ -4539,7 +4619,7 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
 
         return _Img2ImgCoreDTO(
             engine_key=engine_key,
-            model_ref=payload.get("model"),
+            model_ref=None,
             prompt=prompt,
             negative_prompt=negative_prompt,
             styles=styles,

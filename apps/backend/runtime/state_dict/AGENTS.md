@@ -56,5 +56,6 @@ Notes:
 - 2026-03-31: Added `keymap_anima_transformer.py` as the explicit raw `net.*`/canonical Anima transformer keyspace owner; parser and loader now keep stored core keys native and resolve them through lazy lookup views instead of parser-side prefix stripping or eager normalization.
 - 2026-07-30: `keymap_qwen_text_encoder.py` adds the exact 729-key Qwen2.5-VL multimodal source contract and exposes a 728-key runtime lookup view (`model.*` stored keys -> `language_model.*` runtime names; `visual.*` unchanged) while separately validating and excluding stored `lm_head.weight`.
 - 2026-07-30: Added `keymap_qwen_image_transformer.py` for the exact Edit-2511 native transformer keyspace. It accepts no wrappers or alternate layouts and never rewrites stored keys.
+- 2026-07-31: The exact Edit-2511 transformer and Qwen2.5-VL keymaps validate every stored logical tensor shape before executable binding; matching names/counts alone are not a strict-load proof for GGUF custom operations.
 
-Last Review: 2026-07-30
+Last Review: 2026-07-31

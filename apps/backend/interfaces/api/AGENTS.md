@@ -1,7 +1,7 @@
 # apps/backend/interfaces/api Overview
 <!-- tags: backend, api, fastapi, routers -->
 Date: 2026-01-08
-Last Review: 2026-05-17
+Last Review: 2026-07-31
 Status: Active
 
 ## Purpose
@@ -61,6 +61,7 @@ Status: Active
 - 2026-02-10: `dependency_checks.py` now resolves semantic asset contracts only via `contract_owner_for_semantic_engine(...)` (no local semantic-map duplication), so readiness rows fail loud if semantic/contract ownership drifts.
 - 2026-07-30: `dependency_checks.py` keeps Qwen Image readiness exact: it counts only `qwen_image_ckpt`, `qwen_image_tenc`, and `qwen_image_vae` scoped roots and independently validates the complete vendored Edit-2511 model-index, processor/tokenizer, text-encoder, transformer, VAE, and scheduler metadata set.
 - 2026-07-30: `routers/generation.py` admits Qwen Image only on canonical Edit-2511 img2img and rejects Qwen txt2img/public variant keys plus unsupported edit surfaces before task creation.
+- 2026-07-31: Qwen Image img2img validates its exact top-level allowlist, required core fields, init-image payload, and exact asset selectors before task registration. `img2img_extras.model_sha` is the sole transformer selector; top-level `model` is rejected.
 - 2026-02-15: Generation payloads now require `settings_revision` to match persisted options revision; stale requests fail with HTTP 409 (`current_revision` + `provided_revision`) and top-level `smart_*` payload keys are rejected.
 - 2026-02-15: `run_api.py` startup settings normalization preserves `codex_options_revision` while pruning unknown/invalid persisted keys.
 - 2026-02-15: `POST /api/options` responses now include `applied_now[]` and `restart_required[]` arrays with per-key reason metadata.

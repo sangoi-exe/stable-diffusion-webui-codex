@@ -1,7 +1,7 @@
 # apps/backend/interfaces/api/routers Overview
 <!-- tags: backend, api, fastapi, routers -->
 Date: 2026-01-08
-Last Review: 2026-05-30
+Last Review: 2026-07-31
 Status: Active
 
 ## Purpose
@@ -28,7 +28,7 @@ Status: Active
 - 2026-04-28: `models.py` `/api/models/prompt-token-count` accepts exact WAN engine ids (`wan22_14b`, `wan22_5b`, `wan22_14b_animate`) only; generic `wan` / `wan22` token-count aliases are not live request owners.
 - 2026-04-28: `generation.py` must read primary model-family capability truth through `runtime/model_registry/capabilities.py::primary_family_for_engine_id(...)`; do not import `_ENGINE_ID_PRIMARY_FAMILY` or other private taxonomy maps into routers.
 - 2026-04-29: `generation.py` route capability admission must use canonical `/api/engines/capabilities` identity only. If an engine id is absent from `ENGINE_ID_TO_SEMANTIC_ENGINE`, reject it instead of instantiating registry engines or probing `engine.capabilities()` as a fallback owner.
-- 2026-07-31: `generation.py` keeps Qwen Image Edit-2511 img2img-only. `/api/txt2img` and `/api/image-automation` must reject `engine="qwen_image"` before task creation; `/api/img2img` admits only the exact core-only Edit GGUF plus Qwen2.5-VL GGUF and VAE SafeTensors selectors. Public variant keys, masks, hires, IP-Adapter, LoRA, SUPIR, and foreign-family selectors remain fail-loud. `models.py` must not expose a text-only Qwen Edit prompt-token count because executable conditioning includes image-token expansion and the 64-token template drop.
+- 2026-07-31: `generation.py` keeps Qwen Image Edit-2511 img2img-only. `/api/txt2img` and `/api/image-automation` reject `engine="qwen_image"` before task creation; `/api/img2img` validates its exact top-level allowlist, required core fields, init-image decode/geometry, and exact asset selectors before `TaskEntry` registration. `img2img_extras.model_sha` is the sole transformer selector and top-level `model` is rejected. Public variant keys, masks, hires, IP-Adapter, LoRA, SUPIR, and foreign-family selectors remain fail-loud. `models.py` must not expose a text-only Qwen Edit prompt-token count because executable conditioning includes image-token expansion and the 64-token template drop.
 - 2026-05-23: `generation.py` keeps Z-Image L2P exact and no-VAE: `/api/txt2img` accepts only `engine="zimage_l2p"` with 1024x1024, batch 1, `euler/simple`, `checkpoint_core_only=true`, `model_format=checkpoint|gguf`, `model_sha`, and one Qwen3-4B `tenc_sha`; img2img/image-automation, VAE selectors, CLIP Skip, hires, swap/refiner, IP-Adapter, LoRA, advanced guidance, Z-Image variant keys, and unknown extras fail before task creation. `ui.py` accepts `zimage_l2p` as a live image tab type, and `models.py` routes its prompt-token count through the Z-Image/Qwen tokenizer key.
 - 2026-05-24: `generation.py` keeps Lens parked: explicit `engine="lens"` requests on `/api/txt2img`, `/api/img2img`, and `/api/image-automation` fail before task creation, `lens` is not resolved through runnable semantic capability maps, and the only Lens variant owner is nested `extras.lens.variant` / `img2img_extras.lens.variant` with strict `default|turbo|base` values.
 - 2026-03-30: `tests.py` also owns `/api/tests/ip-adapter/probe`; the router resolves inventory-backed adapter/image-encoder selectors and repo-scoped reference-image paths only, while `apps/backend/runtime/adapters/ip_adapter/probe.py` owns the actual conditioning receipt. Do not turn `tests.py` into a second txt2img surface.

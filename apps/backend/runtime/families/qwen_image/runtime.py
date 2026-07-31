@@ -8,7 +8,8 @@ Required Notice: see NOTICE
 
 Purpose: Native Qwen Image Edit-2511 single-image component runtime.
 Owns condition/reference preprocessing, multimodal prompt encoding, FlowMatch Euler denoising, final VAE decode,
-and canonical patcher lifecycle while delegating tensor contracts and latent math to `runtime_latents.py`.
+and canonical patcher lifecycle with primary-stage exception preservation while delegating tensor contracts and latent
+math to `runtime_latents.py`.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageRuntime` (class): Exact Edit-2511 conditioning, reference encode, denoise, and decode owner.
@@ -163,7 +164,8 @@ def _managed_component_stage(
     )
     try:
         yield
-    finally:
+    except BaseException as stage_error:
+        cleanup_errors: list[tuple[str, BaseException]] = []
         try:
             manager.unload_model(
                 target,
@@ -171,8 +173,40 @@ def _managed_component_stage(
                 stage=stage,
                 component_hint=component_hint,
             )
-        finally:
+        except BaseException as cleanup_error:
+            cleanup_errors.append(("unload_model", cleanup_error))
+        try:
             manager.soft_empty_cache(force=True)
+        except BaseException as cleanup_error:
+            cleanup_errors.append(("soft_empty_cache", cleanup_error))
+        for cleanup_operation, cleanup_error in cleanup_errors:
+            stage_error.add_note(
+                "Qwen Image secondary cleanup failure after the primary stage error: "
+                f"operation={cleanup_operation} error={type(cleanup_error).__name__}: {cleanup_error}"
+            )
+        raise
+    else:
+        unload_error: BaseException | None = None
+        try:
+            manager.unload_model(
+                target,
+                source=source,
+                stage=stage,
+                component_hint=component_hint,
+            )
+        except BaseException as cleanup_error:
+            unload_error = cleanup_error
+        try:
+            manager.soft_empty_cache(force=True)
+        except BaseException as cache_error:
+            if unload_error is None:
+                raise
+            unload_error.add_note(
+                "Qwen Image secondary cleanup failure after unload_model failed: "
+                f"operation=soft_empty_cache error={type(cache_error).__name__}: {cache_error}"
+            )
+        if unload_error is not None:
+            raise unload_error
 
 
 class QwenImageRuntime:
