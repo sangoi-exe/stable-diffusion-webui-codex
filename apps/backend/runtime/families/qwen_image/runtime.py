@@ -719,34 +719,32 @@ class QwenImageRuntime:
         )
 
         try:
-            with (
-                self._component_stage_lease(
-                    stage=_DENOISE_STAGE,
-                    forbidden=(("text_encoder", self.text_encoder_patcher), ("vae", self.vae.patcher)),
-                ),
-                _managed_component_stage(
+            with self._component_stage_lease(
+                stage=_DENOISE_STAGE,
+                forbidden=(("text_encoder", self.text_encoder_patcher), ("vae", self.vae.patcher)),
+            ):
+                with _managed_component_stage(
                     self.denoiser,
                     source=_DENOISE_SOURCE,
                     stage=_DENOISE_STAGE,
                     component_hint=_DENOISE_COMPONENT,
                     memory_required=memory_budget.memory_required,
                     hard_memory_preservation=memory_budget.hard_memory_preservation,
-                ),
-            ):
-                self._require_streamed_phase(StreamedResidencyPhase.READY, stage=_DENOISE_STAGE)
-                packed_cpu = self._run_loaded_denoise(
-                    conditioning=conditioning,
-                    reference=reference,
-                    grid=grid,
-                    step_count=step_count,
-                    normalized_seed=normalized_seed,
-                    owner_token=owner_token,
-                    cfg_scale=cfg_scale,
-                    noise_settings=active_noise_settings,
-                    compute_device=compute_device,
-                    compute_dtype=compute_dtype,
-                )
-            self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=_DENOISE_STAGE)
+                ):
+                    self._require_streamed_phase(StreamedResidencyPhase.READY, stage=_DENOISE_STAGE)
+                    packed_cpu = self._run_loaded_denoise(
+                        conditioning=conditioning,
+                        reference=reference,
+                        grid=grid,
+                        step_count=step_count,
+                        normalized_seed=normalized_seed,
+                        owner_token=owner_token,
+                        cfg_scale=cfg_scale,
+                        noise_settings=active_noise_settings,
+                        compute_device=compute_device,
+                        compute_dtype=compute_dtype,
+                    )
+                self._require_streamed_phase(StreamedResidencyPhase.OFFLOADED, stage=_DENOISE_STAGE)
         except Exception as exc:
             raise RuntimeError(
                 f"Qwen Image stage {_DENOISE_STAGE!r} component {_DENOISE_COMPONENT!r} failed: {exc}"
