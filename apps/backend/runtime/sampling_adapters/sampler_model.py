@@ -8,7 +8,7 @@ Required Notice: see NOTICE
 
 Purpose: SamplerModel adapter for sampler-style `apply_model` callers.
 Bridges `apply_model` usage to Codex diffusion models/predictors, enforcing context/y invariants and providing opt-in debug
-tensor stats for Z Image and other flow runtimes.
+tensor stats for Z Image and other flow runtimes. Native denoiser output is forwarded directly into predictor math without a standalone full-tensor FP32 cast.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `_tensor_stats` (function): Formats quick tensor statistics for debug logging.
@@ -201,7 +201,7 @@ class SamplerModel(torch.nn.Module):
 
         model_output = self.diffusion_model(
             xc, t, context=context, control=control, transformer_options=transformer_options, **extra_conds
-        ).float()
+        )
 
         if debug_enabled and debug_count < debug_limit:
             emit_backend_message(f"[sampler-model-debug] {_tensor_stats('model_output', model_output)}", logger=__name__)
@@ -210,8 +210,8 @@ class SamplerModel(torch.nn.Module):
     def memory_required(self, input_shape):
         area = input_shape[0] * input_shape[2] * input_shape[3]
         compute_dtype_size = torch.empty((), dtype=self.computation_dtype).element_size()
-        # Keep the estimator aligned with apply_model(), which always upcasts
-        # the denoiser output to fp32 before predictor math.
+        # Preserve the numerical fp32 floor for predictor-result pressure even
+        # though apply_model() no longer casts the full denoiser output eagerly.
         dtype_size = max(compute_dtype_size, torch.empty((), dtype=torch.float32).element_size())
 
         if attention.attention_function in [attention.attention_pytorch, attention.attention_xformers]:

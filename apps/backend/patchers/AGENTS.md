@@ -1,6 +1,6 @@
 # apps/backend/patchers Overview
 Date: 2025-10-30
-Last Review: 2026-07-31
+Last Review: 2026-08-01
 Status: Active
 
 ## Purpose
@@ -24,6 +24,7 @@ Status: Active
 - 2026-07-30: encode outputs that expose both an explicit tensor-valued `latents` field and `latent_dist` use the explicit owner-produced tensor; the generic wrapper must not sample the posterior again or undo owner-controlled rank regulation.
 - 2026-07-30: `VAE` resolves native 3D autoencoder geometry from `scale_factor_spatial` and `z_dim` when diffusers-style `down_block_types` and `latent_channels` are absent; missing or invalid geometry remains fail-loud.
 - 2026-07-31: `ModelPatcher` clones preserve the same registered streamed runtime; streamed patch/unpatch delegates residency to that runtime, keeps `current_device` storage-oriented, and never invokes root `.to(...)` or whole-model pinning.
+- 2026-08-01: `vae.py` regular/tiled encode paths pass pristine `[0,1]` pixels into one owned device-local normalization seam; regular and CPU-fallback decode clamp on the execution device before transfer, while tiled final-range semantics remain unchanged.
 - 2026-03-22: `vae.py` encode paths now accept optional `encode_seed` and build a device-local posterior generator for diffusers-style `latent_dist.sample(...)`; regular, tiled, regular->tiled retry, and CPU-fallback encode paths must all recreate generators from the same seed when they restart full-image work, and seeded posterior sampling failures must fail loud instead of silently degrading to mean latents.
 - LoRA merges are transactional: loaders snapshot parameters, track deterministic patch order, surface tqdm progress, and raise on any mismatched tensor metadata.
 - When introducing new patch behaviour, add explicit configuration flags/options and document them in `.sangoi/backend/`.

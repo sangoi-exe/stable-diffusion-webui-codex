@@ -6,13 +6,9 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: VAE patcher + tiled encode/decode fallback helpers (diffusers + WAN-aware).
-Provides a VAE wrapper that normalizes diffusers outputs (scalar and optional per-channel latent stats) using family-aware policy resolution for scale/shift semantics,
-supports tiled decode/encode paths, deterministic posterior-sampled img2img encode seeding, and integrates memory-management and smart-fallback behavior.
-Supports separate storage vs compute dtype selection without hardcoded fp32 casts in hot decode/encode paths (compute defaults still follow runtime policy unless overridden).
-Tiled VAE fallback uses context-padding and center-crop stitching (via shared `runtime.common.vae_tiled` helpers) to reduce seams without fast/approximate paths,
-including family-aware decode fallback geometry resolution.
-Regular-path OOM fallback notices are emitted through structured backend logger warnings.
+Purpose: Canonical VAE patcher for diffusers/native 2D and WAN-aware first stages, including family-aware latent normalization and memory-managed storage/compute precision.
+Owns pristine `[0,1]` encode copy/normalization, device-local regular decode clamp, seeded posterior sampling, tiled context/crop stitching, progress, precision retry, and CPU fallback.
+Preserves tiled `[0,1]` internal buffers and public BCHW `[-1,1]` decode output while failing loud on unsupported output or geometry contracts.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `_tensor_stats` (function): Opt-in VAE tensor diagnostics for shape/dtype/device and basic statistics (`CODEX_VAE_TENSOR_STATS=1` plus DEBUG logging).
@@ -600,7 +596,7 @@ class VAE:
     def _decode_forward(self, samples: torch.Tensor, *, forward_dtype: torch.dtype) -> torch.Tensor:
         with self._autocast_context(forward_dtype):
             decoded_raw = self.first_stage_model.decode(samples.to(device=self.device, dtype=forward_dtype))
-        return _unwrap_decode_output(decoded_raw).to(self.output_device)
+        return _unwrap_decode_output(decoded_raw)
 
     def _encode_forward(
         self,
@@ -611,7 +607,8 @@ class VAE:
         encode_generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         base = getattr(self.first_stage_model, "_base", self.first_stage_model)
-        pixels_typed = pixels_in.to(device=self.device, dtype=forward_dtype)
+        pixels_typed = pixels_in.to(device=self.device, dtype=forward_dtype, copy=True)
+        pixels_typed.mul_(2.0).sub_(1.0)
         with self._autocast_context(forward_dtype):
             if DiffusersAutoencoderKL is not None and isinstance(base, DiffusersAutoencoderKL):
                 encoded_raw = base.encode(pixels_typed, return_dict=True)
@@ -725,7 +722,7 @@ class VAE:
                     window.context_y0 : window.context_y1,
                     window.context_x0 : window.context_x1,
                 ]
-                decoded_tile = self._decode_forward(latent_tile, forward_dtype=forward_dtype)
+                decoded_tile = self._decode_forward(latent_tile, forward_dtype=forward_dtype).to(self.output_device)
                 crop_y0, crop_y1 = self._decode_crop_bounds(
                     window_start=window.core_y0,
                     window_end=window.core_y1,
@@ -809,7 +806,7 @@ class VAE:
                     window.context_x0 : window.context_x1,
                 ]
                 encoded_tile = self._encode_forward(
-                    2.0 * pixels_tile - 1.0,
+                    pixels_tile,
                     forward_dtype=forward_dtype,
                     regulation=regulation,
                     encode_generator=encode_generator,
@@ -876,8 +873,9 @@ class VAE:
             with torch.no_grad():
                 samples_cpu = samples_in.to(cpu_device, dtype=cpu_forward_dtype)
                 decoded_raw = self.first_stage_model.decode(samples_cpu)
-                decoded = _unwrap_decode_output(decoded_raw).to(self.output_device)
-                pixel_samples = torch.clamp((decoded + 1.0) / 2.0, min=0.0, max=1.0)
+                decoded = _unwrap_decode_output(decoded_raw)
+                decoded.clamp_(-1.0, 1.0).add_(1.0).mul_(0.5)
+                pixel_samples = decoded.to(self.output_device)
 
             return pixel_samples
         finally:
@@ -924,8 +922,8 @@ class VAE:
 
             encode_generator = _new_encode_generator(encode_seed=encode_seed, device=cpu_device)
             with torch.no_grad():
-                pixels_cpu = pixel_samples_chw.to(cpu_device, dtype=cpu_forward_dtype)
-                pixels_in = 2.0 * pixels_cpu - 1.0
+                pixels_in = pixel_samples_chw.to(cpu_device, dtype=cpu_forward_dtype, copy=True)
+                pixels_in.mul_(2.0).sub_(1.0)
 
                 if DiffusersAutoencoderKL is not None and isinstance(base, DiffusersAutoencoderKL):
                     encoded_raw = base.encode(pixels_in, return_dict=True)
@@ -1025,7 +1023,8 @@ class VAE:
                     for batch_idx, x in enumerate(range(0, samples_in.shape[0], batch_number), start=1):
                         samples = samples_in[x:x + batch_number]
                         decoded = self._decode_forward(samples, forward_dtype=forward_dtype)
-                        pixel_samples[x:x + batch_number] = torch.clamp(decoded, min=-1.0, max=1.0)
+                        decoded.clamp_(-1.0, 1.0)
+                        pixel_samples[x:x + batch_number] = decoded.to(self.output_device)
                         pixel_samples_are_minus_one_to_one = True
                         _tensor_stats("decode_inner.batch_decoded", decoded)
                         _report_vae_progress(
@@ -1242,9 +1241,8 @@ class VAE:
                         dtype=forward_dtype,
                     )
                     for batch_idx, x in enumerate(range(0, pixel_samples.shape[0], batch_number), start=1):
-                        pixels_in = 2.0 * pixel_samples[x:x + batch_number] - 1.0
                         encoded = self._encode_forward(
-                            pixels_in,
+                            pixel_samples[x:x + batch_number],
                             forward_dtype=forward_dtype,
                             regulation=regulation,
                             encode_generator=encode_generator,

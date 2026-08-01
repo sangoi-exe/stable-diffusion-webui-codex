@@ -8,7 +8,7 @@ Required Notice: see NOTICE
 
 Purpose: Family-agnostic native LDM 2D VAE runtime lane for latent encode/decode.
 Defines shared LDM VAE blocks (ResNet/Attention/Encoder/Decoder), the canonical `AutoencoderKL_LDM` class, and config sanitizers used across
-SDXL/Flux/ZImage/WAN lanes without WAN-family ownership coupling.
+SDXL/Flux/ZImage/WAN lanes without WAN-family ownership coupling. Posterior variance preserves exact `exp(logvar)` semantics through lazy evaluation.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `nonlinearity` (function): Activation helper (SiLU-like: `x * sigmoid(x)`) used across blocks.
@@ -55,9 +55,14 @@ class DiagonalGaussianDistribution:
         self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
         self.deterministic = deterministic
         self.std = torch.exp(0.5 * self.logvar)
-        self.var = torch.exp(self.logvar)
         if self.deterministic:
-            self.var = self.std = torch.zeros_like(self.mean)
+            self.std = torch.zeros_like(self.mean)
+
+    @property
+    def var(self):
+        if self.deterministic:
+            return torch.zeros_like(self.mean)
+        return torch.exp(self.logvar)
 
     def sample(self):
         noise = torch.randn(

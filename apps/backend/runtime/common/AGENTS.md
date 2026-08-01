@@ -1,6 +1,6 @@
 # apps/backend/runtime/common Overview
 Date: 2025-10-28
-Last Review: 2026-05-17
+Last Review: 2026-08-01
 Status: Active
 
 ## Purpose
@@ -31,6 +31,7 @@ Status: Active
 - 2026-03-01: `vae_codex3d.py::Codex3DCausalConv` now overrides `_conv_forward` to use direct `torch.cudnn_convolution` when running on CUDA fp16/bf16 with PyTorch>=2.9 and cuDNN>=91002, bypassing the known Conv3d dispatch regression path that can trigger large workspace spikes.
 - 2026-03-05: Added `vae_tiled.py` as the shared owner of VAE tiled geometry typing/policy and tile-window iteration (`VaeTileGeometry`, `VaeTileWindow`, `resolve_vae_decode_tiled_geometry`, `iter_vae_tile_windows`), including Anima-specific decode fallback geometry override while preserving non-Anima defaults.
 - 2026-02-21: `vae_ldm.py` `DiagonalGaussianDistribution.sample()` now allocates noise directly on the target device/dtype (`torch.randn(..., device=..., dtype=...)`) to avoid hidden alloc+cast churn.
+- 2026-08-01: `vae_ldm.py` no longer stores eager posterior variance; `DiagonalGaussianDistribution.var` derives the exact prior `torch.exp(logvar)` value lazily and preserves deterministic zero semantics.
 - 2026-01-06: `vae.load_flow16_vae(...)` now accepts `.gguf` weights (dequantized upfront) in addition to diffusers directories and `.safetensors` files.
 - 2026-02-15: `vae.load_flow16_vae(...)` now routes GGUF and torch-file state-dict loading through the requested `device` to keep checkpoint placement consistent with runtime target-device selection.
 - 2026-01-02: Added standardized file header docstrings to `nn/base.py`, `nn/clip.py`, and `nn/unet/{__init__,config,utils}.py` (doc-only change; part of rollout).
