@@ -9,6 +9,7 @@ Required Notice: see NOTICE
 Purpose: Backend CLI argument parsing and runtime memory config bootstrap.
 Builds the argparse schema for runtime flags (devices/dtypes/attention/swap/smart offload) and turns argv/env into a `RuntimeMemoryConfig`.
 Supports separate storage vs compute dtype overrides for core/text encoder/VAE (e.g., `--core-dtype` vs `--core-compute-dtype`) for stability and tuning.
+Preserves explicit reduced-precision CORE compute intent through CPU configuration so family owners can reject unsupported storage/compute splits; TE/VAE CPU compute still normalizes to FP32.
 Also parses diagnostics bootstrap toggles (`--trace-contract`, `--trace-profiler`) for runtime trace/profiler activation.
 LoRA apply-mode bootstrap resolves unset config to `online` while preserving explicit `merge` overrides.
 Also parses strict LoRA loader policy toggles (`--lora-merge-mode`, `--lora-refresh-signature`) for merge/signature behavior.
@@ -837,7 +838,12 @@ def _apply_component_device_overrides(config: RuntimeMemoryConfig, ns: argparse.
         if compute_key:
             compute_choice = getattr(ns, compute_key, None)
             forced_compute = _torch_dtype_for_choice(compute_choice)
-            if resolved_backend == DeviceBackend.CPU and forced_compute and forced_compute != "float32":
+            if (
+                role != DeviceRole.CORE
+                and resolved_backend == DeviceBackend.CPU
+                and forced_compute
+                and forced_compute != "float32"
+            ):
                 forced_compute = "float32"
             if forced_compute:
                 policy.forced_compute_dtype = forced_compute
@@ -957,8 +963,8 @@ def _apply_env_overrides(ns: argparse.Namespace, env: Mapping[str, str]) -> None
 
     core_compute_dtype_raw = getattr(ns, "codex_core_compute_dtype", None)
     core_compute_dtype_choice = _normalize_dtype_choice(core_compute_dtype_raw, allow_fp8=False)
-    if core_device_backend == DeviceBackend.CPU and core_compute_dtype_choice not in (None, "fp32"):
-        core_compute_dtype_choice = "fp32"
+    # Keep explicit CORE compute intent intact even on CPU. Family assembly owns
+    # support/rejection because ordinary modules cannot all execute manual splits.
     ns.codex_core_compute_dtype = core_compute_dtype_choice
 
     vae_device_choice = resolved_main_device

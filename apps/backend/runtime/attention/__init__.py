@@ -8,7 +8,7 @@ Required Notice: see NOTICE
 
 Purpose: Attention backend implementations (basic / chunked / xFormers / PyTorch SDPA) + diffusers processor adapter.
 Provides memory/performance variants, precision-upcast helpers, single-head spatial legacy paths, neutral SDPA `auto` dispatch,
-mask-aware explicit flash fallback/logging, and pre-shaped `[B,H,S,D]` validation/contiguity before PyTorch SDPA dispatch.
+mask-aware explicit flash fallback/logging, and direct pre-shaped `[B,H,S,D]` PyTorch SDPA output without a flatten/reconstruct roundtrip.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `get_attn_precision` (function): Resolves attention precision policy (handles global upcast and disable flags).
@@ -18,6 +18,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `attention_split` (function): Splits attention computation into chunks to reduce peak memory.
 - `attention_xformers` (function): xFormers attention path (when available and not broken).
 - `attention_pytorch` (function): PyTorch SDPA attention path with optional per-call SDPA policy (`auto|flash|mem_efficient|math`) and flash fallback warning behavior.
+- `_attention_pytorch_pre_shaped` (function): Validated PyTorch SDPA owner that returns native `[B,H,S,D]` output.
 - `_resolve_sdpa_policy_for_inputs` (function): Preserves neutral `auto` dispatch and routes explicit flash requests away from known-ineligible inputs.
 - `_flash_sdpa_ineligibility_reason` (function): Validates hard flash-kernel constraints (mask/shape/head-dim/device/dtype) so known-ineligible flash calls skip direct flash attempts and enter deterministic fallback with explicit reason.
 - `_log_sdpa_call_once` (function): Emits bounded PyTorch SDPA call diagnostics with backend, requested/effective policy, mask, enabled kernels, and q/k/v shapes.
@@ -759,6 +760,51 @@ def attention_xformers(q, k, v, heads, mask=None, attn_precision=None, skip_resh
     return out
 
 
+def _attention_pytorch_pre_shaped(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    mask: torch.Tensor | None,
+    is_causal: bool,
+    sdpa_policy: str | None,
+    expected_heads: int | None = None,
+) -> torch.Tensor:
+    if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
+        raise RuntimeError(
+            "_attention_pytorch_pre_shaped expects q/k/v with shape [B,H,S,D]; "
+            f"got q={tuple(q.shape)} k={tuple(k.shape)} v={tuple(v.shape)}."
+        )
+    if tuple(q.shape[:2]) != tuple(k.shape[:2]) or tuple(q.shape[:2]) != tuple(v.shape[:2]):
+        raise RuntimeError(
+            "_attention_pytorch_pre_shaped expects matching [B,H] dimensions across q/k/v; "
+            f"got q={tuple(q.shape)} k={tuple(k.shape)} v={tuple(v.shape)}."
+        )
+    if expected_heads is not None and int(q.shape[1]) != int(expected_heads):
+        raise RuntimeError(
+            "_attention_pytorch_pre_shaped heads mismatch: "
+            f"q has {int(q.shape[1])}, expected {int(expected_heads)}."
+        )
+    if int(q.shape[-1]) != int(k.shape[-1]) or int(q.shape[-1]) != int(v.shape[-1]):
+        raise RuntimeError(
+            "_attention_pytorch_pre_shaped expects matching head dims across q/k/v; "
+            f"got q={tuple(q.shape)} k={tuple(k.shape)} v={tuple(v.shape)}."
+        )
+    if int(k.shape[2]) != int(v.shape[2]):
+        raise RuntimeError(
+            "_attention_pytorch_pre_shaped expects matching K/V sequence lengths; "
+            f"got k={tuple(k.shape)} v={tuple(v.shape)}."
+        )
+    return _run_pytorch_sdpa(
+        q.contiguous(),
+        k.contiguous(),
+        v.contiguous(),
+        mask=mask,
+        is_causal=is_causal,
+        sdpa_policy=sdpa_policy,
+    )
+
+
 def attention_pytorch(
     q,
     k,
@@ -774,37 +820,18 @@ def attention_pytorch(
     if heads <= 0:
         raise RuntimeError(f"attention_pytorch requires positive heads; got {heads}.")
     if skip_reshape:
-        if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
-            raise RuntimeError(
-                "attention_pytorch(skip_reshape=True) expects q/k/v with shape [B,H,S,D]; "
-                f"got q={tuple(q.shape)} k={tuple(k.shape)} v={tuple(v.shape)}."
-            )
-        b, heads_seen, q_tokens, dim_head = q.shape
-        if int(heads_seen) != heads:
-            raise RuntimeError(f"attention_pytorch heads mismatch: q has {int(heads_seen)}, expected {heads}.")
-        if int(k.shape[0]) != int(b) or int(v.shape[0]) != int(b):
-            raise RuntimeError(
-                "attention_pytorch batch mismatch for pre-shaped q/k/v: "
-                f"q={tuple(q.shape)} k={tuple(k.shape)} v={tuple(v.shape)}."
-            )
-        if int(k.shape[1]) != heads or int(v.shape[1]) != heads:
-            raise RuntimeError(
-                "attention_pytorch head mismatch for pre-shaped q/k/v: "
-                f"q={tuple(q.shape)} k={tuple(k.shape)} v={tuple(v.shape)} expected_heads={heads}."
-            )
-        if int(k.shape[2]) != int(v.shape[2]):
-            raise RuntimeError(
-                "attention_pytorch pre-shaped K/V sequence length mismatch: "
-                f"k={tuple(k.shape)} v={tuple(v.shape)}."
-            )
-        if int(k.shape[-1]) != int(dim_head) or int(v.shape[-1]) != int(dim_head):
-            raise RuntimeError(
-                "attention_pytorch head_dim mismatch for pre-shaped q/k/v: "
-                f"q={tuple(q.shape)} k={tuple(k.shape)} v={tuple(v.shape)}."
-            )
-        q = q.contiguous()
-        k = k.contiguous()
-        v = v.contiguous()
+        out = _attention_pytorch_pre_shaped(
+            q,
+            k,
+            v,
+            mask=mask,
+            is_causal=is_causal,
+            sdpa_policy=sdpa_policy,
+            expected_heads=heads,
+        )
+        b = int(q.shape[0])
+        q_tokens = int(q.shape[2])
+        dim_head = int(q.shape[3])
     else:
         if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:
             raise RuntimeError(
@@ -835,19 +862,17 @@ def attention_pytorch(
             lambda t: t.reshape(b, -1, heads, dim_head).transpose(1, 2).contiguous(),
             (q, k, v),
         )
+        out = _attention_pytorch_pre_shaped(
+            q,
+            k,
+            v,
+            mask=mask,
+            is_causal=is_causal,
+            sdpa_policy=sdpa_policy,
+            expected_heads=heads,
+        )
 
-    out = _run_pytorch_sdpa(
-        q,
-        k,
-        v,
-        mask=mask,
-        is_causal=is_causal,
-        sdpa_policy=sdpa_policy,
-    )
-    out = (
-        out.transpose(1, 2).reshape(b, q_tokens, heads * dim_head)
-    )
-    return out
+    return out.transpose(1, 2).reshape(b, q_tokens, heads * dim_head)
 
 
 def slice_attention_single_head_spatial(q, k, v):
@@ -1071,6 +1096,23 @@ def attention_function_pre_shaped(
     heads = int(q.shape[1])
     q_tokens = int(q.shape[2])
     head_dim = int(q.shape[3])
+    backend_selected = _selected_backend(backend_override=backend)
+    normalized_sdpa_policy = _normalize_sdpa_policy(sdpa_policy) if sdpa_policy is not None else None
+    if normalized_sdpa_policy is not None and backend_selected != AttentionBackend.PYTORCH:
+        raise RuntimeError(
+            "attention_function_pre_shaped(sdpa_policy=...) is supported only for backend='pytorch'. "
+            f"Got backend={backend_selected.value!r} policy={normalized_sdpa_policy!r}."
+        )
+    if backend_selected == AttentionBackend.PYTORCH:
+        return _attention_pytorch_pre_shaped(
+            q,
+            k,
+            v,
+            mask=mask,
+            is_causal=is_causal,
+            sdpa_policy=normalized_sdpa_policy,
+            expected_heads=heads,
+        )
     out = attention_function(
         q,
         k,
@@ -1079,8 +1121,8 @@ def attention_function_pre_shaped(
         mask=mask,
         skip_reshape=True,
         is_causal=is_causal,
-        backend=backend,
-        sdpa_policy=sdpa_policy,
+        backend=backend_selected,
+        sdpa_policy=None,
     )
     expected = heads * head_dim
     if out.ndim != 3 or int(out.shape[0]) != batch or int(out.shape[1]) != q_tokens or int(out.shape[2]) != expected:

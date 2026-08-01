@@ -11,6 +11,7 @@ Assembles a Codex-native runtime from the parsed Anima core bundle, validates sh
 (Qwen3-0.6B text encoder + WanVAE-style VAE), and eagerly loads external text/vae/tokenizer components through canonical loaders.
 Produces a denoiser patcher suitable for the canonical txt2img/img2img pipelines (Option A).
 Sets Anima predictor defaults, including SIMPLE schedule mode selection for tail-downsample sigma-ladder parity.
+Rejects explicit CORE storage/compute dtype splits before lazy-core or external-component materialization.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `_torch_dtype_label` (function): Convert canonical torch dtypes into runtime metadata labels (`fp16`/`bf16`/`fp32`).
@@ -46,6 +47,7 @@ from apps.backend.runtime.model_registry.family_runtime import FamilyRuntimeSpec
 from apps.backend.runtime.model_registry.specs import ModelFamily
 from apps.backend.runtime.memory import memory_management
 from apps.backend.runtime.memory.config import DeviceRole
+from apps.backend.runtime.memory.exceptions import MemoryConfigurationError
 from apps.backend.runtime.sampling_adapters.prediction import (
     SIMPLE_SCHEDULE_MODE_TAIL_DOWNSAMPLE_SIGMAS,
     PredictionDiscreteFlow,
@@ -334,7 +336,44 @@ def assemble_anima_runtime(
         native_core_dtype = None
 
     core_storage = memory_management.manager.dtype_for_role(DeviceRole.CORE, native_dtype=native_core_dtype)
-    core_compute = memory_management.manager.compute_dtype_for_role(DeviceRole.CORE, storage_dtype=core_storage)
+    core_policy = memory_management.manager.config.component_policy(DeviceRole.CORE)
+    requested_compute_name = core_policy.forced_compute_dtype
+    if requested_compute_name:
+        try:
+            requested_compute = getattr(torch, requested_compute_name)
+        except AttributeError as exc:
+            raise MemoryConfigurationError(
+                "Anima CORE compute dtype configuration is unsupported: "
+                f"storage={_torch_dtype_label(core_storage)} "
+                f"requested_compute={requested_compute_name!r}."
+            ) from exc
+        if requested_compute != core_storage:
+            raise MemoryConfigurationError(
+                "Anima CORE storage/compute dtype mismatch: "
+                f"storage={_torch_dtype_label(core_storage)} "
+                f"requested_compute={_torch_dtype_label(requested_compute)}. "
+                "Anima ordinary modules require matching storage and compute dtypes."
+            )
+
+    requested_compute_label = requested_compute_name or "auto"
+    try:
+        core_compute = memory_management.manager.compute_dtype_for_role(
+            DeviceRole.CORE,
+            supported=(core_storage,),
+            storage_dtype=core_storage,
+        )
+    except MemoryConfigurationError as exc:
+        raise MemoryConfigurationError(
+            "Anima CORE dtype resolution failed: "
+            f"storage={_torch_dtype_label(core_storage)} "
+            f"requested_compute={requested_compute_label!r}."
+        ) from exc
+    if core_compute != core_storage:
+        raise MemoryConfigurationError(
+            "Anima CORE dtype invariant violated after resolution: "
+            f"storage={_torch_dtype_label(core_storage)} "
+            f"compute={_torch_dtype_label(core_compute)}."
+        )
     load_device = memory_management.manager.get_device(DeviceRole.CORE)
     offload_device = memory_management.manager.get_offload_device(DeviceRole.CORE)
     initial_device = offload_device

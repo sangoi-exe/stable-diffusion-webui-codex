@@ -1,6 +1,6 @@
 # apps/backend/infra/config Overview
 Date: 2026-02-18
-Last Review: 2026-07-30
+Last Review: 2026-08-01
 Status: Active
 
 ## Purpose
@@ -24,6 +24,7 @@ Status: Active
 - 2026-02-22: GGUF dequant-forward run cache flags were retired: `--gguf-dequant-cache=lvl1|lvl2` now fails loud with removal guidance, and tuning flags (`--gguf-dequant-cache-limit-mb`, `--gguf-dequant-cache-ratio`) are rejected as unsupported.
 - 2026-02-23: `args.py` now supports `--main-device` and enforces a global main-device invariant (core/TE/VAE locked to one value), with fallback to `cuda` when available (else `cpu`) when not explicitly provided.
 - 2026-07-30: Matching core/TE/VAE device policies collapse to `AUTO` only when main and mount resolve to the same backend; when mount differs, the explicit main backend remains the role owner so `AUTO -> mount` manager semantics stay unchanged.
+- 2026-08-01: `args.py` preserves explicit reduced-precision CORE compute intent through CPU namespace and component-policy construction so family assembly can reject unsupported storage/compute splits; TE/VAE CPU compute normalization remains FP32.
 - 2026-02-23: `args.py` now defaults offload authority to CPU when `--offload-device`/`CODEX_OFFLOAD_DEVICE` is unset or `auto`; invalid unresolved offload backend states now fail loud in `build_runtime_memory_config(...)` instead of silently mirroring main-device backend.
 - 2026-02-23: `args.py` now validates `--cuda-malloc` against allocator env contract: strict mode fails loud unless `PYTORCH_CUDA_ALLOC_CONF` resolves to `backend:cudaMallocAsync` (including malformed/multiple backend entry detection).
 - 2026-03-05: `paths.py` model-root provisioning now includes Flux.2 keys (`flux2_ckpt`, `flux2_tenc`, `flux2_vae`, `flux2_loras`) alongside existing families.
