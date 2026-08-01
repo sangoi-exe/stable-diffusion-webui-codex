@@ -7,9 +7,10 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Native Qwen Image Edit-2511 single-image component runtime.
-Owns condition/reference preprocessing, multimodal prompt encoding, FlowMatch Euler denoising, final VAE decode,
-atomic stage-exclusive patcher lifecycle, streamed-core memory admission, and primary-stage exception preservation
-while delegating tensor contracts and latent math to `runtime_latents.py`.
+Owns condition/reference preprocessing, shared-vision multimodal prompt encoding, request-static transformer context,
+FlowMatch Euler denoising with one terminal device-validity read, final VAE decode, atomic stage-exclusive patcher
+lifecycle, streamed-core memory admission, and primary-stage exception preservation while delegating tensor contracts
+and latent math to `runtime_latents.py`.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageRuntime` (class): Exact Edit-2511 conditioning, reference encode, denoise, and decode owner.
@@ -53,6 +54,8 @@ from .runtime_latents import (
     QwenImageConditioning,
     QwenImageDenoisedLatents,
     QwenImageReferenceLatents,
+    _QwenImageDenoiseError,
+    _device_error_flag,
     qwen_image_pack_latents,
     qwen_image_true_cfg,
     qwen_image_unpack_latents,
@@ -69,7 +72,11 @@ from .text_encoder import (
     QwenImageTextEncoderRuntime,
     qwen_image_prompt_plan,
 )
-from .transformer import QWEN_IMAGE_NUM_LAYERS, QwenImageTransformer2DModel
+from .transformer import (
+    QWEN_IMAGE_NUM_LAYERS,
+    QwenImageTransformer2DModel,
+    QwenImageTransformerRequestContext,
+)
 from .vae import (
     QwenImageVaeConfig,
     qwen_image_denormalize_latents,
@@ -133,13 +140,16 @@ def _vae_pixel_batch(image: Image.Image) -> torch.Tensor:
 
 
 def _masked_prompt_features(
-    text_encoder: QwenImageTextEncoderRuntime,
+    hidden_states: torch.Tensor,
     batch: QwenImageProcessorBatch,
     *,
     template_start_idx: int,
     label: str,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    hidden_states = text_encoder.forward_processor_batch(batch)
+    if not isinstance(hidden_states, torch.Tensor):
+        raise TypeError(
+            f"{label} hidden states must be a torch.Tensor; got {type(hidden_states).__name__}."
+        )
     bool_mask = batch.attention_mask.to(device=hidden_states.device, dtype=torch.bool)
     valid_lengths = bool_mask.sum(dim=1)
     if tuple(valid_lengths.shape) != (1,):
@@ -377,12 +387,9 @@ class QwenImageRuntime:
         )
         positive_plan = qwen_image_prompt_plan(prompt, variant=self.variant)
         negative_plan = qwen_image_prompt_plan(negative_prompt, variant=self.variant)
-        positive_batch = self.text_encoder.prepare_processor_batch(
-            prompt_plan=positive_plan,
-            image=condition_image,
-        )
-        negative_batch = self.text_encoder.prepare_processor_batch(
-            prompt_plan=negative_plan,
+        positive_batch, negative_batch = self.text_encoder.prepare_conditioning_batches(
+            positive_prompt_plan=positive_plan,
+            negative_prompt_plan=negative_plan,
             image=condition_image,
         )
 
@@ -399,14 +406,20 @@ class QwenImageRuntime:
                     component_hint=_CONDITIONING_COMPONENT,
                 ),
             ):
+                positive_hidden_states, negative_hidden_states = (
+                    self.text_encoder.forward_conditioning_batches(
+                        positive_batch,
+                        negative_batch,
+                    )
+                )
                 positive_embeddings, positive_mask = _masked_prompt_features(
-                    self.text_encoder,
+                    positive_hidden_states,
                     positive_batch,
                     template_start_idx=positive_plan.template_start_idx,
                     label="Qwen Image positive",
                 )
                 negative_embeddings, negative_mask = _masked_prompt_features(
-                    self.text_encoder,
+                    negative_hidden_states,
                     negative_batch,
                     template_start_idx=negative_plan.template_start_idx,
                     label="Qwen Image negative",
@@ -483,7 +496,7 @@ class QwenImageRuntime:
         timestep: torch.Tensor,
         embeddings: torch.Tensor,
         mask: torch.Tensor,
-        image_shapes: tuple[tuple[tuple[int, int, int], tuple[int, int, int]], ...],
+        request_context: QwenImageTransformerRequestContext,
         progress_owner_token: str,
         block_offset: int,
         total_blocks: int,
@@ -511,11 +524,59 @@ class QwenImageRuntime:
             encoder_hidden_states=embeddings,
             encoder_hidden_states_mask=mask,
             timestep=timestep,
-            img_shapes=image_shapes,
+            request_context=request_context,
             transformer_options=transformer_options,
             return_dict=True,
         ).sample
         return output
+
+    @staticmethod
+    def _raise_denoise_error_mask(error_mask: int) -> None:
+        if type(error_mask) is not int or error_mask <= 0:
+            raise RuntimeError(
+                "Qwen Image denoise terminal error mask must be a positive exact int; "
+                f"got {error_mask!r}."
+            )
+        descriptions = (
+            (
+                _QwenImageDenoiseError.POSITIVE_PREDICTION_NONFINITE,
+                "positive prediction contains non-finite values",
+            ),
+            (
+                _QwenImageDenoiseError.CFG_NORM_NONFINITE,
+                "true-CFG prediction norms contain non-finite values",
+            ),
+            (
+                _QwenImageDenoiseError.CFG_COMBINED_ZERO_NORM,
+                "true-CFG combined prediction has zero norm",
+            ),
+            (
+                _QwenImageDenoiseError.CFG_RESULT_NONFINITE,
+                "true-CFG output contains non-finite values",
+            ),
+            (
+                _QwenImageDenoiseError.EULER_RESULT_NONFINITE,
+                "Euler update contains non-finite values",
+            ),
+        )
+        causes = [description for flag, description in descriptions if error_mask & int(flag)]
+        known_mask = sum(int(flag) for flag, _description in descriptions)
+        unknown_bits = error_mask & ~known_mask
+        if unknown_bits:
+            causes.append(f"unknown validity bits 0x{unknown_bits:x}")
+        raise RuntimeError(
+            "Qwen Image denoise device validation failed after the final step: "
+            f"mask=0x{error_mask:x} causes={'; '.join(causes)}."
+        )
+
+    @staticmethod
+    def _read_denoise_error_flags(error_flags: torch.Tensor) -> int:
+        if error_flags.ndim != 0 or error_flags.dtype is not torch.int32:
+            raise RuntimeError(
+                "Qwen Image denoise terminal validity flags must be a zero-dimensional int32 tensor; "
+                f"shape={tuple(error_flags.shape)} dtype={error_flags.dtype}."
+            )
+        return int(error_flags.item())
 
     def _run_loaded_denoise(
         self,
@@ -542,18 +603,14 @@ class QwenImageRuntime:
         generated = qwen_image_pack_latents(rng.next().to(device=compute_device, dtype=compute_dtype))
         reference_tokens = reference.packed_latents.to(device=compute_device, dtype=compute_dtype)
         positive_embeddings = conditioning.positive_embeddings.to(device=compute_device, dtype=compute_dtype)
-        positive_mask = conditioning.positive_mask.to(device=compute_device, dtype=torch.long)
+        positive_mask = conditioning.positive_mask
         use_true_cfg = cfg_scale > 1.0
         negative_embeddings = (
             conditioning.negative_embeddings.to(device=compute_device, dtype=compute_dtype)
             if use_true_cfg
             else None
         )
-        negative_mask = (
-            conditioning.negative_mask.to(device=compute_device, dtype=torch.long)
-            if use_true_cfg
-            else None
-        )
+        negative_mask = conditioning.negative_mask if use_true_cfg else None
         schedule = qwen_image_flow_schedule(
             step_count,
             image_seq_len=grid.sequence_length,
@@ -566,7 +623,31 @@ class QwenImageRuntime:
                 (1, int(reference.grid.packed_height), int(reference.grid.packed_width)),
             ),
         )
+        request_contexts: dict[int, QwenImageTransformerRequestContext] = {}
+        positive_text_length = int(positive_embeddings.shape[1])
+        positive_context = self.transformer.prepare_request_context(
+            image_shapes,
+            batch_size=int(positive_embeddings.shape[0]),
+            text_sequence_length=positive_text_length,
+            compute_device=compute_device,
+        )
+        request_contexts[positive_text_length] = positive_context
+        negative_context: QwenImageTransformerRequestContext | None = None
+        if use_true_cfg:
+            if negative_embeddings is None:
+                raise RuntimeError("Qwen Image true CFG negative embeddings were not staged on the compute device.")
+            negative_text_length = int(negative_embeddings.shape[1])
+            negative_context = request_contexts.get(negative_text_length)
+            if negative_context is None:
+                negative_context = self.transformer.prepare_request_context(
+                    image_shapes,
+                    batch_size=int(negative_embeddings.shape[0]),
+                    text_sequence_length=negative_text_length,
+                    compute_device=compute_device,
+                )
+                request_contexts[negative_text_length] = negative_context
         blocks_per_step = QWEN_IMAGE_NUM_LAYERS * (2 if use_true_cfg else 1)
+        error_flags = torch.zeros((), device=compute_device, dtype=torch.int32)
 
         backend_state.start(
             job_count=1,
@@ -591,39 +672,47 @@ class QwenImageRuntime:
                     timestep=model_timestep,
                     embeddings=positive_embeddings,
                     mask=positive_mask,
-                    image_shapes=image_shapes,
+                    request_context=positive_context,
                     progress_owner_token=owner_token,
                     block_offset=0,
                     total_blocks=blocks_per_step,
                 )[:, : int(grid.sequence_length)]
                 if use_true_cfg:
-                    if negative_embeddings is None or negative_mask is None:
+                    if negative_embeddings is None or negative_mask is None or negative_context is None:
                         raise RuntimeError("Qwen Image true CFG inputs were not staged on the compute device.")
                     negative_prediction = self._transformer_prediction(
                         latent_model_input=latent_model_input,
                         timestep=model_timestep,
                         embeddings=negative_embeddings,
                         mask=negative_mask,
-                        image_shapes=image_shapes,
+                        request_context=negative_context,
                         progress_owner_token=owner_token,
                         block_offset=QWEN_IMAGE_NUM_LAYERS,
                         total_blocks=blocks_per_step,
                     )[:, : int(grid.sequence_length)]
-                    prediction = qwen_image_true_cfg(
+                    prediction, cfg_error_flags = qwen_image_true_cfg(
                         positive_prediction,
                         negative_prediction,
                         scale=cfg_scale,
                     )
+                    error_flags = torch.bitwise_or(error_flags, cfg_error_flags)
                 else:
                     prediction = positive_prediction
-                    if not bool(torch.isfinite(prediction).all().item()):
-                        raise RuntimeError("Qwen Image positive denoise prediction contains non-finite values.")
-                generated = qwen_image_flow_euler_step(
+                    positive_nonfinite = torch.logical_not(torch.isfinite(prediction).all())
+                    error_flags = torch.bitwise_or(
+                        error_flags,
+                        _device_error_flag(
+                            positive_nonfinite,
+                            _QwenImageDenoiseError.POSITIVE_PREDICTION_NONFINITE,
+                        ),
+                    )
+                generated, euler_error_flags = qwen_image_flow_euler_step(
                     prediction,
                     generated,
                     current_sigma=schedule.sigmas[step_index],
                     next_sigma=schedule.sigmas[step_index + 1],
                 )
+                error_flags = torch.bitwise_or(error_flags, euler_error_flags)
                 backend_state.tick(
                     sampling_step=step_index + 1,
                     owner_token=owner_token,
@@ -633,6 +722,9 @@ class QwenImageRuntime:
             backend_state.end()
             backend_state.clear_flags()
 
+        terminal_error_mask = self._read_denoise_error_flags(error_flags)
+        if terminal_error_mask:
+            self._raise_denoise_error_mask(terminal_error_mask)
         return generated.detach().to(device=memory_management.manager.cpu_device).contiguous()
 
     @torch.inference_mode()

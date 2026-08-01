@@ -10,11 +10,13 @@ Purpose: Qwen Image Edit-2511 transformer metadata validation and native streame
 Owns the exact `QwenImageTransformer2DModel` config contract plus the Diffusers-free 60-block implementation whose
 module names bind directly to the native 1,933-key GGUF checkpoint without changing stored tensor names, including
 the shared per-block sampling progress callback, full-forward streamed execution lease, and one-block residency
-context seams.
+context seams. Request-static image geometry, modulation indices, and rotary tensors are prepared once per distinct
+text sequence length and validated at every forward boundary.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageTransformerConfig` (dataclass): Strict metadata contract for `QwenImageTransformer2DModel`.
 - `QwenImageTransformerOutput` (dataclass): Structured native transformer output.
+- `QwenImageTransformerRequestContext` (dataclass): Immutable request-static geometry/modulation/RoPE tensors.
 - `QwenImageTransformer2DModel` (class): Native 60-block Edit-2511 dual-stream transformer.
 - `qwen_image_transformer_config_from_mapping` (function): Validate and convert a transformer config mapping.
 """
@@ -23,7 +25,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 import torch
 from torch import nn
@@ -105,23 +107,120 @@ class QwenImageTransformerOutput:
     sample: torch.Tensor
 
 
+@dataclass(frozen=True, slots=True)
+class QwenImageTransformerRequestContext:
+    image_shapes: tuple[tuple[tuple[int, int, int], ...], ...]
+    expected_image_tokens: tuple[int, ...]
+    batch_size: int
+    text_sequence_length: int
+    compute_device: torch.device
+    modulate_index: torch.Tensor
+    rotary_embedding: tuple[torch.Tensor, torch.Tensor]
+
+    def __post_init__(self) -> None:
+        if self.batch_size <= 0 or len(self.image_shapes) != self.batch_size:
+            raise RuntimeError(
+                "Qwen Image transformer request context batch mismatch: "
+                f"batch={self.batch_size} shapes={len(self.image_shapes)}."
+            )
+        if len(self.expected_image_tokens) != self.batch_size:
+            raise RuntimeError(
+                "Qwen Image transformer request context token-count batch mismatch: "
+                f"tokens={len(self.expected_image_tokens)} batch={self.batch_size}."
+            )
+        derived_image_tokens: list[int] = []
+        for batch_index, sample_shapes in enumerate(self.image_shapes):
+            if len(sample_shapes) != 2:
+                raise RuntimeError(
+                    "Qwen Image transformer request context requires exactly two image grids per sample; "
+                    f"got {len(sample_shapes)} at batch index {batch_index}."
+                )
+            if any(len(shape) != 3 or any(value <= 0 for value in shape) for shape in sample_shapes):
+                raise RuntimeError(
+                    "Qwen Image transformer request context image shapes must be positive triplets; "
+                    f"got {sample_shapes!r} at batch index {batch_index}."
+                )
+            derived_image_tokens.append(sum(math.prod(shape) for shape in sample_shapes))
+        if tuple(derived_image_tokens) != self.expected_image_tokens:
+            raise RuntimeError(
+                "Qwen Image transformer request context image-token counts do not match image_shapes: "
+                f"derived={tuple(derived_image_tokens)!r} declared={self.expected_image_tokens!r}."
+            )
+        if self.text_sequence_length <= 0:
+            raise RuntimeError(
+                "Qwen Image transformer request context text_sequence_length must be positive; "
+                f"got {self.text_sequence_length}."
+            )
+        if not isinstance(self.compute_device, torch.device):
+            raise TypeError(
+                "Qwen Image transformer request context compute_device must be torch.device; "
+                f"got {type(self.compute_device).__name__}."
+            )
+        if any(token_count <= 0 for token_count in self.expected_image_tokens):
+            raise RuntimeError(
+                "Qwen Image transformer request context image-token counts must be positive; "
+                f"got {self.expected_image_tokens!r}."
+            )
+        if len(set(self.expected_image_tokens)) != 1:
+            raise RuntimeError(
+                "Qwen Image transformer request context requires equal image-token counts within one batch; "
+                f"got {self.expected_image_tokens!r}."
+            )
+        image_token_count = self.expected_image_tokens[0]
+        if tuple(self.modulate_index.shape) != (self.batch_size, image_token_count):
+            raise RuntimeError(
+                "Qwen Image transformer request modulation index shape mismatch: "
+                f"got={tuple(self.modulate_index.shape)} expected={(self.batch_size, image_token_count)}."
+            )
+        if self.modulate_index.dtype is not torch.int64 or self.modulate_index.device != self.compute_device:
+            raise RuntimeError(
+                "Qwen Image transformer request modulation index must use int64 on the compute device; "
+                f"dtype={self.modulate_index.dtype} device={self.modulate_index.device} "
+                f"expected_device={self.compute_device}."
+            )
+        if not isinstance(self.rotary_embedding, tuple) or len(self.rotary_embedding) != 2:
+            raise RuntimeError("Qwen Image transformer request rotary embedding must be a two-tensor tuple.")
+        image_frequencies, text_frequencies = self.rotary_embedding
+        if not isinstance(image_frequencies, torch.Tensor) or not isinstance(text_frequencies, torch.Tensor):
+            raise RuntimeError("Qwen Image transformer request rotary embedding entries must be tensors.")
+        if int(image_frequencies.shape[0]) != image_token_count:
+            raise RuntimeError(
+                "Qwen Image transformer request image RoPE length mismatch: "
+                f"got={int(image_frequencies.shape[0])} expected={image_token_count}."
+            )
+        if int(text_frequencies.shape[0]) != self.text_sequence_length:
+            raise RuntimeError(
+                "Qwen Image transformer request text RoPE length mismatch: "
+                f"got={int(text_frequencies.shape[0])} expected={self.text_sequence_length}."
+            )
+        for tensor_name, tensor in (
+            ("image rotary frequencies", image_frequencies),
+            ("text rotary frequencies", text_frequencies),
+        ):
+            if tensor.device != self.compute_device:
+                raise RuntimeError(
+                    f"Qwen Image transformer request {tensor_name} must be on {self.compute_device}; "
+                    f"got {tensor.device}."
+                )
+
+
 def _normalized_image_shapes(
     image_shapes: object,
     *,
     batch_size: int,
 ) -> tuple[tuple[tuple[int, int, int], ...], ...]:
     if not isinstance(image_shapes, Sequence) or isinstance(image_shapes, (str, bytes, bytearray)):
-        raise RuntimeError("Qwen Image transformer img_shapes must be a batch sequence.")
+        raise RuntimeError("Qwen Image transformer request image_shapes must be a batch sequence.")
     if len(image_shapes) != int(batch_size):
         raise RuntimeError(
-            "Qwen Image transformer img_shapes batch mismatch: "
+            "Qwen Image transformer request image_shapes batch mismatch: "
             f"got={len(image_shapes)} expected={int(batch_size)}."
         )
     normalized_batch: list[tuple[tuple[int, int, int], ...]] = []
     for batch_index, raw_sample in enumerate(image_shapes):
         if not isinstance(raw_sample, Sequence) or isinstance(raw_sample, (str, bytes, bytearray)):
             raise RuntimeError(
-                f"Qwen Image transformer img_shapes[{batch_index}] must be a sequence of shape triplets."
+                f"Qwen Image transformer request image_shapes[{batch_index}] must be a sequence of shape triplets."
             )
         if len(raw_sample) != 2:
             raise RuntimeError(
@@ -132,17 +231,20 @@ def _normalized_image_shapes(
         for shape_index, raw_shape in enumerate(raw_sample):
             if not isinstance(raw_shape, Sequence) or isinstance(raw_shape, (str, bytes, bytearray)):
                 raise RuntimeError(
-                    f"Qwen Image transformer img_shapes[{batch_index}][{shape_index}] must be a shape triplet."
+                    "Qwen Image transformer request "
+                    f"image_shapes[{batch_index}][{shape_index}] must be a shape triplet."
                 )
             if len(raw_shape) != 3:
                 raise RuntimeError(
-                    f"Qwen Image transformer img_shapes[{batch_index}][{shape_index}] must contain three values."
+                    "Qwen Image transformer request "
+                    f"image_shapes[{batch_index}][{shape_index}] must contain three values."
                 )
             try:
                 shape = tuple(int(value) for value in raw_shape)
             except Exception as exc:  # noqa: BLE001 - strict runtime shape contract
                 raise RuntimeError(
-                    f"Qwen Image transformer img_shapes[{batch_index}][{shape_index}] must contain integers."
+                    "Qwen Image transformer request "
+                    f"image_shapes[{batch_index}][{shape_index}] must contain integers."
                 ) from exc
             if any(value <= 0 for value in shape):
                 raise RuntimeError(
@@ -206,6 +308,76 @@ class QwenImageTransformer2DModel(nn.Module):
             raise RuntimeError("Qwen Image transformer already owns a different streamed core runtime.")
         self._streamed_core_runtime = runtime
 
+    @torch.inference_mode()
+    def prepare_request_context(
+        self,
+        image_shapes: Sequence[Sequence[Sequence[object]]],
+        *,
+        batch_size: int,
+        text_sequence_length: int,
+        compute_device: torch.device,
+    ) -> QwenImageTransformerRequestContext:
+        if type(batch_size) is not int or batch_size <= 0:
+            raise RuntimeError(
+                "Qwen Image transformer request batch_size must be a positive exact int; "
+                f"got {batch_size!r}."
+            )
+        if type(text_sequence_length) is not int or text_sequence_length <= 0:
+            raise RuntimeError(
+                "Qwen Image transformer request text_sequence_length must be a positive exact int; "
+                f"got {text_sequence_length!r}."
+            )
+        if not isinstance(compute_device, torch.device):
+            raise TypeError(
+                "Qwen Image transformer request compute_device must be torch.device; "
+                f"got {type(compute_device).__name__}."
+            )
+        normalized_shapes = _normalized_image_shapes(image_shapes, batch_size=batch_size)
+        expected_image_tokens = tuple(
+            sum(math.prod(shape) for shape in sample_shapes)
+            for sample_shapes in normalized_shapes
+        )
+        if len(set(expected_image_tokens)) != 1:
+            raise RuntimeError(
+                "Qwen Image transformer request requires equal image-token counts within one batch; "
+                f"got {expected_image_tokens!r}."
+            )
+        streamed_runtime = self._streamed_core_runtime
+        if streamed_runtime is None:
+            raise RuntimeError(
+                "Qwen Image Edit-2511 transformer requires its explicit streamed core runtime before request prep."
+            )
+        with streamed_runtime.transformer_execution_lease() as residency:
+            if residency.compute_device != compute_device:
+                raise RuntimeError(
+                    "Qwen Image transformer request compute device must match streamed residency; "
+                    f"request={compute_device} residency={residency.compute_device}."
+                )
+            modulation_rows = [
+                [0] * math.prod(sample_shapes[0])
+                + [1] * sum(math.prod(shape) for shape in sample_shapes[1:])
+                for sample_shapes in normalized_shapes
+            ]
+            modulate_index = torch.tensor(
+                modulation_rows,
+                device=compute_device,
+                dtype=torch.int64,
+            )
+            rotary_embedding = self.pos_embed(
+                normalized_shapes,
+                text_sequence_length=text_sequence_length,
+                device=compute_device,
+            )
+        return QwenImageTransformerRequestContext(
+            image_shapes=normalized_shapes,
+            expected_image_tokens=expected_image_tokens,
+            batch_size=batch_size,
+            text_sequence_length=text_sequence_length,
+            compute_device=compute_device,
+            modulate_index=modulate_index,
+            rotary_embedding=rotary_embedding,
+        )
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -213,10 +385,10 @@ class QwenImageTransformer2DModel(nn.Module):
         encoder_hidden_states: torch.Tensor,
         encoder_hidden_states_mask: torch.Tensor | None,
         timestep: torch.Tensor,
-        img_shapes: Sequence[Sequence[Sequence[object]]],
+        request_context: QwenImageTransformerRequestContext,
         guidance: torch.Tensor | None = None,
-        attention_kwargs: Mapping[str, Any] | None = None,
-        transformer_options: Mapping[str, Any] | None = None,
+        attention_kwargs: Mapping[str, object] | None = None,
+        transformer_options: Mapping[str, object] | None = None,
         controlnet_block_samples: object = None,
         additional_t_cond: object = None,
         return_dict: bool = True,
@@ -243,17 +415,47 @@ class QwenImageTransformer2DModel(nn.Module):
                 "Qwen Image transformer encoder_hidden_states must have shape [B,T,3584] "
                 f"with matching batch; got {tuple(encoder_hidden_states.shape)}."
             )
+        if not isinstance(request_context, QwenImageTransformerRequestContext):
+            raise TypeError(
+                "Qwen Image transformer request_context must be QwenImageTransformerRequestContext; "
+                f"got {type(request_context).__name__}."
+            )
 
         batch_size = int(hidden_states.shape[0])
-        normalized_shapes = _normalized_image_shapes(img_shapes, batch_size=batch_size)
-        expected_image_tokens = tuple(
-            sum(math.prod(shape) for shape in sample_shapes)
-            for sample_shapes in normalized_shapes
-        )
-        if any(token_count != int(hidden_states.shape[1]) for token_count in expected_image_tokens):
+        if request_context.batch_size != batch_size:
+            raise RuntimeError(
+                "Qwen Image transformer request-context batch mismatch: "
+                f"context={request_context.batch_size} hidden={batch_size}."
+            )
+        if any(
+            token_count != int(hidden_states.shape[1])
+            for token_count in request_context.expected_image_tokens
+        ):
             raise RuntimeError(
                 "Qwen Image transformer image-token geometry mismatch: "
-                f"hidden_tokens={int(hidden_states.shape[1])} shape_tokens={expected_image_tokens!r}."
+                f"hidden_tokens={int(hidden_states.shape[1])} "
+                f"shape_tokens={request_context.expected_image_tokens!r}."
+            )
+        text_sequence_length = int(encoder_hidden_states.shape[1])
+        if request_context.text_sequence_length != text_sequence_length:
+            raise RuntimeError(
+                "Qwen Image transformer request-context text length mismatch: "
+                f"context={request_context.text_sequence_length} hidden={text_sequence_length}."
+            )
+        if encoder_hidden_states_mask is None:
+            raise RuntimeError(
+                "Qwen Image transformer requires the explicit CPU-staged all-valid conditioning mask."
+            )
+        if tuple(encoder_hidden_states_mask.shape) != (batch_size, text_sequence_length):
+            raise RuntimeError(
+                "Qwen Image transformer encoder mask shape mismatch: "
+                f"got={tuple(encoder_hidden_states_mask.shape)} "
+                f"expected={(batch_size, text_sequence_length)}."
+            )
+        if encoder_hidden_states_mask.device.type != "cpu":
+            raise RuntimeError(
+                "Qwen Image transformer encoder mask validity must be proven by the CPU-staged "
+                f"conditioning contract; got device={encoder_hidden_states_mask.device}."
             )
 
         if timestep.ndim == 0:
@@ -270,6 +472,11 @@ class QwenImageTransformer2DModel(nn.Module):
                 "Qwen Image Edit-2511 transformer requires its explicit streamed core runtime before forward."
             )
         with streamed_runtime.transformer_execution_lease() as residency:
+            if request_context.compute_device != residency.compute_device:
+                raise RuntimeError(
+                    "Qwen Image transformer request context no longer matches streamed compute residency: "
+                    f"context={request_context.compute_device} residency={residency.compute_device}."
+                )
             for tensor_name, tensor in (
                 ("hidden_states", hidden_states),
                 ("encoder_hidden_states", encoder_hidden_states),
@@ -285,49 +492,14 @@ class QwenImageTransformer2DModel(nn.Module):
             generated_timestep = timestep
             if self.zero_cond_t:
                 timestep = torch.cat((generated_timestep, torch.zeros_like(generated_timestep)), dim=0)
-                modulation_rows = [
-                    [0] * math.prod(sample_shapes[0])
-                    + [1] * sum(math.prod(shape) for shape in sample_shapes[1:])
-                    for sample_shapes in normalized_shapes
-                ]
-                modulate_index = torch.tensor(
-                    modulation_rows,
-                    device=image_hidden_states.device,
-                    dtype=torch.int64,
-                )
+                modulate_index = request_context.modulate_index
             else:
-                modulate_index = None
+                raise RuntimeError("Qwen Image Edit-2511 request context requires zero_cond_t=true.")
 
             text_hidden_states = self.txt_in(self.txt_norm(encoder_hidden_states))
-            text_sequence_length = int(text_hidden_states.shape[1])
-            attention_mask: torch.Tensor | None = None
-            if encoder_hidden_states_mask is not None:
-                if tuple(encoder_hidden_states_mask.shape) != (batch_size, text_sequence_length):
-                    raise RuntimeError(
-                        "Qwen Image transformer encoder mask shape mismatch: "
-                        f"got={tuple(encoder_hidden_states_mask.shape)} "
-                        f"expected={(batch_size, text_sequence_length)}."
-                    )
-                text_mask = encoder_hidden_states_mask.to(
-                    device=image_hidden_states.device,
-                    dtype=torch.bool,
-                )
-                if not bool(text_mask.all().item()):
-                    image_mask = torch.ones(
-                        (batch_size, int(image_hidden_states.shape[1])),
-                        device=image_hidden_states.device,
-                        dtype=torch.bool,
-                    )
-                    attention_mask = torch.cat((text_mask, image_mask), dim=1)[:, None, None, :]
-
             timestep_embedding = self.time_text_embed(
                 timestep,
                 hidden_dtype=image_hidden_states.dtype,
-            )
-            rotary_embedding = self.pos_embed(
-                normalized_shapes,
-                text_sequence_length=text_sequence_length,
-                device=image_hidden_states.device,
             )
             block_progress_callback = resolve_block_progress_callback(transformer_options)
             total_blocks = int(len(self.transformer_blocks))
@@ -341,8 +513,8 @@ class QwenImageTransformer2DModel(nn.Module):
                         image_hidden_states,
                         text_hidden_states,
                         timestep_embedding=timestep_embedding,
-                        rotary_embedding=rotary_embedding,
-                        attention_mask=attention_mask,
+                        rotary_embedding=request_context.rotary_embedding,
+                        attention_mask=None,
                         modulate_index=modulate_index,
                     )
 
@@ -417,5 +589,6 @@ __all__ = [
     "QwenImageTransformerConfig",
     "QwenImageTransformer2DModel",
     "QwenImageTransformerOutput",
+    "QwenImageTransformerRequestContext",
     "qwen_image_transformer_config_from_mapping",
 ]

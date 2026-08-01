@@ -6,15 +6,16 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Qwen Image Qwen2.5-VL metadata, processor-batch, and base-model runtime helpers.
-Validates the lightweight Qwen2.5-VL config contract, builds the exact Edit-2511 prompt template, and owns the typed
-processor/base-model boundary without importing `transformers` at module import time.
+Purpose: Qwen Image Qwen2.5-VL metadata, shared-image conditioning batches, and base-model runtime helpers.
+Validates the lightweight Qwen2.5-VL config contract, builds the exact Edit-2511 prompt template, preprocesses one
+condition image for positive/negative prompts, and reuses one visual-tower result across both language-model forwards
+without importing `transformers` at module import time.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageProcessorBatch` (dataclass): Exact four-tensor Qwen2-VL processor output used by Edit-2511.
 - `QwenImagePromptPlan` (dataclass): Rendered prompt plus template-drop/max-sequence metadata for text encoding.
 - `QwenImageTextEncoderConfig` (dataclass): Strict Qwen2.5-VL text-encoder metadata contract.
-- `QwenImageTextEncoderRuntime` (class): Bound processor plus `Qwen2_5_VLModel` forward seam.
+- `QwenImageTextEncoderRuntime` (class): Shared-image processor plus one-vision/two-language-forward runtime seam.
 - `QwenImageVisionConfig` (dataclass): Strict Qwen2.5-VL visual-tower metadata contract.
 - `qwen_image_prompt_plan` (function): Render a prompt through the variant-owned Qwen Image template.
 - `qwen_image_text_encoder_config_from_mapping` (function): Validate and convert a text-encoder config mapping.
@@ -33,7 +34,25 @@ from torch import nn
 from .config import QWEN_IMAGE_CONTEXT_DIM, QWEN_IMAGE_TOKENIZER_MAX_LENGTH, qwen_image_variant_spec
 
 
+class _QwenImageImageProcessor(Protocol):
+    merge_size: int
+
+
+class _QwenImageTokenizer(Protocol):
+    def __call__(
+        self,
+        text: list[str],
+        *,
+        padding: bool,
+        return_tensors: str,
+    ) -> Mapping[str, torch.Tensor]: ...
+
+
 class _QwenImageProcessor(Protocol):
+    image_processor: _QwenImageImageProcessor
+    image_token: str
+    tokenizer: _QwenImageTokenizer
+
     def __call__(
         self,
         *,
@@ -124,19 +143,6 @@ class QwenImageProcessorBatch:
                 f"got {tuple(self.image_grid_thw.shape)}."
             )
 
-    def to_model_inputs(
-        self,
-        *,
-        device: torch.device,
-        pixel_dtype: torch.dtype,
-    ) -> dict[str, torch.Tensor]:
-        return {
-            "input_ids": self.input_ids.to(device=device, dtype=torch.long),
-            "attention_mask": self.attention_mask.to(device=device, dtype=torch.long),
-            "pixel_values": self.pixel_values.to(device=device, dtype=pixel_dtype),
-            "image_grid_thw": self.image_grid_thw.to(device=device, dtype=torch.long),
-        }
-
 
 class QwenImageTextEncoderRuntime:
     """Exact Qwen2.5-VL processor and base-model runtime boundary."""
@@ -170,79 +176,207 @@ class QwenImageTextEncoderRuntime:
         except StopIteration as exc:
             raise RuntimeError("Qwen Image text encoder model has no parameters.") from exc
 
-    def prepare_processor_batch(
+    @staticmethod
+    def _tensor_mapping(
+        value: object,
+        *,
+        expected_keys: set[str],
+        context: str,
+    ) -> dict[str, torch.Tensor]:
+        if not isinstance(value, Mapping):
+            raise RuntimeError(f"{context} must return a mapping; got {type(value).__name__}.")
+        actual_keys = {str(key) for key in value.keys()}
+        if actual_keys != expected_keys:
+            raise RuntimeError(
+                f"{context} key mismatch. "
+                f"missing={sorted(expected_keys - actual_keys)} extra={sorted(actual_keys - expected_keys)}."
+            )
+        tensors: dict[str, torch.Tensor] = {}
+        for key in sorted(expected_keys):
+            tensor = value[key]
+            if not isinstance(tensor, torch.Tensor):
+                raise RuntimeError(
+                    f"{context} output {key!r} must be a torch.Tensor; "
+                    f"got {type(tensor).__name__}."
+                )
+            tensors[key] = tensor
+        return tensors
+
+    @staticmethod
+    def _validate_prompt_batch(
+        batch: QwenImageProcessorBatch,
+        *,
+        prompt_plan: QwenImagePromptPlan,
+        label: str,
+    ) -> None:
+        sequence_length = int(batch.input_ids.shape[1])
+        if sequence_length > prompt_plan.max_sequence_length:
+            raise RuntimeError(
+                f"{label} sequence exceeds the selected max_sequence_length. "
+                f"got={sequence_length} max={prompt_plan.max_sequence_length}."
+            )
+        if prompt_plan.template_start_idx >= sequence_length:
+            raise RuntimeError(
+                f"{label} template drop index must be smaller than the encoded sequence length. "
+                f"drop={prompt_plan.template_start_idx} sequence={sequence_length}."
+            )
+
+    def _tokenize_prompt_with_image_grid(
         self,
         *,
         prompt_plan: QwenImagePromptPlan,
+        image_grid_thw: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        image_token = str(self.processor.image_token)
+        if not image_token:
+            raise RuntimeError("Qwen Image processor image_token must be non-empty.")
+        image_count = prompt_plan.rendered_prompt.count(image_token)
+        grid_count = int(image_grid_thw.shape[0])
+        if image_count != grid_count:
+            raise RuntimeError(
+                "Qwen Image prompt/image-grid count mismatch during shared-image tokenization: "
+                f"prompt_images={image_count} grid_rows={grid_count}."
+            )
+        merge_size = int(self.processor.image_processor.merge_size)
+        if merge_size <= 0:
+            raise RuntimeError(f"Qwen Image processor merge_size must be positive; got {merge_size}.")
+        merge_length = merge_size * merge_size
+        rendered_prompt = prompt_plan.rendered_prompt
+        placeholder = "<|placeholder|>"
+        for grid_index in range(grid_count):
+            patch_count = int(image_grid_thw[grid_index].prod().item())
+            if patch_count <= 0 or patch_count % merge_length != 0:
+                raise RuntimeError(
+                    "Qwen Image image-grid patch count must be positive and divisible by merge_size squared; "
+                    f"patches={patch_count} merge_length={merge_length}."
+                )
+            image_token_count = patch_count // merge_length
+            rendered_prompt = rendered_prompt.replace(
+                image_token,
+                placeholder * image_token_count,
+                1,
+            )
+        rendered_prompt = rendered_prompt.replace(placeholder, image_token)
+        tokenized = self._tensor_mapping(
+            self.processor.tokenizer(
+                [rendered_prompt],
+                padding=True,
+                return_tensors="pt",
+            ),
+            expected_keys={"input_ids", "attention_mask"},
+            context="Qwen Image shared-image tokenizer",
+        )
+        return tokenized["input_ids"], tokenized["attention_mask"]
+
+    def prepare_conditioning_batches(
+        self,
+        *,
+        positive_prompt_plan: QwenImagePromptPlan,
+        negative_prompt_plan: QwenImagePromptPlan,
         image: object,
-    ) -> QwenImageProcessorBatch:
-        if not isinstance(prompt_plan, QwenImagePromptPlan):
+    ) -> tuple[QwenImageProcessorBatch, QwenImageProcessorBatch]:
+        if not isinstance(positive_prompt_plan, QwenImagePromptPlan):
             raise TypeError(
-                "Qwen Image processor requires QwenImagePromptPlan; "
-                f"got {type(prompt_plan).__name__}."
+                "Qwen Image positive processor plan must be QwenImagePromptPlan; "
+                f"got {type(positive_prompt_plan).__name__}."
+            )
+        if not isinstance(negative_prompt_plan, QwenImagePromptPlan):
+            raise TypeError(
+                "Qwen Image negative processor plan must be QwenImagePromptPlan; "
+                f"got {type(negative_prompt_plan).__name__}."
             )
         raw_batch = self.processor(
-            text=[prompt_plan.rendered_prompt],
+            text=[positive_prompt_plan.rendered_prompt],
             images=image,
             padding=True,
             return_tensors="pt",
         )
-        if not isinstance(raw_batch, Mapping):
-            raise RuntimeError(
-                "Qwen Image processor must return a mapping; "
-                f"got {type(raw_batch).__name__}."
-            )
         expected_keys = {"input_ids", "attention_mask", "pixel_values", "image_grid_thw"}
-        actual_keys = {str(key) for key in raw_batch.keys()}
-        if actual_keys != expected_keys:
-            raise RuntimeError(
-                "Qwen Image processor output key mismatch. "
-                f"missing={sorted(expected_keys - actual_keys)} extra={sorted(actual_keys - expected_keys)}."
-            )
-        values: dict[str, torch.Tensor] = {}
-        for key in sorted(expected_keys):
-            value = raw_batch[key]
-            if not isinstance(value, torch.Tensor):
-                raise RuntimeError(
-                    f"Qwen Image processor output {key!r} must be a torch.Tensor; "
-                    f"got {type(value).__name__}."
-                )
-            values[key] = value
-        batch = QwenImageProcessorBatch(
+        values = self._tensor_mapping(
+            raw_batch,
+            expected_keys=expected_keys,
+            context="Qwen Image processor",
+        )
+        positive_batch = QwenImageProcessorBatch(
             input_ids=values["input_ids"],
             attention_mask=values["attention_mask"],
             pixel_values=values["pixel_values"],
             image_grid_thw=values["image_grid_thw"],
         )
-        sequence_length = int(batch.input_ids.shape[1])
-        if sequence_length > prompt_plan.max_sequence_length:
-            raise RuntimeError(
-                "Qwen Image processor sequence exceeds the selected max_sequence_length. "
-                f"got={sequence_length} max={prompt_plan.max_sequence_length}."
-            )
-        if prompt_plan.template_start_idx >= sequence_length:
-            raise RuntimeError(
-                "Qwen Image prompt template drop index must be smaller than the encoded sequence length. "
-                f"drop={prompt_plan.template_start_idx} sequence={sequence_length}."
-            )
-        return batch
-
-    @torch.inference_mode()
-    def forward_processor_batch(self, batch: QwenImageProcessorBatch) -> torch.Tensor:
-        if not isinstance(batch, QwenImageProcessorBatch):
-            raise TypeError(
-                "Qwen Image text encoder requires QwenImageProcessorBatch; "
-                f"got {type(batch).__name__}."
-            )
-        model_inputs = batch.to_model_inputs(
-            device=self.device,
-            pixel_dtype=self.compute_dtype,
+        negative_input_ids, negative_attention_mask = self._tokenize_prompt_with_image_grid(
+            prompt_plan=negative_prompt_plan,
+            image_grid_thw=positive_batch.image_grid_thw,
         )
+        negative_batch = QwenImageProcessorBatch(
+            input_ids=negative_input_ids,
+            attention_mask=negative_attention_mask,
+            pixel_values=positive_batch.pixel_values,
+            image_grid_thw=positive_batch.image_grid_thw,
+        )
+        self._validate_prompt_batch(
+            positive_batch,
+            prompt_plan=positive_prompt_plan,
+            label="Qwen Image positive processor",
+        )
+        self._validate_prompt_batch(
+            negative_batch,
+            prompt_plan=negative_prompt_plan,
+            label="Qwen Image negative tokenizer",
+        )
+        if negative_batch.pixel_values is not positive_batch.pixel_values:
+            raise RuntimeError("Qwen Image conditioning batches must share the exact pixel_values tensor object.")
+        if negative_batch.image_grid_thw is not positive_batch.image_grid_thw:
+            raise RuntimeError("Qwen Image conditioning batches must share the exact image_grid_thw tensor object.")
+        return positive_batch, negative_batch
+
+    def _forward_text_batch(
+        self,
+        batch: QwenImageProcessorBatch,
+        *,
+        image_features: torch.Tensor,
+        image_grid_thw: torch.Tensor,
+    ) -> torch.Tensor:
+        input_ids = batch.input_ids.to(device=self.device, dtype=torch.long)
+        attention_mask = batch.attention_mask.to(device=self.device, dtype=torch.long)
+        get_input_embeddings = getattr(self.model, "get_input_embeddings", None)
+        if not callable(get_input_embeddings):
+            raise RuntimeError("Qwen2_5_VLModel must expose callable get_input_embeddings().")
+        input_embedding = get_input_embeddings()
+        if not callable(input_embedding):
+            raise RuntimeError("Qwen2_5_VLModel input embedding must be callable.")
+        inputs_embeds = input_embedding(input_ids)
+        if not isinstance(inputs_embeds, torch.Tensor):
+            raise RuntimeError(
+                "Qwen2_5_VLModel input embedding must return a tensor; "
+                f"got {type(inputs_embeds).__name__}."
+            )
+        batch_image_features = image_features.to(
+            device=inputs_embeds.device,
+            dtype=inputs_embeds.dtype,
+        )
+        get_placeholder_mask = getattr(self.model, "get_placeholder_mask", None)
+        if not callable(get_placeholder_mask):
+            raise RuntimeError("Qwen2_5_VLModel must expose callable get_placeholder_mask().")
+        placeholder_masks = get_placeholder_mask(
+            input_ids,
+            inputs_embeds=inputs_embeds,
+            image_features=batch_image_features,
+        )
+        if not isinstance(placeholder_masks, tuple) or len(placeholder_masks) != 2:
+            raise RuntimeError("Qwen2_5_VLModel placeholder-mask result must be a two-tensor tuple.")
+        image_mask = placeholder_masks[0]
+        if not isinstance(image_mask, torch.Tensor) or tuple(image_mask.shape) != tuple(inputs_embeds.shape):
+            raise RuntimeError(
+                "Qwen2_5_VLModel image placeholder mask must match inputs_embeds; "
+                f"mask={getattr(image_mask, 'shape', None)} embeds={tuple(inputs_embeds.shape)}."
+            )
+        inputs_embeds = inputs_embeds.masked_scatter(image_mask, batch_image_features)
         output = self.model(
-            input_ids=model_inputs["input_ids"],
-            attention_mask=model_inputs["attention_mask"],
-            pixel_values=model_inputs["pixel_values"],
-            image_grid_thw=model_inputs["image_grid_thw"],
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            pixel_values=None,
+            image_grid_thw=image_grid_thw,
             use_cache=False,
             output_hidden_states=False,
             return_dict=True,
@@ -266,6 +400,58 @@ class QwenImageTextEncoderRuntime:
         if not bool(torch.isfinite(hidden_states).all().item()):
             raise RuntimeError("Qwen Image text encoder produced non-finite hidden states.")
         return hidden_states
+
+    @torch.inference_mode()
+    def forward_conditioning_batches(
+        self,
+        positive_batch: QwenImageProcessorBatch,
+        negative_batch: QwenImageProcessorBatch,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if not isinstance(positive_batch, QwenImageProcessorBatch):
+            raise TypeError(
+                "Qwen Image text encoder positive batch must be QwenImageProcessorBatch; "
+                f"got {type(positive_batch).__name__}."
+            )
+        if not isinstance(negative_batch, QwenImageProcessorBatch):
+            raise TypeError(
+                "Qwen Image text encoder negative batch must be QwenImageProcessorBatch; "
+                f"got {type(negative_batch).__name__}."
+            )
+        if positive_batch.pixel_values is not negative_batch.pixel_values:
+            raise RuntimeError("Qwen Image text encoder batches must share the exact pixel_values tensor object.")
+        if positive_batch.image_grid_thw is not negative_batch.image_grid_thw:
+            raise RuntimeError("Qwen Image text encoder batches must share the exact image_grid_thw tensor object.")
+        pixel_values = positive_batch.pixel_values.to(
+            device=self.device,
+            dtype=self.compute_dtype,
+        )
+        image_grid_thw = positive_batch.image_grid_thw.to(device=self.device, dtype=torch.long)
+        get_image_features = getattr(self.model, "get_image_features", None)
+        if not callable(get_image_features):
+            raise RuntimeError("Qwen2_5_VLModel must expose callable get_image_features().")
+        raw_image_features = get_image_features(pixel_values, image_grid_thw)
+        if not isinstance(raw_image_features, (tuple, list)) or not raw_image_features:
+            raise RuntimeError("Qwen2_5_VLModel image features must be a non-empty tensor sequence.")
+        image_feature_parts: list[torch.Tensor] = []
+        for feature_index, feature in enumerate(raw_image_features):
+            if not isinstance(feature, torch.Tensor):
+                raise RuntimeError(
+                    "Qwen2_5_VLModel image feature parts must be tensors; "
+                    f"index={feature_index} got={type(feature).__name__}."
+                )
+            image_feature_parts.append(feature)
+        image_features = torch.cat(tuple(image_feature_parts), dim=0)
+        positive_hidden_states = self._forward_text_batch(
+            positive_batch,
+            image_features=image_features,
+            image_grid_thw=image_grid_thw,
+        )
+        negative_hidden_states = self._forward_text_batch(
+            negative_batch,
+            image_features=image_features,
+            image_grid_thw=image_grid_thw,
+        )
+        return positive_hidden_states, negative_hidden_states
 
 
 def _require_mapping(value: object, *, field: str, context: str) -> Mapping[str, object]:

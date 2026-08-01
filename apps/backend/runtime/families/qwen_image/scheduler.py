@@ -6,15 +6,16 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Qwen Image FlowMatch Euler scheduler metadata, geometry, and native step helpers.
+Purpose: Qwen Image FlowMatch Euler scheduler metadata, geometry, and device-valid native step helpers.
 Validates HF-style scheduler metadata, derives packed image sequence lengths, builds the exact dynamically shifted
-sigma/timestep ladder, and applies the deterministic FP32 Euler update without importing Diffusers.
+sigma/timestep ladder, and applies the deterministic FP32 Euler update while returning a device-side validity flag
+instead of synchronizing the denoise loop.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageFlowSchedule` (dataclass): Exact inference sigma/timestep tensors for one Qwen Image denoise run.
 - `QwenImageLatentGrid` (dataclass): Derived latent/packed-grid dimensions for one Qwen Image output size.
 - `QwenImageSchedulerConfig` (dataclass): Strict scheduler metadata contract for supported Qwen Image payloads.
-- `qwen_image_flow_euler_step` (function): Apply one deterministic FlowMatch Euler update in FP32.
+- `qwen_image_flow_euler_step` (function): Return one FP32 FlowMatch Euler update plus device validity flags.
 - `qwen_image_flow_schedule` (function): Build the exact shifted/stretched Qwen Image sigma ladder.
 - `qwen_image_flow_shift` (function): Resolve dynamic FlowMatch shift from packed image sequence length.
 - `qwen_image_flow_shift_for_dimensions` (function): Resolve dynamic FlowMatch shift from output dimensions.
@@ -32,7 +33,13 @@ from typing import Mapping
 import numpy as np
 import torch
 
-from .config import QWEN_IMAGE_IMAGE_MULTIPLE, QWEN_IMAGE_PATCH_SIZE, QWEN_IMAGE_VAE_SCALE_FACTOR, validate_qwen_image_dimensions
+from .config import (
+    QWEN_IMAGE_IMAGE_MULTIPLE,
+    QWEN_IMAGE_PATCH_SIZE,
+    QWEN_IMAGE_VAE_SCALE_FACTOR,
+    validate_qwen_image_dimensions,
+)
+from .runtime_latents import _QwenImageDenoiseError, _device_error_flag
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,7 +283,7 @@ def qwen_image_flow_euler_step(
     *,
     current_sigma: torch.Tensor,
     next_sigma: torch.Tensor,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     if tuple(model_output.shape) != tuple(sample.shape):
         raise RuntimeError(
             "Qwen Image Euler step requires matching model_output/sample shapes; "
@@ -290,9 +297,12 @@ def qwen_image_flow_euler_step(
     )
     previous = sample.to(dtype=torch.float32) + delta * model_output
     previous = previous.to(dtype=model_output.dtype)
-    if not bool(torch.isfinite(previous).all().item()):
-        raise RuntimeError("Qwen Image Euler step produced non-finite latents.")
-    return previous
+    result_nonfinite = torch.logical_not(torch.isfinite(previous).all())
+    error_flags = _device_error_flag(
+        result_nonfinite,
+        _QwenImageDenoiseError.EULER_RESULT_NONFINITE,
+    )
+    return previous, error_flags
 
 
 __all__ = [

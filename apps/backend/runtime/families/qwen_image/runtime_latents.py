@@ -6,16 +6,17 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Qwen Image Edit-2511 runtime tensor contracts and latent math.
-Owns CPU-staged conditioning/latent value objects, native 2x2 latent pack/unpack, and exact true-CFG norm rescaling
-without owning component lifecycle or the canonical img2img pipeline.
+Purpose: Qwen Image Edit-2511 runtime tensor contracts, latent math, and device-side denoise validity flags.
+Owns CPU-staged conditioning/latent value objects, native 2x2 latent pack/unpack, exact true-CFG norm rescaling, and
+the private bit contract that defers CUDA validity reporting until the denoise stage's single terminal read.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageConditioning` (dataclass): Positive/negative multimodal embeddings plus explicit attention masks.
 - `QwenImageDenoisedLatents` (dataclass): CPU-packed generated latents plus their output grid and seed metadata.
 - `QwenImageReferenceLatents` (dataclass): CPU-packed reference-image latents plus their native grid.
+- `_QwenImageDenoiseError` (IntFlag): Private device-side denoise validity bit contract.
 - `qwen_image_pack_latents` (function): Pack 16-channel latents into native 2x2 image tokens.
-- `qwen_image_true_cfg` (function): Apply exact Qwen negative/positive CFG plus norm rescale.
+- `qwen_image_true_cfg` (function): Return exact norm-rescaled true CFG plus device validity flags.
 - `qwen_image_unpack_latents` (function): Restore packed image tokens to one-frame 5D VAE latents.
 """
 
@@ -23,6 +24,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import IntFlag
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -32,7 +35,34 @@ from .config import (
     QWEN_IMAGE_LATENT_CHANNELS,
     QWEN_IMAGE_TRANSFORMER_IN_CHANNELS,
 )
-from .scheduler import QwenImageLatentGrid
+
+if TYPE_CHECKING:
+    from .scheduler import QwenImageLatentGrid
+
+
+class _QwenImageDenoiseError(IntFlag):
+    NONE = 0
+    POSITIVE_PREDICTION_NONFINITE = 1
+    CFG_NORM_NONFINITE = 2
+    CFG_COMBINED_ZERO_NORM = 4
+    CFG_RESULT_NONFINITE = 8
+    EULER_RESULT_NONFINITE = 16
+
+
+def _device_error_flag(
+    condition: torch.Tensor,
+    flag: _QwenImageDenoiseError,
+) -> torch.Tensor:
+    if condition.ndim != 0 or condition.dtype is not torch.bool:
+        raise RuntimeError(
+            "Qwen Image denoise validity conditions must be zero-dimensional bool tensors; "
+            f"shape={tuple(condition.shape)} dtype={condition.dtype}."
+        )
+    return torch.where(
+        condition,
+        torch.full((), int(flag), device=condition.device, dtype=torch.int32),
+        torch.zeros((), device=condition.device, dtype=torch.int32),
+    )
 
 
 def _require_cpu_tensor(value: torch.Tensor, *, label: str) -> None:
@@ -187,11 +217,16 @@ def qwen_image_true_cfg(
     negative_prediction: torch.Tensor,
     *,
     scale: object = QWEN_IMAGE_DEFAULT_TRUE_CFG,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     if tuple(positive_prediction.shape) != tuple(negative_prediction.shape):
         raise RuntimeError(
             "Qwen Image true CFG requires matching positive/negative prediction shapes; "
             f"positive={tuple(positive_prediction.shape)} negative={tuple(negative_prediction.shape)}."
+        )
+    if positive_prediction.device != negative_prediction.device:
+        raise RuntimeError(
+            "Qwen Image true CFG predictions must share one device; "
+            f"positive={positive_prediction.device} negative={negative_prediction.device}."
         )
     try:
         resolved_scale = float(scale)
@@ -203,14 +238,29 @@ def qwen_image_true_cfg(
     combined = negative_prediction + resolved_scale * (positive_prediction - negative_prediction)
     positive_norm = torch.norm(positive_prediction, dim=-1, keepdim=True)
     combined_norm = torch.norm(combined, dim=-1, keepdim=True)
-    if not bool(torch.isfinite(positive_norm).all().item()) or not bool(torch.isfinite(combined_norm).all().item()):
-        raise RuntimeError("Qwen Image true CFG produced non-finite prediction norms.")
-    if bool((combined_norm == 0).any().item()):
-        raise RuntimeError("Qwen Image true CFG cannot rescale a zero-norm combined prediction.")
-    result = combined * (positive_norm / combined_norm)
-    if not bool(torch.isfinite(result).all().item()):
-        raise RuntimeError("Qwen Image true CFG produced non-finite output.")
-    return result
+    norm_nonfinite = torch.logical_not(
+        torch.logical_and(
+            torch.isfinite(positive_norm).all(),
+            torch.isfinite(combined_norm).all(),
+        )
+    )
+    zero_combined_norm = (combined_norm == 0).any()
+    safe_combined_norm = torch.where(
+        combined_norm == 0,
+        torch.ones_like(combined_norm),
+        combined_norm,
+    )
+    result = combined * (positive_norm / safe_combined_norm)
+    result_nonfinite = torch.logical_not(torch.isfinite(result).all())
+    error_flags = torch.bitwise_or(
+        _device_error_flag(norm_nonfinite, _QwenImageDenoiseError.CFG_NORM_NONFINITE),
+        _device_error_flag(zero_combined_norm, _QwenImageDenoiseError.CFG_COMBINED_ZERO_NORM),
+    )
+    error_flags = torch.bitwise_or(
+        error_flags,
+        _device_error_flag(result_nonfinite, _QwenImageDenoiseError.CFG_RESULT_NONFINITE),
+    )
+    return result, error_flags
 
 
 __all__ = [

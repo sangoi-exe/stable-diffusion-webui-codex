@@ -18,7 +18,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `QwenImageTransformerConfig` (dataclass): Strict Qwen Image transformer metadata contract.
 - `qwen_image_edit_condition_dimensions` (function): Derive Edit-2511 processor condition-image dimensions.
 - `qwen_image_edit_vae_dimensions` (function): Derive Edit-2511 VAE/reference-image dimensions.
-- `qwen_image_flow_euler_step` (function): Apply one deterministic native FlowMatch Euler update.
+- `qwen_image_flow_euler_step` (function): Return one native FlowMatch Euler update plus device validity flags.
 - `qwen_image_flow_schedule` (function): Build the exact dynamically shifted native sigma/timestep ladder.
 - `qwen_image_flow_shift` (function): Resolve Qwen Image dynamic FlowMatch shift from image sequence length.
 - `qwen_image_flow_shift_for_dimensions` (function): Resolve Qwen Image dynamic shift from output dimensions.
