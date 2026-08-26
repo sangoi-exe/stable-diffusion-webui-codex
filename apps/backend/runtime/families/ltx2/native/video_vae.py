@@ -9,8 +9,9 @@ Required Notice: see NOTICE
 Purpose: Native LTX2 video VAE with parser-state-compatible parameter names.
 Implements the LTX2 video autoencoder under `apps/**` without importing the official Diffusers LTX2 class while
 preserving the parser-produced raw/original state-dict surface (`per_channel_statistics.*`, sequential `down_blocks`
-/ `up_blocks`, `res_blocks`, `last_time_embedder`, `last_scale_shift_table`). The public `decode(...)` path now
-enforces the explicit decode-timestep contract required by `config.timestep_conditioning`.
+/ `up_blocks`, `res_blocks`, `last_time_embedder`, `last_scale_shift_table`). The public `decode(...)` path
+enforces the explicit decode-timestep contract required by `config.timestep_conditioning` and does not expose
+unowned slicing, tiling, or framewise execution controls.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `Ltx2VideoAutoencoder` (class): Config/state-driven native LTX2 video KL autoencoder.
@@ -1125,18 +1126,6 @@ class Ltx2VideoAutoencoder(nn.Module):
         self.per_channel_statistics = _PerChannelStatistics(latent_channels=int(latent_channels))
         self.spatial_compression_ratio = self.config.spatial_compression_ratio
         self.temporal_compression_ratio = self.config.temporal_compression_ratio
-        self.use_slicing = False
-        self.use_tiling = False
-        self.use_framewise_encoding = False
-        self.use_framewise_decoding = False
-        self.num_sample_frames_batch_size = 16
-        self.num_latent_frames_batch_size = 2
-        self.tile_sample_min_height = 512
-        self.tile_sample_min_width = 512
-        self.tile_sample_min_num_frames = 16
-        self.tile_sample_stride_height = 448
-        self.tile_sample_stride_width = 448
-        self.tile_sample_stride_num_frames = 8
 
     @property
     def latents_mean(self) -> torch.Tensor:
@@ -1282,11 +1271,7 @@ class Ltx2VideoAutoencoder(nn.Module):
         return self.encoder(x)
 
     def encode(self, x: torch.Tensor, *, return_dict: bool = True) -> _AutoencoderKLOutput | tuple[_DiagonalGaussianDistribution]:
-        if self.use_slicing and x.shape[0] > 1:
-            encoded_slices = [self._encode(x_slice) for x_slice in x.split(1)]
-            hidden_states = torch.cat(encoded_slices)
-        else:
-            hidden_states = self._encode(x)
+        hidden_states = self._encode(x)
         posterior = _DiagonalGaussianDistribution(hidden_states)
         if not return_dict:
             return (posterior,)
@@ -1344,14 +1329,7 @@ class Ltx2VideoAutoencoder(nn.Module):
             device=z.device,
             dtype=z.dtype,
         )
-        if self.use_slicing and z.shape[0] > 1:
-            decoded_slices = []
-            for index, z_slice in enumerate(z.split(1)):
-                timestep_slice = None if decode_timestep is None else decode_timestep[index:index + 1]
-                decoded_slices.append(self._decode(z_slice, timestep=timestep_slice))
-            decoded = torch.cat(decoded_slices)
-        else:
-            decoded = self._decode(z, timestep=decode_timestep)
+        decoded = self._decode(z, timestep=decode_timestep)
         if not return_dict:
             return (decoded,)
         return _DecoderOutput(sample=decoded)

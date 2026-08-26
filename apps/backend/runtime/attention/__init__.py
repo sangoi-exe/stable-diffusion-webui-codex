@@ -7,8 +7,9 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Attention backend implementations (basic / chunked / xFormers / PyTorch SDPA) + diffusers processor adapter.
-Provides memory/performance variants, precision-upcast helpers, single-head spatial legacy paths, neutral SDPA `auto` dispatch,
-mask-aware explicit flash fallback/logging, and direct pre-shaped `[B,H,S,D]` PyTorch SDPA output without a flatten/reconstruct roundtrip.
+Provides memory/performance variants, precision-upcast helpers, single-head spatial legacy paths with optional exact query tiling,
+neutral SDPA `auto` dispatch, mask-aware explicit flash fallback/logging, and direct pre-shaped `[B,H,S,D]` PyTorch SDPA output
+without a flatten/reconstruct roundtrip.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `get_attn_precision` (function): Resolves attention precision policy (handles global upcast and disable flags).
@@ -24,9 +25,9 @@ Symbols (top-level; keep in sync; no ghosts):
 - `_log_sdpa_call_once` (function): Emits bounded PyTorch SDPA call diagnostics with backend, requested/effective policy, mask, enabled kernels, and q/k/v shapes.
 - `attention_function` (function): Runtime-selected cross-attention dispatcher (driven by `memory_management.manager.config.attention.backend`) with optional SDPA policy forwarding for PyTorch backend.
 - `attention_function_pre_shaped` (function): Dispatcher wrapper for pre-shaped Q/K/V tensors (`[B,H,S,D]` -> `[B,H,S,D]`), including optional SDPA policy forwarding.
-- `attention_function_single_head_spatial` (function): Runtime-selected single-head spatial attention dispatcher (VAE; driven by runtime config).
-- `slice_attention_single_head_spatial` (function): Single-head spatial attention variant using slicing/chunking.
-- `normal_attention_single_head_spatial` (function): Baseline single-head spatial attention.
+- `attention_function_single_head_spatial` (function): Runtime-selected single-head spatial attention dispatcher with an explicit exact query-tiling mode for VAE callers.
+- `slice_attention_single_head_spatial` (function): Single-head spatial attention variant using automatic or explicit query slicing/chunking.
+- `normal_attention_single_head_spatial` (function): Baseline single-head spatial attention with optional query chunking.
 - `xformers_attention_single_head_spatial` (function): xFormers-backed single-head spatial attention.
 - `pytorch_attention_single_head_spatial` (function): PyTorch SDPA-backed single-head spatial attention.
 - `SramAttentionMode` (enum): Generic SRAM/shared-memory attention mode (`off|auto|force`) re-exported from the versioned runtime bridge.
@@ -875,28 +876,46 @@ def attention_pytorch(
     return out.transpose(1, 2).reshape(b, q_tokens, heads * dim_head)
 
 
-def slice_attention_single_head_spatial(q, k, v):
+def slice_attention_single_head_spatial(q, k, v, *, query_chunk_size: int | None = None):
     r1 = torch.zeros_like(k, device=q.device)
     scale = (int(q.shape[-1]) ** (-0.5))
 
-    mem_free_total = memory_management.manager.get_free_memory(q.device)
-    if mem_free_total <= 0:
-        raise RuntimeError(
-            "Not enough memory for spatial attention: free memory estimate is non-positive "
-            f"(have={mem_free_total} bytes, device={q.device})."
-        )
+    if query_chunk_size is not None:
+        if isinstance(query_chunk_size, bool) or not isinstance(query_chunk_size, int):
+            raise RuntimeError(
+                "Spatial attention query_chunk_size must be an integer or None; "
+                f"got {query_chunk_size!r}."
+            )
+        if query_chunk_size <= 0:
+            raise RuntimeError(
+                "Spatial attention query_chunk_size must be greater than zero; "
+                f"got {query_chunk_size}."
+            )
+        slice_size = min(int(q.shape[1]), int(query_chunk_size))
+        if slice_size <= 0:
+            raise RuntimeError(f"Spatial attention requires at least one query token; got q={tuple(q.shape)}.")
+        use_explicit_chunks = True
+        steps = None
+    else:
+        mem_free_total = memory_management.manager.get_free_memory(q.device)
+        if mem_free_total <= 0:
+            raise RuntimeError(
+                "Not enough memory for spatial attention: free memory estimate is non-positive "
+                f"(have={mem_free_total} bytes, device={q.device})."
+            )
 
-    tensor_size = q.shape[0] * q.shape[1] * k.shape[2] * q.element_size()
-    modifier = 3 if q.element_size() == 2 else 2.5
-    mem_required = tensor_size * modifier
-    steps = 1
+        tensor_size = q.shape[0] * q.shape[1] * k.shape[2] * q.element_size()
+        modifier = 3 if q.element_size() == 2 else 2.5
+        mem_required = tensor_size * modifier
+        steps = 1
 
-    if mem_required > mem_free_total:
-        steps = 2 ** (math.ceil(math.log(mem_required / mem_free_total, 2)))
+        if mem_required > mem_free_total:
+            steps = 2 ** (math.ceil(math.log(mem_required / mem_free_total, 2)))
+        slice_size = q.shape[1] // steps if (q.shape[1] % steps) == 0 else q.shape[1]
+        use_explicit_chunks = False
 
     while True:
         try:
-            slice_size = q.shape[1] // steps if (q.shape[1] % steps) == 0 else q.shape[1]
             for i in range(0, q.shape[1], slice_size):
                 end = i + slice_size
                 s1 = torch.bmm(q[:, i:end], k) * scale
@@ -909,15 +928,24 @@ def slice_attention_single_head_spatial(q, k, v):
             break
         except memory_management.manager.oom_exception as e:
             memory_management.manager.soft_empty_cache(force=True)
-            steps *= 2
-            if steps > 128:
-                raise e
-            _LOGGER.warning("OOM during attention, increasing steps to %d", steps)
+            if use_explicit_chunks:
+                if slice_size <= 1:
+                    raise e
+                slice_size = max(1, slice_size // 2)
+                _LOGGER.warning("OOM during explicitly tiled attention, reducing query chunk size to %d", slice_size)
+            else:
+                if steps is None:
+                    raise RuntimeError("Spatial attention internal chunk state is invalid.")
+                steps *= 2
+                if steps > 128:
+                    raise e
+                slice_size = q.shape[1] // steps if (q.shape[1] % steps) == 0 else q.shape[1]
+                _LOGGER.warning("OOM during attention, increasing steps to %d", steps)
 
     return r1
 
 
-def normal_attention_single_head_spatial(q, k, v):
+def normal_attention_single_head_spatial(q, k, v, *, query_chunk_size: int | None = None):
     # compute attention
     b, c, h, w = q.shape
 
@@ -926,7 +954,7 @@ def normal_attention_single_head_spatial(q, k, v):
     k = k.reshape(b, c, h * w)  # b,c,hw
     v = v.reshape(b, c, h * w)
 
-    r1 = slice_attention_single_head_spatial(q, k, v)
+    r1 = slice_attention_single_head_spatial(q, k, v, query_chunk_size=query_chunk_size)
     h_ = r1.reshape(b, c, h, w)
     del r1
     return h_
@@ -1133,7 +1161,9 @@ def attention_function_pre_shaped(
     return out.reshape(batch, q_tokens, heads, head_dim).transpose(1, 2).contiguous()
 
 
-def attention_function_single_head_spatial(q, k, v):
+def attention_function_single_head_spatial(q, k, v, *, query_chunk_size: int | None = None):
+    if query_chunk_size is not None:
+        return normal_attention_single_head_spatial(q, k, v, query_chunk_size=query_chunk_size)
     backend = _selected_backend()
     if backend == AttentionBackend.XFORMERS:
         return xformers_attention_single_head_spatial(q, k, v)

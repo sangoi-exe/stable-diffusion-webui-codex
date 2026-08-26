@@ -94,6 +94,7 @@ Last reviewed on 2026-08-26 during the dedicated SeedVR2 video-upscale tranche.
 - Native Conv3D VAE: `apps/backend/runtime/common/vae_codex3d.py`
   - Aliases: codex3d vae; conv3d native.
   - Open this for WAN-style native 3D VAE load/detect, shift/scale policy, or codex 3D lane questions.
+  - When `memory_management.manager.vae_always_tiled` selects WAN VAE tiling, `AutoencoderCodex3D.enable_tiling()` caps spatial-attention query chunks while preserving global K/V and temporal-cache semantics.
   - Secondary seams: `apps/backend/runtime/families/wan22/vae_io.py`, `apps/backend/runtime/state_dict/keymap_wan22_vae.py`.
 - Hires Fix: `apps/backend/runtime/pipeline_stages/hires_fix.py`
   - Aliases: hires second pass; high-res fix.

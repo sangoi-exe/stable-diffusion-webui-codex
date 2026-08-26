@@ -8,13 +8,15 @@ Required Notice: see NOTICE
 
 Purpose: Shared native 3D VAE runtime lane for temporal video autoencoders.
 Defines `AutoencoderCodex3D` with causal 3D convolutions, temporal cache-aware
-encode/decode chunk execution, explicit temporal down/upsampling, and strict
-diffusers->codex keyspace resolution helpers for WAN-like checkpoints without importing
-diffusers model classes. WAN22 keyspace ownership lives in
-`runtime/state_dict/keymap_wan22_vae.py`.
+encode/decode chunk execution, knob-selected exact query-tiled spatial attention,
+explicit temporal down/upsampling, and strict diffusers->codex keyspace resolution
+helpers for WAN-like checkpoints without importing diffusers model classes. WAN22
+keyspace ownership lives in `runtime/state_dict/keymap_wan22_vae.py`.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `_CACHE_T` (constant): Temporal cache window used by causal-conv cache plumbing in chunked encode/decode passes.
+- `_CODEX3D_TILED_ATTENTION_QUERY_TOKENS` (constant): Maximum spatial attention query tokens processed per exact tiled chunk when VAE tiling is enabled.
+- `Codex3DAttentionBlock` (class): Frame-wise native spatial attention block with optional exact query tiling.
 - `AutoencoderCodex3D` (class): Native causal-3D KL VAE with codex keyspace (`encoder.downsamples.*`, `decoder.upsamples.*`, `conv1/conv2`).
 - `sanitize_codex3d_vae_config` (function): Normalizes alias config fields into `AutoencoderCodex3D` constructor arguments.
 - `resolve_codex3d_vae_keyspace` (function): Normalizes wrapper prefixes and resolves diffusers WAN3D VAE keys into codex lookup space (strict/fail-loud).
@@ -37,10 +39,12 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from torch import nn
 
 from apps.backend.infra.config.env_flags import env_flag
+from apps.backend.runtime.attention import attention_function_single_head_spatial
 from apps.backend.runtime.common.vae_ldm import DiagonalGaussianDistribution
 from apps.backend.runtime.state_dict.keymap_wan22_vae import resolve_wan22_vae_3d_keyspace
 
 _CACHE_T = 2
+_CODEX3D_TILED_ATTENTION_QUERY_TOKENS = 1024
 
 
 def _vae_trace_verbose_enabled() -> bool:
@@ -293,6 +297,15 @@ class Codex3DAttentionBlock(nn.Module):
         self.norm = Codex3DRMSNorm(self.dim, images=True)
         self.to_qkv = nn.Conv2d(self.dim, self.dim * 3, 1)
         self.proj = nn.Conv2d(self.dim, self.dim, 1)
+        self._query_chunk_size: int | None = None
+
+    def enable_query_tiling(self, *, query_chunk_size: int) -> None:
+        if isinstance(query_chunk_size, bool) or not isinstance(query_chunk_size, int) or query_chunk_size <= 0:
+            raise RuntimeError(
+                "AutoencoderCodex3D attention query chunk size must be a positive integer; "
+                f"got {query_chunk_size!r}."
+            )
+        self._query_chunk_size = int(query_chunk_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.ndim != 5:
@@ -306,12 +319,20 @@ class Codex3DAttentionBlock(nn.Module):
         normed = self.norm(normed)
         qkv = self.to_qkv(normed)
         q, k, v = torch.chunk(qkv, 3, dim=1)
-        q = q.reshape(batch * frames, channels, height * width).transpose(1, 2)
-        k = k.reshape(batch * frames, channels, height * width)
-        v = v.reshape(batch * frames, channels, height * width).transpose(1, 2)
-        attn = torch.matmul(q, k) * (channels ** -0.5)
-        attn = torch.softmax(attn, dim=-1)
-        out = torch.matmul(attn, v).transpose(1, 2).reshape(batch * frames, channels, height, width)
+        if self._query_chunk_size is None:
+            q = q.reshape(batch * frames, channels, height * width).transpose(1, 2)
+            k = k.reshape(batch * frames, channels, height * width)
+            v = v.reshape(batch * frames, channels, height * width).transpose(1, 2)
+            attn = torch.matmul(q, k) * (channels ** -0.5)
+            attn = torch.softmax(attn, dim=-1)
+            out = torch.matmul(attn, v).transpose(1, 2).reshape(batch * frames, channels, height, width)
+        else:
+            out = attention_function_single_head_spatial(
+                q,
+                k,
+                v,
+                query_chunk_size=self._query_chunk_size,
+            )
         out = self.proj(out).view(batch, frames, channels, height, width).permute(0, 2, 1, 3, 4)
         return residual + out
 
@@ -755,8 +776,13 @@ class AutoencoderCodex3D(nn.Module, ConfigMixin):
         self._enc_conv_idx: list[int] = [0]
         self._enc_feat_map: list[torch.Tensor | str | None] = []
 
-    def enable_tiling(self, *_args: Any, **_kwargs: Any) -> None:
+    def enable_tiling(self) -> None:
         self.use_tiling = True
+        attention_blocks = tuple(module for module in self.modules() if isinstance(module, Codex3DAttentionBlock))
+        if not attention_blocks:
+            raise RuntimeError("AutoencoderCodex3D tiling requires at least one spatial attention block.")
+        for attention_block in attention_blocks:
+            attention_block.enable_query_tiling(query_chunk_size=_CODEX3D_TILED_ATTENTION_QUERY_TOKENS)
 
     def clear_cache(self) -> None:
         self._conv_num = int(self._cached_conv_counts["decoder"])

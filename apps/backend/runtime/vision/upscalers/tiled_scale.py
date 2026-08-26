@@ -7,10 +7,11 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Dependency-light tiled scaling utility.
-Provides overlap+feather tiling for arbitrary single-image tensor functions (e.g. SR models, VAE encode/decode fallbacks).
+Provides overlap+feather tiling for arbitrary single-image tensor functions (e.g. SR models, VAE encode/decode fallbacks)
+with one final output accumulator and a single-channel blend-weight accumulator per active batch.
 
 Symbols (top-level; keep in sync; no ghosts):
-- `tiled_scale_multidim` (function): Multi-dim tiled scaling helper.
+- `tiled_scale_multidim` (function): Multi-dim tiled scaling helper with single-channel feather-weight accumulation.
 - `get_tiled_scale_steps` (function): Computes expected tile steps for progress.
 - `tiled_scale` (function): Convenience wrapper for 2D tiling (tile_x/tile_y).
 """
@@ -43,7 +44,7 @@ def tiled_scale_multidim(
         raise ValueError(f"samples must have at least {2 + dims} dims for tile={tile}; got shape={tuple(samples.shape)}")
 
     scaled_spatial = list(map(lambda a: round(a * upscale_amount), samples.shape[2:]))
-    output = torch.empty([samples.shape[0], out_channels] + scaled_spatial, device=output_device)
+    output = torch.zeros([samples.shape[0], out_channels] + scaled_spatial, device=output_device)
 
     total_steps = 0
     try:
@@ -59,8 +60,8 @@ def tiled_scale_multidim(
     step = 0
     for b in range(int(samples.shape[0])):
         s = samples[b : b + 1]
-        out = torch.zeros([1, out_channels] + scaled_spatial, device=output_device)
-        out_div = torch.zeros_like(out)
+        out = output[b : b + 1]
+        out_div = torch.zeros([1, 1] + scaled_spatial, device=output_device)
 
         ranges = []
         for shape_d, tile_d in zip(s.shape[2:], tile):
@@ -81,7 +82,7 @@ def tiled_scale_multidim(
 
             ps = function(s_in).to(output_device)
 
-            mask = torch.ones_like(ps)
+            mask = torch.ones_like(ps[:, :1])
             feather = round(int(overlap) * float(upscale_amount))
             for t in range(int(feather)):
                 for d in range(2, dims + 2):
@@ -106,7 +107,7 @@ def tiled_scale_multidim(
                 except Exception:
                     pass
 
-        output[b : b + 1] = out / out_div
+        out.div_(out_div)
 
     return output
 
