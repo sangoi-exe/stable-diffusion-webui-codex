@@ -1,6 +1,6 @@
 # apps/backend/video/export Overview
 Date: 2025-12-16
-Last Review: 2026-03-16
+Last Review: 2026-08-26
 Status: Active
 
 ## Purpose
@@ -18,3 +18,4 @@ Status: Active
 - 2026-02-21: `ffmpeg_exporter.py` now parses boolean options (`save_output`, `pingpong`, `trim_to_audio`, `save_metadata`) via shared strict bool parsing and fails loud on invalid literals (no permissive truthy coercion drift from use-case contracts).
 - 2026-03-11: `ffmpeg_exporter.py` now fails loud when `audio_source_path` is missing or when audio mux is requested for unsupported containers, and `VideoExportResult` now reports `has_audio` so shared video metadata can distinguish silent video from muxed output truthfully.
 - 2026-03-13: `ffmpeg_exporter.py::resolve_video_export_container()` rejects unknown `video_options.format` values with `VideoExportError` instead of silently coercing them to mp4/h264.
+- 2026-08-26: `ffmpeg_exporter.py` accepts finite fractional FPS values and passes them to ffmpeg without integer rounding. The dedicated SeedVR2 flow therefore retains the probed source FPS in export metadata and encoding.

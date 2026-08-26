@@ -1,7 +1,7 @@
 # apps/backend/interfaces/api/routers Overview
 <!-- tags: backend, api, fastapi, routers -->
 Date: 2026-01-08
-Last Review: 2026-07-31
+Last Review: 2026-08-26
 Status: Active
 
 ## Purpose
@@ -19,7 +19,7 @@ Status: Active
 - `apps/backend/interfaces/api/routers/tests.py` — bounded backend diagnostics endpoints.
 - `apps/backend/interfaces/api/routers/generation.py` — txt2img/img2img/txt2vid/img2vid/vid2vid endpoints.
 - `apps/backend/interfaces/api/routers/supir.py` — SUPIR diagnostics-only inventory endpoint (`GET /api/supir/models`).
-- `apps/backend/interfaces/api/routers/upscale.py` — upscalers inventory + remote downloads + standalone upscaling endpoints.
+- `apps/backend/interfaces/api/routers/upscale.py` — upscalers inventory + remote downloads + standalone image upscale and dedicated SeedVR2 video-upscale endpoints.
 - `apps/backend/interfaces/api/routers/models.py` also exposes `/api/models/checkpoint-metadata` (UI metadata modal payload for a checkpoint selection).
 
 ## Notes
@@ -147,7 +147,7 @@ Status: Active
 - 2026-02-22: `generation.py` now validates `gguf_cache_policy`/`gguf_cache_limit_mb` fail-loud in video prepare paths (`txt2vid` + `img2vid`): invalid policy, non-integer/negative limits, missing-policy limit, and incompatible policy-limit combinations now return HTTP 400 synchronously.
 - 2026-02-22: `generation.py` now validates `gguf_te_device` fail-loud in WAN video prepare paths (`txt2vid` + `img2vid`), accepting only `auto|cpu|cuda|cuda:<index>` (with `gpu` normalized to `cuda`).
 - 2026-02-22: `generation.py` gate-release failure handling now logs warning-level diagnostics instead of swallowing exceptions silently in video worker teardown.
-- 2026-02-27: `generation.py` now accepts optional WAN `video_upscaling` object (`enabled` required bool + strict typed SeedVR2 options), rejects unknown keys, and forwards normalized values into request extras as `extras.video_upscaling`.
+- 2026-08-26: `upscale.py` owns `POST /api/video-upscale`. It validates a backend-visible source path, curated SeedVR2 options, and the configured CUDA or MPS device before task dispatch. Generation routes reject the removed `video_upscaling` field.
 - 2026-03-01: `generation.py` now validates/forwards WAN img2vid guide fields (`img2vid_image_scale`, `img2vid_crop_offset_x`, `img2vid_crop_offset_y`) into request extras with strict scale/range checks so runtime init-image preprocessing matches the UI framing guide.
 - 2026-03-02: `generation.py` keeps `img2vid_image_scale` optional at API boundary (field omitted when not provided); runtime receives no forced `1.0` fallback and applies its own auto-fit minimum scale policy.
 - 2026-03-03: `models.py` inventory refresh logs now emit an explicit warning when `wan22.gguf=0`, including resolved `wan22_ckpt` roots and actionable guidance (WAN22 GGUF discovery under those roots is recursive; refresh after copying files).

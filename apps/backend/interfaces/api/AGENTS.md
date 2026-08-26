@@ -1,7 +1,7 @@
 # apps/backend/interfaces/api Overview
 <!-- tags: backend, api, fastapi, routers -->
 Date: 2026-01-08
-Last Review: 2026-07-31
+Last Review: 2026-08-26
 Status: Active
 
 ## Purpose
@@ -19,6 +19,7 @@ Status: Active
 - `apps/backend/interfaces/api/routers/tests.py` — bounded backend diagnostics endpoints.
 - `apps/backend/interfaces/api/routers/tools.py` — GGUF converter + SafeTensors merge + file browser endpoints.
 - `apps/backend/interfaces/api/routers/generation.py` — txt2img/img2img/txt2vid/img2vid/vid2vid endpoints.
+- `apps/backend/interfaces/api/routers/upscale.py` — image upscale plus dedicated SeedVR2 video-upscale endpoint.
 - `apps/backend/interfaces/api/wan_video_request_keys.py` — backend API-owned WAN video request-key allowlists used by `routers/generation.py`.
 - `apps/backend/interfaces/api/file_metadata.py` — GGUF/SafeTensors header readers for `/api/models/file-metadata` (UI/debug).
 - `apps/backend/interfaces/api/path_utils.py` — repo-relative path normalization helpers.
@@ -26,6 +27,7 @@ Status: Active
 - `apps/backend/interfaces/api/task_registry.py` — in-process task registry (SSE queue + cancel flags).
 - `apps/backend/interfaces/api/public_errors.py` — public-safe async-task error envelopes (`message` + additive `code/error_id`) and synchronous HTTP error details.
 - `apps/backend/interfaces/api/tasks/generation_tasks.py` — shared generation task worker helpers (image task runners + engine options + PNG encoding).
+- `apps/backend/interfaces/api/tasks/video_upscale_tasks.py` — dedicated SeedVR2 video-upscale task lifecycle worker.
 - `apps/backend/interfaces/api/serializers.py` — checkpoint serialization helper.
 - `apps/backend/interfaces/api/upscalers_manifest.py` — `upscalers/manifest.json` schema validation/normalization (used by `/api/upscalers/remote`).
 - `apps/backend/interfaces/api/dependency_checks.py` — backend-owned dependency-check builder used by `/api/engines/capabilities`.
@@ -35,6 +37,7 @@ Status: Active
 - `routers/tests.py` is the bounded live-diagnostics owner for backend validation routes; keep test/diagnostic logic out of `system.py` unless the surface is truly health-level and lightweight.
 - 2026-03-28: launcher-started API fallback truth now lives in `apps/launcher/services.py`, while `run_api.py` remains the direct-run self-defense seam; `run_api.py` also wires the bounded `/api/tests/attention/sram/splitkv` router for live SRAM split-KV diagnostics, and that route is operator-facing: malformed payloads 400, expected execution outcomes return structured receipts.
 - Task state is centralized in `task_registry.py` so generation + tasks routers share cancellation/status logic.
+- 2026-08-26: `POST /api/video-upscale` accepts JSON with a backend-visible `video_path`, curated SeedVR2 options, and the configured CUDA or MPS device. Its dedicated worker and use case reuse the current task/SSE/output contracts without reactivating vid2vid or adding browser video upload.
 - 2026-03-30: terminal async-task errors are stored as one `PublicTaskError` envelope in `task_registry.py`; `public_errors.py` shapes that envelope, `routers/tasks.py` serializes it without rewording, and raw engine exception dumps stay owned by `core/orchestrator.py` + `runtime/diagnostics`.
 - 2026-03-31: `/api/img2img` now rejects masked requests synchronously when `/api/engines/capabilities` says the active semantic engine does not support img2img mask/inpaint semantics (`supports_img2img_masking`), so frontend gating and router preflight stay on the same backend-owned truth.
 - 2026-04-12: `/api/options` is now a mandatory compare-and-set lane only: live callers must provide `X-Codex-Expected-Revision`, stale writes fail with `409` under the locked store owner, and `/api/ui/presets/apply` is checkpoint-only now that preset-driven option mutation was removed instead of bypassing the revision-aware options path.

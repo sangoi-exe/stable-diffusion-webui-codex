@@ -1,10 +1,10 @@
 # apps/backend/video/upscaling Overview
 Date: 2026-02-27
-Last Review: 2026-02-27
+Last Review: 2026-08-26
 Status: Active
 
 ## Purpose
-- Own fail-loud video upscaling runners for video post-processing stages.
+- Own the fail-loud SeedVR2 frame runner for dedicated video-upscale tasks.
 
 ## Key Files
 - `seedvr2.py` — SeedVR2 native in-process runner (PIL frames -> tensor batch -> SeedVR2 runtime module -> validated output frames).

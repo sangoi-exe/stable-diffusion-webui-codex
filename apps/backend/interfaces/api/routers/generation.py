@@ -354,7 +354,6 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
         | set(WAN_VIDEO_REQUEST_KEYS.REVISION)
         | set(WAN_VIDEO_REQUEST_KEYS.VIDEO_EXPORT)
         | set(WAN_VIDEO_REQUEST_KEYS.VIDEO_INTERPOLATION)
-        | set(WAN_VIDEO_REQUEST_KEYS.VIDEO_UPSCALING)
         | set(WAN_VIDEO_REQUEST_KEYS.GGUF_RUNTIME)
         | _VIDEO_GENERIC_SELECTOR_KEYS
     )
@@ -1081,154 +1080,6 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
 
         return normalized
 
-    _VIDEO_UPSCALING_COLOR_CORRECTIONS = {
-        "lab",
-        "wavelet",
-        "wavelet_adaptive",
-        "hsv",
-        "adain",
-        "none",
-    }
-
-    def _optional_video_upscaling_field(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if "video_upscaling" not in payload:
-            return None
-        raw = payload.get("video_upscaling")
-        if raw is None:
-            return None
-        if not isinstance(raw, dict):
-            raise HTTPException(status_code=400, detail="'video_upscaling' must be an object when provided")
-        _reject_unknown_keys(
-            raw,
-            {
-                "enabled",
-                "dit_model",
-                "resolution",
-                "max_resolution",
-                "batch_size",
-                "uniform_batch_size",
-                "temporal_overlap",
-                "prepend_frames",
-                "color_correction",
-                "input_noise_scale",
-                "latent_noise_scale",
-            },
-            "video_upscaling",
-        )
-
-        if "enabled" not in raw:
-            raise HTTPException(
-                status_code=400,
-                detail="'video_upscaling.enabled' is required when video_upscaling is provided",
-            )
-        enabled = raw.get("enabled")
-        if not isinstance(enabled, bool):
-            raise HTTPException(status_code=400, detail="'video_upscaling.enabled' must be a boolean")
-
-        normalized: Dict[str, Any] = {"enabled": enabled}
-
-        def _optional_int(field: str, *, minimum: int) -> None:
-            if field not in raw:
-                return
-            value = raw.get(field)
-            if value is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"'video_upscaling.{field}' must be an integer when provided",
-                )
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"'video_upscaling.{field}' must be an integer when provided",
-                )
-            parsed = int(value)
-            if parsed < minimum:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"'video_upscaling.{field}' must be >= {minimum} when provided",
-                )
-            normalized[field] = parsed
-
-        _optional_int("resolution", minimum=16)
-        _optional_int("max_resolution", minimum=0)
-        _optional_int("batch_size", minimum=1)
-        _optional_int("temporal_overlap", minimum=0)
-        _optional_int("prepend_frames", minimum=0)
-
-        batch_size = normalized.get("batch_size")
-        if isinstance(batch_size, int) and ((batch_size - 1) % 4 != 0):
-            raise HTTPException(
-                status_code=400,
-                detail="'video_upscaling.batch_size' must satisfy 4n+1 when provided",
-            )
-
-        if "uniform_batch_size" in raw:
-            uniform_raw = raw.get("uniform_batch_size")
-            if not isinstance(uniform_raw, bool):
-                raise HTTPException(
-                    status_code=400,
-                    detail="'video_upscaling.uniform_batch_size' must be a boolean when provided",
-                )
-            normalized["uniform_batch_size"] = uniform_raw
-
-        if "dit_model" in raw:
-            model_raw = raw.get("dit_model")
-            if not isinstance(model_raw, str):
-                raise HTTPException(
-                    status_code=400,
-                    detail="'video_upscaling.dit_model' must be a string when provided",
-                )
-            model = model_raw.strip()
-            if not model:
-                raise HTTPException(
-                    status_code=400,
-                    detail="'video_upscaling.dit_model' must be a non-empty string when provided",
-                )
-            normalized["dit_model"] = model
-
-        if "color_correction" in raw:
-            color_raw = raw.get("color_correction")
-            if not isinstance(color_raw, str):
-                raise HTTPException(
-                    status_code=400,
-                    detail="'video_upscaling.color_correction' must be a string when provided",
-                )
-            color_value = color_raw.strip().lower()
-            if color_value not in _VIDEO_UPSCALING_COLOR_CORRECTIONS:
-                allowed = ", ".join(sorted(_VIDEO_UPSCALING_COLOR_CORRECTIONS))
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"'video_upscaling.color_correction' must be one of {{{allowed}}}",
-                )
-            normalized["color_correction"] = color_value
-
-        def _optional_float(field: str) -> None:
-            if field not in raw:
-                return
-            value = raw.get(field)
-            if value is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"'video_upscaling.{field}' must be a number when provided",
-                )
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"'video_upscaling.{field}' must be a number when provided",
-                )
-            parsed = float(value)
-            if parsed < 0.0 or parsed > 1.0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"'video_upscaling.{field}' must be within [0, 1] when provided",
-                )
-            normalized[field] = parsed
-
-        _optional_float("input_noise_scale")
-        _optional_float("latent_noise_scale")
-
-        return normalized
-
     def _parse_video_output_options(
         payload: Dict[str, Any],
         *,
@@ -1268,9 +1119,6 @@ def build_router(*, codex_root: Path, media, live_preview, opts_get, opts_snapsh
         video_interpolation = _optional_video_interpolation_field(payload)
         if video_interpolation is not None:
             extras_updates["video_interpolation"] = video_interpolation
-        video_upscaling = _optional_video_upscaling_field(payload)
-        if video_upscaling is not None:
-            extras_updates["video_upscaling"] = video_upscaling
         return video_options, extras_updates
 
     def _require_options_bool(options_snapshot: Any, key: str) -> bool:

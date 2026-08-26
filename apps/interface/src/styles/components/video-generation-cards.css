@@ -64,21 +64,18 @@
     gap: 0;
   }
 
-  .cdx-video-temporal-controls,
-  .cdx-video-upscaling-controls {
+  .cdx-video-temporal-controls {
     display: flex;
     flex-direction: column;
     gap: var(--space-sm);
   }
 
-  .cdx-video-temporal-controls .cdx-video-temporal-row,
-  .cdx-video-upscaling-controls .cdx-video-upscaling-row {
+  .cdx-video-temporal-controls .cdx-video-temporal-row {
     align-items: end;
   }
 
   .cdx-video-temporal-anchor-toggle,
-  .cdx-video-compact-toggle-column,
-  .cdx-video-compact-toggle-row {
+  .cdx-video-compact-toggle-column {
     display: inline-grid;
     grid-template-columns: minmax(0, max-content);
     align-items: start;
@@ -95,8 +92,7 @@
   }
 
   .cdx-video-temporal-anchor-toggle .cdx-video-temporal-anchor-toggle__btn,
-  .cdx-video-compact-toggle-column .qs-toggle-btn,
-  .cdx-video-compact-toggle-row .qs-toggle-btn {
+  .cdx-video-compact-toggle-column .qs-toggle-btn {
     width: auto;
     justify-content: flex-start;
   }

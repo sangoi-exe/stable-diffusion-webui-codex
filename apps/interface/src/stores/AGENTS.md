@@ -1,7 +1,7 @@
 # apps/interface/src/stores Overview
 <!-- tags: frontend, stores, state -->
 Date: 2025-10-28
-Last Review: 2026-05-23
+Last Review: 2026-08-26
 Status: Active
 
 ## Purpose
@@ -101,5 +101,5 @@ Status: Active
 - 2026-03-09: `engine_capabilities.ts` now validates/preserves family sampling lists (`supported_samplers`, `supported_schedulers`, `excluded_samplers`, `excluded_schedulers`) and exports shared family-aware sampler/scheduler filtering + normalization helpers for image-tab, PNG import, and XYZ surfaces; empty family sampling arrays from the backend mean "unrestricted", not "no options".
 - 2026-02-27: `model_tabs.ts` WAN `video` params removed obsolete output flags (`filenamePrefix`, `trimToAudio`, `saveMetadata`, `saveOutput`) and migrated interpolation state to one `interpolationFps` field (`0` off, active values normalized as output-FPS targets mapped to backend interpolation times).
 - 2026-02-27: `model_tabs.ts` WAN `video.fps` default is now `15` (was `24`) to align initial WAN runs with the updated UI baseline.
-- 2026-02-27: `model_tabs.ts` WAN `video` params now include SeedVR2 upscaling controls (`upscaling*` fields) with strict normalization (`batch_size` as `4n+1`, noise scales clamped to `[0,1]`, color-correction enum validation).
+- 2026-08-26: `model_tabs.ts` WAN `video` params no longer include SeedVR2 fields. The dedicated `/video-upscale` workspace keeps its form and task state route-local, without tab persistence.
 - 2026-03-25: `model_tabs.ts` image params now persist both `perStepBlendStrength` and `perStepBlendSteps` as additive state on the existing inpaint enforcement mode; hydrate-time normalization clamps strength to `[0,1]` and steps to integer `>= 0`, without creating a new enum or alias surface.

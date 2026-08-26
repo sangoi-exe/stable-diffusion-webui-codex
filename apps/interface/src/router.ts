@@ -7,7 +7,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: WebUI router configuration.
-Defines the SPA route table and lazy-loads page-level views (model tabs, tools, settings, etc.).
+Defines the SPA route table and lazy-loads page-level views (model tabs, utilities, settings, and dedicated video upscale).
 
 Symbols (top-level; keep in sync; no ghosts):
 - `router` (const): Vue Router instance configured with history + route table.
@@ -17,6 +17,7 @@ Symbols (top-level; keep in sync; no ghosts):
 import { createRouter, createWebHistory } from 'vue-router'
 
 const Upscale = () => import('./views/Upscale.vue')
+const VideoUpscale = () => import('./views/VideoUpscale.vue')
 const PngInfo = () => import('./views/PngInfo.vue')
 const Extensions = () => import('./views/Extensions.vue')
 const Settings = () => import('./views/Settings.vue')
@@ -42,6 +43,7 @@ const router = createRouter({
     { path: '/tools', component: ToolsTab },
     { path: '/workflows', component: WorkflowsList },
     { path: '/upscale', component: Upscale },
+    { path: '/video-upscale', component: VideoUpscale },
     { path: '/pnginfo', component: PngInfo },
     { path: '/extensions', component: Extensions },
     { path: '/settings', component: Settings },

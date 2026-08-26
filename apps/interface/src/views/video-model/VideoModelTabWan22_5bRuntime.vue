@@ -122,17 +122,6 @@ function defaultVideo(): WanVideoParams {
     pingpong: false,
     returnFrames: false,
     interpolationFps: 0,
-    upscalingEnabled: false,
-    upscalingModel: 'seedvr2_ema_3b_fp16.safetensors',
-    upscalingResolution: 1080,
-    upscalingMaxResolution: 0,
-    upscalingBatchSize: 5,
-    upscalingUniformBatchSize: false,
-    upscalingTemporalOverlap: 0,
-    upscalingPrependFrames: 0,
-    upscalingColorCorrection: 'lab',
-    upscalingInputNoiseScale: 0,
-    upscalingLatentNoiseScale: 0,
   }
 }
 
@@ -219,24 +208,6 @@ function normalizeInterpolationTargetFps(rawValue: unknown, fallback: number): n
   return Math.max(0, Math.min(maxFps, Math.trunc(numeric)))
 }
 
-function normalizeUpscalingColorCorrection(
-  rawValue: unknown,
-  fallback: WanVideoParams['upscalingColorCorrection'],
-): WanVideoParams['upscalingColorCorrection'] {
-  const value = String(rawValue || '').trim().toLowerCase()
-  if (
-    value === 'lab'
-    || value === 'wavelet'
-    || value === 'wavelet_adaptive'
-    || value === 'hsv'
-    || value === 'adain'
-    || value === 'none'
-  ) {
-    return value
-  }
-  return fallback
-}
-
 function normalizeGuideOffset(rawValue: unknown, fallback: number): number {
   const numeric = Number(rawValue)
   const safeFallback = Number.isFinite(Number(fallback)) ? Number(fallback) : 0.5
@@ -253,30 +224,6 @@ function normalizeNonNegativeInteger(value: unknown, fallback: number, max?: num
     return Math.min(Math.max(0, Math.trunc(max)), parsed)
   }
   return parsed
-}
-
-function normalizeUnitInterval(value: unknown, fallback: number): number {
-  const fallbackValue = Number.isFinite(Number(fallback)) ? Number(fallback) : 0
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) return Math.min(1, Math.max(0, fallbackValue))
-  return Math.min(1, Math.max(0, numeric))
-}
-
-function normalizeUpscalingBatchSize(value: unknown, fallback: number): number {
-  const fallbackInt = Number.isFinite(Number(fallback)) ? Math.max(1, Math.trunc(Number(fallback))) : 5
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) return fallbackInt
-  const intValue = Math.max(1, Math.trunc(numeric))
-  const remainder = (intValue - 1) % 4
-  if (remainder === 0) return intValue
-  const down = intValue - remainder
-  const up = down + 4
-  if (down >= 1) {
-    const downDistance = Math.abs(intValue - down)
-    const upDistance = Math.abs(up - intValue)
-    return downDistance <= upDistance ? down : up
-  }
-  return up
 }
 
 function normalizeLoraSha(rawValue: unknown): string | undefined {
@@ -375,33 +322,6 @@ function normalizeVideoPatch(patch: Partial<WanVideoParams>, current: WanVideoPa
   }
   if (Object.prototype.hasOwnProperty.call(nextPatch, 'crf')) {
     nextPatch.crf = normalizeNonNegativeInteger(nextPatch.crf, current.crf, 51)
-  }
-  if (Object.prototype.hasOwnProperty.call(nextPatch, 'upscalingResolution')) {
-    nextPatch.upscalingResolution = Math.max(16, Math.trunc(Number(nextPatch.upscalingResolution) || current.upscalingResolution))
-  }
-  if (Object.prototype.hasOwnProperty.call(nextPatch, 'upscalingMaxResolution')) {
-    nextPatch.upscalingMaxResolution = normalizeNonNegativeInteger(nextPatch.upscalingMaxResolution, current.upscalingMaxResolution)
-  }
-  if (Object.prototype.hasOwnProperty.call(nextPatch, 'upscalingBatchSize')) {
-    nextPatch.upscalingBatchSize = normalizeUpscalingBatchSize(nextPatch.upscalingBatchSize, current.upscalingBatchSize)
-  }
-  if (Object.prototype.hasOwnProperty.call(nextPatch, 'upscalingTemporalOverlap')) {
-    nextPatch.upscalingTemporalOverlap = normalizeNonNegativeInteger(nextPatch.upscalingTemporalOverlap, current.upscalingTemporalOverlap)
-  }
-  if (Object.prototype.hasOwnProperty.call(nextPatch, 'upscalingPrependFrames')) {
-    nextPatch.upscalingPrependFrames = normalizeNonNegativeInteger(nextPatch.upscalingPrependFrames, current.upscalingPrependFrames)
-  }
-  if (Object.prototype.hasOwnProperty.call(nextPatch, 'upscalingInputNoiseScale')) {
-    nextPatch.upscalingInputNoiseScale = normalizeUnitInterval(nextPatch.upscalingInputNoiseScale, current.upscalingInputNoiseScale)
-  }
-  if (Object.prototype.hasOwnProperty.call(nextPatch, 'upscalingLatentNoiseScale')) {
-    nextPatch.upscalingLatentNoiseScale = normalizeUnitInterval(nextPatch.upscalingLatentNoiseScale, current.upscalingLatentNoiseScale)
-  }
-  if (Object.prototype.hasOwnProperty.call(nextPatch, 'upscalingColorCorrection')) {
-    nextPatch.upscalingColorCorrection = normalizeUpscalingColorCorrection(
-      nextPatch.upscalingColorCorrection,
-      current.upscalingColorCorrection,
-    )
   }
   return nextPatch
 }
@@ -617,11 +537,6 @@ const interpolationCaption = computed<string>(() => {
   const outputFps = baseFps * times
   return `Target: ${targetFps} fps · Output: ${outputFps} fps`
 })
-const upscalingCaption = computed<string>(() => {
-  if (!video.value.upscalingEnabled) return 'Upscaling is off.'
-  return `Enabled · ${video.value.upscalingModel} · ${video.value.upscalingResolution}px target`
-})
-
 const videoZoomOpen = ref(false)
 watch(videoUrl, (currentVideoUrl) => {
   if (!currentVideoUrl) videoZoomOpen.value = false
@@ -672,34 +587,6 @@ function onCrfChange(value: number): void {
 
 function onInterpolationTargetFpsChange(value: number): void {
   setVideo({ interpolationFps: normalizeInterpolationTargetFps(value, video.value.interpolationFps) })
-}
-
-function onUpscalingResolutionChange(value: number): void {
-  setVideo({ upscalingResolution: Math.max(16, Math.trunc(Number(value) || video.value.upscalingResolution)) })
-}
-
-function onUpscalingMaxResolutionChange(value: number): void {
-  setVideo({ upscalingMaxResolution: normalizeNonNegativeInteger(value, video.value.upscalingMaxResolution) })
-}
-
-function onUpscalingBatchSizeChange(value: number): void {
-  setVideo({ upscalingBatchSize: normalizeUpscalingBatchSize(value, video.value.upscalingBatchSize) })
-}
-
-function onUpscalingTemporalOverlapChange(value: number): void {
-  setVideo({ upscalingTemporalOverlap: normalizeNonNegativeInteger(value, video.value.upscalingTemporalOverlap) })
-}
-
-function onUpscalingPrependFramesChange(value: number): void {
-  setVideo({ upscalingPrependFrames: normalizeNonNegativeInteger(value, video.value.upscalingPrependFrames) })
-}
-
-function onUpscalingInputNoiseScaleChange(value: number): void {
-  setVideo({ upscalingInputNoiseScale: normalizeUnitInterval(value, video.value.upscalingInputNoiseScale) })
-}
-
-function onUpscalingLatentNoiseScaleChange(value: number): void {
-  setVideo({ upscalingLatentNoiseScale: normalizeUnitInterval(value, video.value.upscalingLatentNoiseScale) })
 }
 
 const durationLabel = computed(() => {
@@ -764,19 +651,6 @@ function buildCurrentSnapshot(): Record<string, unknown> {
     },
     interpolation: {
       targetFps: video.value.interpolationFps,
-    },
-    upscaling: {
-      enabled: video.value.upscalingEnabled,
-      model: video.value.upscalingModel,
-      resolution: video.value.upscalingResolution,
-      maxResolution: video.value.upscalingMaxResolution,
-      batchSize: video.value.upscalingBatchSize,
-      uniformBatchSize: video.value.upscalingUniformBatchSize,
-      temporalOverlap: video.value.upscalingTemporalOverlap,
-      prependFrames: video.value.upscalingPrependFrames,
-      colorCorrection: video.value.upscalingColorCorrection,
-      inputNoiseScale: video.value.upscalingInputNoiseScale,
-      latentNoiseScale: video.value.upscalingLatentNoiseScale,
     },
   }
 }
@@ -847,7 +721,6 @@ async function applyHistory(item: VideoRunHistoryItem): Promise<void> {
   const nextMode: 'txt2vid' | 'img2vid' = rawMode === 'img2vid' ? 'img2vid' : 'txt2vid'
   const output = isRecord(snapshot.output) ? snapshot.output : {}
   const interpolation = isRecord(snapshot.interpolation) ? snapshot.interpolation : {}
-  const upscaling = isRecord(snapshot.upscaling) ? snapshot.upscaling : {}
   const img2vid = isRecord(snapshot.img2vid) ? snapshot.img2vid : {}
   const snapshotInitImageName = typeof snapshot.initImageName === 'string' ? snapshot.initImageName : ''
   const historyInitImageData = typeof item.initImageData === 'string' ? item.initImageData : ''
@@ -904,33 +777,6 @@ async function applyHistory(item: VideoRunHistoryItem): Promise<void> {
     interpolationFps: typeof interpolation.targetFps === 'number' && Number.isFinite(interpolation.targetFps)
       ? Number(interpolation.targetFps)
       : video.value.interpolationFps,
-    upscalingEnabled: typeof upscaling.enabled === 'boolean' ? upscaling.enabled : video.value.upscalingEnabled,
-    upscalingModel: String(upscaling.model || video.value.upscalingModel),
-    upscalingResolution: typeof upscaling.resolution === 'number' && Number.isFinite(upscaling.resolution)
-      ? Number(upscaling.resolution)
-      : video.value.upscalingResolution,
-    upscalingMaxResolution: typeof upscaling.maxResolution === 'number' && Number.isFinite(upscaling.maxResolution)
-      ? Number(upscaling.maxResolution)
-      : video.value.upscalingMaxResolution,
-    upscalingBatchSize: typeof upscaling.batchSize === 'number' && Number.isFinite(upscaling.batchSize)
-      ? Number(upscaling.batchSize)
-      : video.value.upscalingBatchSize,
-    upscalingUniformBatchSize: typeof upscaling.uniformBatchSize === 'boolean'
-      ? upscaling.uniformBatchSize
-      : video.value.upscalingUniformBatchSize,
-    upscalingTemporalOverlap: typeof upscaling.temporalOverlap === 'number' && Number.isFinite(upscaling.temporalOverlap)
-      ? Number(upscaling.temporalOverlap)
-      : video.value.upscalingTemporalOverlap,
-    upscalingPrependFrames: typeof upscaling.prependFrames === 'number' && Number.isFinite(upscaling.prependFrames)
-      ? Number(upscaling.prependFrames)
-      : video.value.upscalingPrependFrames,
-    upscalingColorCorrection: normalizeUpscalingColorCorrection(upscaling.colorCorrection, video.value.upscalingColorCorrection),
-    upscalingInputNoiseScale: typeof upscaling.inputNoiseScale === 'number' && Number.isFinite(upscaling.inputNoiseScale)
-      ? Number(upscaling.inputNoiseScale)
-      : video.value.upscalingInputNoiseScale,
-    upscalingLatentNoiseScale: typeof upscaling.latentNoiseScale === 'number' && Number.isFinite(upscaling.latentNoiseScale)
-      ? Number(upscaling.latentNoiseScale)
-      : video.value.upscalingLatentNoiseScale,
   }
 
   const nextStage: Wan5bStageParams = {
@@ -1253,15 +1099,7 @@ const slotProps = computed(() => ({
   onLoopCountChange,
   onCrfChange,
   onInterpolationTargetFpsChange,
-  onUpscalingResolutionChange,
-  onUpscalingMaxResolutionChange,
-  onUpscalingBatchSizeChange,
-  onUpscalingTemporalOverlapChange,
-  onUpscalingPrependFramesChange,
-  onUpscalingInputNoiseScaleChange,
-  onUpscalingLatentNoiseScaleChange,
   interpolationCaption: interpolationCaption.value,
-  upscalingCaption: upscalingCaption.value,
   isRunning: isRunning.value,
   canRunGeneration: canRunGeneration.value,
   generateTitle: generateTitle.value,

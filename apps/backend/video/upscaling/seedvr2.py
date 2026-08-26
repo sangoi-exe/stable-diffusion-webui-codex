@@ -6,7 +6,7 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Fail-loud SeedVR2 in-process runner for WAN video frame upscaling.
+Purpose: Fail-loud SeedVR2 in-process runner for dedicated video upscaling.
 Validates frame inputs, provisions deterministic repo-local SeedVR2 runtime assets (repo checkout),
 loads SeedVR2 Python modules directly from the checkout, runs upscaling in-process on tensors, and
 returns validated PIL output frames.
@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Sequence
 from uuid import uuid4
 
-from apps.backend.core.params.video import VideoUpscalingOptions
+from apps.backend.core.params.video import SeedVR2UpscaleOptions
 from apps.backend.infra.config.repo_root import get_repo_root, repo_scratch_path
 
 _SEEDVR2_REPO_ENV = "CODEX_SEEDVR2_REPO_DIR"
@@ -391,7 +391,7 @@ def _load_seedvr2_inference_module(repo_dir: Path) -> Any:
 def _build_seedvr2_runtime_args(
     *,
     module: Any,
-    options: VideoUpscalingOptions,
+    options: SeedVR2UpscaleOptions,
     model_dir: Path,
     cuda_device_index: int | None,
 ) -> Any:
@@ -567,7 +567,7 @@ def _collect_in_process_output_frames(*, module: Any, result_tensor: Any, expect
 def _run_seedvr2_in_process(
     *,
     frames_list: list[Any],
-    options: VideoUpscalingOptions,
+    options: SeedVR2UpscaleOptions,
     repo_dir: Path,
     model_dir: Path,
     cuda_device_index: int | None,
@@ -654,13 +654,10 @@ def _run_seedvr2_in_process(
 def run_seedvr2_upscaling(
     frames: Sequence[Any],
     *,
-    options: VideoUpscalingOptions,
+    options: SeedVR2UpscaleOptions,
     component_device: str | None,
     logger_: logging.Logger | None = None,
 ) -> tuple[list[Any], dict[str, Any]]:
-    if not options.enabled:
-        raise RuntimeError("SeedVR2 upscaling runner called with disabled options.")
-
     frames_list, input_size = _validate_input_frames(frames)
     repo_resolution = _resolve_seedvr2_repo_dir()
     repo_dir = repo_resolution.repo_dir

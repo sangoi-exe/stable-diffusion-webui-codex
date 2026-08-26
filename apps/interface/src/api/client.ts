@@ -55,6 +55,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `fetchRemoteUpscalers` (function): Fetches curated HF upscalers list (`/upscalers/remote`).
 - `downloadUpscalers` (function): Starts an upscalers download task (`POST /upscalers/download`).
 - `startUpscale` (function): Starts a standalone upscale task (`POST /upscale` multipart).
+- `startVideoUpscale` (function): Starts a dedicated SeedVR2 video-upscale task (`POST /video-upscale` JSON).
 - `fetchTaskResult` (function): Fetches a task result (`/tasks/:id`).
 - `cancelTask` (function): Requests task cancellation (`/tasks/:id/cancel`).
 - `subscribeTask` (function): Subscribes to task SSE events and returns an unsubscribe closure.
@@ -129,6 +130,7 @@ import type {
   PngInfoAnalyzeResponse,
   UpscalersResponse,
   RemoteUpscalersResponse,
+  VideoUpscaleRequest,
 } from './types'
 import type { Txt2ImgRequest } from './payloads'
 
@@ -853,6 +855,13 @@ export function startUpscale(image: File, payload: Record<string, unknown>): Pro
   form.append('image', image)
   form.append('payload', JSON.stringify(payload))
   return requestForm<TaskStartResponse>('/upscale', form)
+}
+
+export function startVideoUpscale(payload: VideoUpscaleRequest): Promise<TaskStartResponse> {
+  return requestJson<TaskStartResponse>('/video-upscale', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }
 
 export function fetchTaskResult(taskId: string): Promise<TaskResult> {

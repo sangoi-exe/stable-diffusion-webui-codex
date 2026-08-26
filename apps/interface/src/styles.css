@@ -804,6 +804,7 @@
   @import './styles/views/settings.css';
   @import './styles/views/tools.css';
   @import './styles/views/wan.css';
+  @import './styles/views/video-upscale.css';
   @import './styles/views/pnginfo.css';
 
   .app-footer {

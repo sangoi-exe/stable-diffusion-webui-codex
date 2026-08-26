@@ -9,8 +9,8 @@ Required Notice: see NOTICE
 Purpose: Canonical txt2vid orchestration for backend video engines.
 Runs the selected video execution path (active WAN22 Diffusers/GGUF lanes plus the native LTX2 branch), including the
 truthful LTX2 `executionProfile` stage flow (`distilled` and `one_stage` execute the one-stage native lane; `two_stage`
-runs `stage1_sampling -> latent_upsample -> stage2_refine -> decode`), applies shared SeedVR2
-upscaling/interpolation stages when requested, exports the resulting video, and yields progress/result events.
+runs `stage1_sampling -> latent_upsample -> stage2_refine -> decode`), applies optional interpolation,
+exports the resulting video, and yields progress/result events.
 WAN22 keeps exact stage ownership truthful across runtimes: GGUF 5B runs the single-stage lane from `extras.wan_single`,
 while dual-stage 14B keeps top-level prompt/negative on the request owner plus selector-only `extras.wan_high` and explicit
 second-stage `extras.wan_low`. The native LTX2 branch consumes a local
@@ -48,7 +48,6 @@ from apps.backend.runtime.pipeline_stages.video import (
     apply_engine_loras,
     apply_wan_stage_loras,
     apply_video_interpolation,
-    apply_video_upscaling,
     build_ltx2_two_stage_geometry,
     build_ltx2_video_plan,
     build_video_request_effective_snapshot,
@@ -58,7 +57,6 @@ from apps.backend.runtime.pipeline_stages.video import (
     export_video,
     prepare_base_snapshot_video_options,
     read_video_interpolation_options,
-    read_video_upscaling_options,
     resolve_generated_audio_export_policy,
     resolve_video_output_fps,
 )
@@ -333,13 +331,10 @@ def _run_ltx2_txt2vid(
             frame_count=int(len(frames)),
             has_audio=bool(audio_asset is not None),
         )
-
-        upscaling_options = read_video_upscaling_options(plan.extras)
         vfi_options = read_video_interpolation_options(plan.extras)
         base_video_options = prepare_base_snapshot_video_options(
             getattr(request, "video_options", None),
             task="txt2vid",
-            upscaling_options=upscaling_options,
             interpolation_options=vfi_options,
         )
         base_video_meta: Any = None
@@ -359,29 +354,6 @@ def _run_ltx2_txt2vid(
                         "txt2vid: base snapshot exported before post-process: %s",
                         base_rel_path,
                     )
-
-        if upscaling_options is not None and upscaling_options.enabled:
-            yield ProgressEvent(stage="upscale", percent=1.0, message="Upscaling frames (SeedVR2)")
-        frames, upscaling_opts = apply_video_upscaling(
-            frames,
-            options=upscaling_options,
-            logger_=logger,
-            component_device=getattr(comp, "device", None),
-        )
-        _emit_pipeline_event(
-            telemetry_scope,
-            "pipeline.stage.complete",
-            stage="upscaling.complete",
-            stage_name="upscaling",
-            backend="ltx2",
-            upscaling_enabled=bool(upscaling_options is not None and upscaling_options.enabled),
-            frame_count=int(len(frames)),
-        )
-        if frames:
-            first_size = getattr(frames[0], "size", None)
-            if isinstance(first_size, tuple) and len(first_size) == 2:
-                plan.width = int(first_size[0])
-                plan.height = int(first_size[1])
 
         if vfi_options is not None and vfi_options.enabled and (vfi_options.times or 0) > 1:
             yield ProgressEvent(stage="interpolate", percent=2.0, message="Interpolating frames (VFI)")
@@ -425,8 +397,6 @@ def _run_ltx2_txt2vid(
         extra_meta: dict[str, Any] = dict(plan.extras)
         if runtime_meta:
             extra_meta["ltx2_runtime"] = runtime_meta
-        if upscaling_opts is not None:
-            extra_meta["video_upscaling"] = upscaling_opts
         if vfi_opts is not None:
             extra_meta["video_interpolation"] = vfi_opts
         if base_video_meta is not None:
@@ -435,8 +405,6 @@ def _run_ltx2_txt2vid(
             request=request,
             plan=plan,
             video_meta=video_meta,
-            upscaling_options=upscaling_options,
-            upscaling_meta=upscaling_opts,
             interpolation_options=vfi_options,
             interpolation_meta=vfi_opts,
             base_video_meta=base_video_meta,
@@ -633,13 +601,10 @@ def run_txt2vid(
             backend="gguf",
             frame_count=int(len(frames)),
         )
-
-        upscaling_options = read_video_upscaling_options(plan.extras)
         vfi_options = read_video_interpolation_options(plan.extras)
         base_video_options = prepare_base_snapshot_video_options(
             getattr(request, "video_options", None),
             task="txt2vid",
-            upscaling_options=upscaling_options,
             interpolation_options=vfi_options,
         )
         base_video_meta: Any = None
@@ -652,29 +617,6 @@ def run_txt2vid(
                         "txt2vid: base snapshot exported before post-process: %s",
                         base_rel_path,
                     )
-
-        if upscaling_options is not None and upscaling_options.enabled:
-            yield ProgressEvent(stage="upscale", percent=1.0, message="Upscaling frames (SeedVR2)")
-        frames, upscaling_opts = apply_video_upscaling(
-            frames,
-            options=upscaling_options,
-            logger_=logger,
-            component_device=getattr(comp, "device", None),
-        )
-        _emit_pipeline_event(
-            telemetry_scope,
-            "pipeline.stage.complete",
-            stage="upscaling.complete",
-            stage_name="upscaling",
-            backend="gguf",
-            upscaling_enabled=bool(upscaling_options is not None and upscaling_options.enabled),
-            frame_count=int(len(frames)),
-        )
-        if frames:
-            first_size = getattr(frames[0], "size", None)
-            if isinstance(first_size, tuple) and len(first_size) == 2:
-                plan.width = int(first_size[0])
-                plan.height = int(first_size[1])
 
         if vfi_options is not None and vfi_options.enabled and (vfi_options.times or 0) > 1:
             yield ProgressEvent(stage="interpolate", percent=2.0, message="Interpolating frames (VFI)")
@@ -716,8 +658,6 @@ def run_txt2vid(
             warnings: tuple[str, ...] = ()
 
         extra_meta: dict[str, Any] = dict(plan.extras)
-        if upscaling_opts is not None:
-            extra_meta["video_upscaling"] = upscaling_opts
         if vfi_opts is not None:
             extra_meta["video_interpolation"] = vfi_opts
         if base_video_meta is not None:
@@ -726,8 +666,6 @@ def run_txt2vid(
             request=request,
             plan=plan,
             video_meta=video_meta,
-            upscaling_options=upscaling_options,
-            upscaling_meta=upscaling_opts,
             interpolation_options=vfi_options,
             interpolation_meta=vfi_opts,
             base_video_meta=base_video_meta,
@@ -824,13 +762,10 @@ def run_txt2vid(
         backend="diffusers",
         frame_count=int(len(frames)),
     )
-
-    upscaling_options = read_video_upscaling_options(plan.extras)
     vfi_options = read_video_interpolation_options(plan.extras)
     base_video_options = prepare_base_snapshot_video_options(
         getattr(request, "video_options", None),
         task="txt2vid",
-        upscaling_options=upscaling_options,
         interpolation_options=vfi_options,
     )
     base_video_meta: Any = None
@@ -843,29 +778,6 @@ def run_txt2vid(
                     "txt2vid: base snapshot exported before post-process: %s",
                     base_rel_path,
                 )
-
-    if upscaling_options is not None and upscaling_options.enabled:
-        yield ProgressEvent(stage="upscale", percent=1.0, message="Upscaling frames (SeedVR2)")
-    frames, upscaling_opts = apply_video_upscaling(
-        frames,
-        options=upscaling_options,
-        logger_=logger,
-        component_device=getattr(comp, "device", None),
-    )
-    _emit_pipeline_event(
-        telemetry_scope,
-        "pipeline.stage.complete",
-        stage="upscaling.complete",
-        stage_name="upscaling",
-        backend="diffusers",
-        upscaling_enabled=bool(upscaling_options is not None and upscaling_options.enabled),
-        frame_count=int(len(frames)),
-    )
-    if frames:
-        first_size = getattr(frames[0], "size", None)
-        if isinstance(first_size, tuple) and len(first_size) == 2:
-            plan.width = int(first_size[0])
-            plan.height = int(first_size[1])
 
     if vfi_options is not None and vfi_options.enabled and (vfi_options.times or 0) > 1:
         yield ProgressEvent(stage="interpolate", percent=2.0, message="Interpolating frames (VFI)")
@@ -899,8 +811,6 @@ def run_txt2vid(
     )
 
     extra_meta: dict[str, Any] = dict(plan.extras)
-    if upscaling_opts is not None:
-        extra_meta["video_upscaling"] = upscaling_opts
     if vfi_opts is not None:
         extra_meta["video_interpolation"] = vfi_opts
     if base_video_meta is not None:
@@ -909,8 +819,6 @@ def run_txt2vid(
         request=request,
         plan=plan,
         video_meta=video_meta,
-        upscaling_options=upscaling_options,
-        upscaling_meta=upscaling_opts,
         interpolation_options=vfi_options,
         interpolation_meta=vfi_opts,
         base_video_meta=base_video_meta,

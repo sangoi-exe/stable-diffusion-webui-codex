@@ -6,9 +6,9 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Backend vid2vid use-case orchestration (native-family dispatch + WAN pipeline + optional flow guidance + upscaling/interpolation/export).
+Purpose: Backend vid2vid use-case orchestration (native-family dispatch + WAN pipeline + optional flow guidance/interpolation/export).
 Takes an input video (or frames), dispatches the active vid2vid family lane (currently native-family scaffolds plus WAN methods), optionally
-applies optical-flow-based warping/guidance plus shared SeedVR2 upscaling/interpolation stages, and returns task events/results.
+applies optical-flow-based warping/guidance plus interpolation, and returns task events/results.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `_build_pipeline_telemetry_scope` (function): Creates a mutable task-scoped telemetry context owner for vid2vid run/stage events.
@@ -51,13 +51,11 @@ from apps.backend.runtime.pipeline_stages.hires_fix import resolve_pipeline_tele
 from apps.backend.runtime.pipeline_stages.video import (
     apply_wan_stage_loras,
     apply_video_interpolation,
-    apply_video_upscaling,
     assemble_video_metadata,
     build_video_plan,
     build_video_request_effective_snapshot,
     prepare_base_snapshot_video_options,
     read_video_interpolation_options,
-    read_video_upscaling_options,
     resolve_video_output_fps,
 )
 from apps.backend.video.export.ffmpeg_exporter import export_video
@@ -824,12 +822,10 @@ def run_vid2vid(
             )
 
         video_options = _as_video_options(getattr(request, "video_options", None))
-        upscaling_options = read_video_upscaling_options(extras)
         vfi_options = read_video_interpolation_options(extras)
         base_snapshot_options = prepare_base_snapshot_video_options(
             video_options,
             task="vid2vid",
-            upscaling_options=upscaling_options,
             interpolation_options=vfi_options,
         )
         base_video_meta: Any = None
@@ -867,30 +863,6 @@ def run_vid2vid(
                 method=str(method),
                 video_saved=bool(parse_bool_value(getattr(base_video_meta, "saved", None), field="base_video_meta.saved", default=False)),
             )
-
-        if upscaling_options is not None and upscaling_options.enabled:
-            yield ProgressEvent(stage="upscale", percent=0.9, message="Upscaling frames (SeedVR2)")
-        frames_out, upscaling_opts = apply_video_upscaling(
-            frames_out,
-            options=upscaling_options,
-            logger_=logger,
-            component_device=getattr(comp, "device", None),
-        )
-        _emit_pipeline_event(
-            telemetry_scope,
-            "pipeline.stage.complete",
-            stage="upscaling.complete",
-            stage_name="upscaling",
-            backend="diffusers",
-            method=str(method),
-            upscaling_enabled=bool(upscaling_options is not None and upscaling_options.enabled),
-            frame_count=int(len(frames_out)),
-        )
-        if frames_out:
-            first_size = getattr(frames_out[0], "size", None)
-            if isinstance(first_size, tuple) and len(first_size) == 2:
-                plan.width = int(first_size[0])
-                plan.height = int(first_size[1])
 
         if vfi_options is not None and vfi_options.enabled and (vfi_options.times or 0) > 1:
             yield ProgressEvent(stage="interpolate", percent=0.95, message="Interpolating frames (VFI)")
@@ -947,8 +919,6 @@ def run_vid2vid(
             info["animate_mode"] = getattr(request, "animate_mode", None)
             info["segment_frame_length"] = int(getattr(request, "segment_frame_length", 77) or 77)
             info["prev_segment_conditioning_frames"] = int(getattr(request, "prev_segment_conditioning_frames", 1) or 1)
-        if upscaling_opts is not None:
-            info["video_upscaling"] = upscaling_opts
         if vfi_opts is not None:
             info["video_interpolation"] = vfi_opts
         if base_video_meta is not None:
@@ -999,8 +969,6 @@ def run_vid2vid(
             request=request,
             plan=plan,
             video_meta=video_meta,
-            upscaling_options=upscaling_options,
-            upscaling_meta=upscaling_opts,
             interpolation_options=vfi_options,
             interpolation_meta=vfi_opts,
             base_video_meta=base_video_meta,

@@ -1,7 +1,7 @@
 # apps/interface/src/composables Overview
 <!-- tags: frontend, composables -->
 Date: 2025-12-09
-Last Review: 2026-07-31
+Last Review: 2026-08-26
 Status: Active
 
 ## Purpose
@@ -78,7 +78,7 @@ Status: Active
 - 2026-02-21: `useVideoGeneration(tabId)` now logs structured start-failure diagnostics to browser console (`status`, backend `detail`, parsed `body`, message, mode/tab) before surfacing UI error text, improving visibility for hidden request-contract failures.
 - 2026-02-27: `useVideoGeneration(tabId)` removed obsolete WAN output fields (`filenamePrefix`, `trimToAudio`, `saveMetadata`, `saveOutput`) from snapshots/common payload input and now carries interpolation as one `interpolation.targetFps` field (`0` disables, active values are interpreted as output FPS targets).
 - 2026-02-27: `useVideoGeneration(tabId)` WAN default video FPS is now `15` (was `24`) to match store/view initialization defaults.
-- 2026-02-27: `useVideoGeneration(tabId)` now carries WAN SeedVR2 upscaling fields in defaults, run snapshots (`paramsSnapshot.upscaling`), and common payload input (`upscaling` -> `video_upscaling`), and appends compact ` · seedvr2` in run summaries when enabled.
+- 2026-08-26: `useVideoGeneration(tabId)` and `useWan22_5bVideoGeneration(tabId)` no longer carry SeedVR2 defaults, snapshots, summaries, or payload input. Dedicated video-upscale state is route-local in `VideoUpscale.vue`.
 - 2026-03-16: `useLtxVideoGeneration.ts` now exports `isLtxGenerationRunningForTab(tabId)` so `QuickSettingsBar.vue` can lock the shared LTX `TXT2VID/IMG2VID` mode toggle while an LTX run is active without duplicating local task-state tracking.
 - 2026-03-16: `useLtxVideoGeneration.ts` now seeds per-tab runtime state from the persisted LTX resume marker before async reconnect completes, so QuickSettings keeps the mode toggle locked during reload/reconnect windows instead of exposing a false idle state.
 - 2026-03-16: `useLtxVideoGeneration(tabId)` now blocks generation on the backend-owned `vendored_metadata` dependency row in addition to checkpoint/core-only sidecars, so the dedicated LTX path fails before the runtime hits missing local `Lightricks/LTX-2` metadata.

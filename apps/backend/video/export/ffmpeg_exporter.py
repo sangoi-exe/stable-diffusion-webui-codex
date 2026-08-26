@@ -24,6 +24,7 @@ Symbols (top-level; keep in sync; no ghosts):
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -100,7 +101,7 @@ class VideoExportResult:
     rel_path: str | None = None
     mime: str | None = None
     reason: str | None = None
-    fps: int | None = None
+    fps: float | None = None
     frame_count: int | None = None
     has_audio: bool = False
 
@@ -108,7 +109,7 @@ class VideoExportResult:
 def export_video(
     frames: Sequence[Any],
     *,
-    fps: int,
+    fps: float,
     options: Mapping[str, Any] | None,
     task: str,
     audio_source_path: str | None = None,
@@ -128,7 +129,15 @@ def export_video(
     if not frames_list:
         return VideoExportResult(saved=False, reason="no-frames")
 
-    fps_i = int(fps) if int(fps) > 0 else 24
+    try:
+        fps_value = float(fps)
+    except (TypeError, ValueError) as exc:
+        raise VideoExportError(f"Video export fps must be numeric; got {fps!r}.") from exc
+    if not math.isfinite(fps_value):
+        raise VideoExportError(f"Video export fps must be finite; got {fps!r}.")
+    if fps_value <= 0:
+        fps_value = 24.0
+    fps_text = format(fps_value, ".12g")
     ext, codec_kind = resolve_video_export_container(str(opts.get("format") or "video/h264-mp4"))
     normalized_audio_source = (
         str(audio_source_path).strip()
@@ -191,7 +200,7 @@ def export_video(
         raise VideoExportError(str(exc)) from exc
 
     # Base encode command.
-    cmd: list[str] = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-framerate", str(fps_i), "-i", str(frames_dir / "frame_%06d.png")]
+    cmd: list[str] = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-framerate", fps_text, "-i", str(frames_dir / "frame_%06d.png")]
 
     include_audio = bool(normalized_audio_source)
     if include_audio:
@@ -207,7 +216,7 @@ def export_video(
             "error",
             "-y",
             "-framerate",
-            str(fps_i),
+            fps_text,
             "-i",
             str(frames_dir / "frame_%06d.png"),
             "-vf",
@@ -227,7 +236,7 @@ def export_video(
             "error",
             "-y",
             "-framerate",
-            str(fps_i),
+            fps_text,
             "-i",
             str(frames_dir / "frame_%06d.png"),
             "-i",
@@ -281,7 +290,7 @@ def export_video(
         meta_path = out_path.with_suffix(out_path.suffix + ".json")
         meta: dict[str, Any] = {
             "task": task,
-            "fps": fps_i,
+            "fps": fps_value,
             "frames": len(frames_list),
             "format": str(opts.get("format") or ""),
             "pix_fmt": pix_fmt,
@@ -302,7 +311,7 @@ def export_video(
         path=str(out_path),
         rel_path=str(rel).replace(os.sep, "/"),
         mime=mime,
-        fps=fps_i,
+        fps=fps_value,
         frame_count=len(frames_list),
         has_audio=include_audio,
     )

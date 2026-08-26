@@ -12,6 +12,7 @@ Exposes:
 - remote HF upscaler listing + downloads (`GET/POST /api/upscalers/*`), with optional manifest-based metadata enrichment
   (`upscalers/manifest.json`, schema v1) and explicit `manifest_error`/`manifest_errors` surfacing
 - standalone upscaling tasks (`POST /api/upscale`)
+- dedicated SeedVR2 video-upscale tasks (`POST /api/video-upscale`)
 Remote listing/download respects the upscaler safeweights policy (`CODEX_SAFE_WEIGHTS=1` blocks non-`.safetensors` weights).
 
 Symbols (top-level; keep in sync; no ghosts):
@@ -24,6 +25,7 @@ from apps.backend.runtime.logging import get_backend_logger
 import asyncio
 import json
 import logging
+import math
 from uuid import uuid4
 from pathlib import Path
 from typing import Any, Dict, List
@@ -41,6 +43,14 @@ from apps.backend.runtime.vision.upscalers.safeweights import allowed_upscaler_w
 _HF_UPSCALERS_REPO_ID = "sangoi-exe/sd-webui-codex"
 _HF_MANIFEST_PATH = "upscalers/manifest.json"
 _router_log = get_backend_logger("backend.api.routers.upscale")
+_SEEDVR2_DIT_MODELS = frozenset(
+    {
+        "seedvr2_ema_3b_fp16.safetensors",
+        "seedvr2_ema_7b_fp16.safetensors",
+        "seedvr2_ema_7b_sharp_fp16.safetensors",
+    }
+)
+_SEEDVR2_COLOR_CORRECTIONS = frozenset({"lab", "wavelet", "wavelet_adaptive", "hsv", "adain", "none"})
 
 
 def _normalize_hf_repo_id(repo_id: str | None) -> str:
@@ -77,6 +87,106 @@ def _safe_relpath(raw: str) -> str:
     if ".." in s.split("/"):
         raise HTTPException(status_code=400, detail="invalid path")
     return s
+
+
+def _parse_video_upscale_request(payload: Dict[str, Any]):
+    allowed_fields = {
+        "video_path",
+        "device",
+        "dit_model",
+        "resolution",
+        "max_resolution",
+        "batch_size",
+        "uniform_batch_size",
+        "temporal_overlap",
+        "prepend_frames",
+        "color_correction",
+        "input_noise_scale",
+        "latent_noise_scale",
+    }
+    unknown_fields = sorted(str(key) for key in payload if key not in allowed_fields)
+    if unknown_fields:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported /api/video-upscale field(s): {', '.join(unknown_fields)}.",
+        )
+
+    raw_video_path = payload.get("video_path")
+    if not isinstance(raw_video_path, str) or not raw_video_path.strip():
+        raise HTTPException(status_code=400, detail="'video_path' must be a non-empty backend-visible file path")
+    video_path = raw_video_path.strip()
+
+    raw_dit_model = payload.get("dit_model")
+    if not isinstance(raw_dit_model, str) or not raw_dit_model.strip():
+        raise HTTPException(status_code=400, detail="'dit_model' must be a non-empty curated SeedVR2 model id")
+    dit_model = raw_dit_model.strip()
+    if dit_model not in _SEEDVR2_DIT_MODELS:
+        allowed_models = ", ".join(sorted(_SEEDVR2_DIT_MODELS))
+        raise HTTPException(status_code=400, detail=f"'dit_model' must be one of {{{allowed_models}}}")
+
+    def optional_int(field: str, *, default: int, minimum: int) -> int:
+        value = payload.get(field, default)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise HTTPException(status_code=400, detail=f"'{field}' must be an integer")
+        parsed = int(value)
+        if parsed < minimum:
+            raise HTTPException(status_code=400, detail=f"'{field}' must be >= {minimum}")
+        return parsed
+
+    def optional_float(field: str, *, default: float) -> float:
+        value = payload.get(field, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise HTTPException(status_code=400, detail=f"'{field}' must be a number")
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed < 0.0 or parsed > 1.0:
+            raise HTTPException(status_code=400, detail=f"'{field}' must be a finite number within [0, 1]")
+        return parsed
+
+    resolution = optional_int("resolution", default=1080, minimum=16)
+    max_resolution = optional_int("max_resolution", default=0, minimum=0)
+    batch_size = optional_int("batch_size", default=5, minimum=1)
+    if (batch_size - 1) % 4 != 0:
+        raise HTTPException(status_code=400, detail="'batch_size' must satisfy 4n+1")
+    temporal_overlap = optional_int("temporal_overlap", default=0, minimum=0)
+    prepend_frames = optional_int("prepend_frames", default=0, minimum=0)
+
+    uniform_batch_size = payload.get("uniform_batch_size", False)
+    if not isinstance(uniform_batch_size, bool):
+        raise HTTPException(status_code=400, detail="'uniform_batch_size' must be a boolean")
+
+    color_correction_raw = payload.get("color_correction", "lab")
+    if not isinstance(color_correction_raw, str):
+        raise HTTPException(status_code=400, detail="'color_correction' must be a string")
+    color_correction = color_correction_raw.strip().lower()
+    if color_correction not in _SEEDVR2_COLOR_CORRECTIONS:
+        allowed_corrections = ", ".join(sorted(_SEEDVR2_COLOR_CORRECTIONS))
+        raise HTTPException(status_code=400, detail=f"'color_correction' must be one of {{{allowed_corrections}}}")
+
+    device = _parse_explicit_device(payload)
+    if device not in {"cuda", "mps"}:
+        raise HTTPException(
+            status_code=400,
+            detail="SeedVR2 video upscaling supports only cuda or mps.",
+        )
+    from apps.backend.core.params.video import SeedVR2UpscaleOptions
+    from apps.backend.use_cases.video_upscale import VideoUpscaleRequest
+
+    return VideoUpscaleRequest(
+        video_path=video_path,
+        device=device,
+        options=SeedVR2UpscaleOptions(
+            dit_model=dit_model,
+            resolution=resolution,
+            max_resolution=max_resolution,
+            batch_size=batch_size,
+            uniform_batch_size=uniform_batch_size,
+            temporal_overlap=temporal_overlap,
+            prepend_frames=prepend_frames,
+            color_correction=color_correction,
+            input_noise_scale=optional_float("input_noise_scale", default=0.0),
+            latent_noise_scale=optional_float("latent_noise_scale", default=0.0),
+        ),
+    )
 
 
 def build_router(
@@ -311,6 +421,22 @@ def build_router(
             generation_provenance=generation_provenance,
             save_generated_images=save_generated_images,
         )
+        return {"task_id": task_id}
+
+    @router.post("/api/video-upscale")
+    async def video_upscale(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Payload must be JSON object")
+        request = _parse_video_upscale_request(payload)
+
+        loop = asyncio.get_running_loop()
+        entry = TaskEntry(loop)
+        task_id = f"task(api-video-upscale-{uuid4().hex})"
+        register_task(task_id, entry)
+
+        from apps.backend.interfaces.api.tasks.video_upscale_tasks import run_video_upscale_task
+
+        run_video_upscale_task(task_id=task_id, request=request, entry=entry)
         return {"task_id": task_id}
 
     return router

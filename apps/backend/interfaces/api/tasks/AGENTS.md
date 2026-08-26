@@ -1,7 +1,7 @@
 # apps/backend/interfaces/api/tasks Overview
 <!-- tags: backend, api, tasks, orchestration -->
 Date: 2026-01-30
-Last Review: 2026-05-30
+Last Review: 2026-08-26
 Status: Active
 
 ## Purpose
@@ -11,6 +11,7 @@ Status: Active
 ## Key Files
 - `apps/backend/interfaces/api/tasks/generation_tasks.py` — common task runner helpers for generation endpoints (event streaming, engine options build, image encoding).
 - `apps/backend/interfaces/api/tasks/upscale_tasks.py` — task workers for standalone `/api/upscale` and HF upscaler downloads (`/api/upscalers/download`) with explicit integrity verification (manifest sha256 when available).
+- `apps/backend/interfaces/api/tasks/video_upscale_tasks.py` — task worker for dedicated `POST /api/video-upscale` source-path tasks.
 
 ## Notes
 - 2026-05-30: `generation_tasks.py::build_engine_options(..., engine_key=...)` requires the worker-resolved engine key, resolves runtime VAE usage through `EngineAssetContract.uses_vae`, forwards explicit `vae_source` for every VAE-using engine, preserves `requires_vae` as the external-VAE requirement, and rejects `vae_source` / `vae_path` / `vae_sha` for no-VAE engines.
@@ -34,6 +35,7 @@ Status: Active
 - 2026-02-21: `generation_tasks.py::build_engine_options(...)` now parses settings key `codex_core_streaming` via shared strict bool parsing and emits canonical engine option `core_streaming_enabled` (no truthiness coercion from malformed option snapshots).
 - 2026-02-21: `generation_tasks.py` now parses `samples_save` via shared strict bool parsing before output persistence, removing permissive `bool("false")==True` behavior.
 - 2026-02-22: task workers now log warning-level diagnostics when inference-gate release fails (`generation_tasks.py`, `upscale_tasks.py`) instead of silently swallowing release errors.
-- 2026-03-31: standalone SUPIR task workers were removed when SUPIR mode moved into the canonical SDXL `img2img.py` owner path; this package now owns only generic generation workers plus standalone upscale/download tasks.
+- 2026-03-31: standalone SUPIR task workers were removed when SUPIR mode moved into the canonical SDXL `img2img.py` owner path; this package owns generic generation workers plus standalone image upscale, dedicated SeedVR2 video-upscale, and download tasks.
+- 2026-08-26: `video_upscale_tasks.py` owns the dedicated SeedVR2 task lifecycle only. It forwards use-case progress and preserves cancellation, task result, error, cleanup, inference-gate, and SSE contracts without becoming a second video pipeline.
 - 2026-03-02: `generation_tasks.py` now preserves `ProgressEvent.message` and `ProgressEvent.data` in streamed `progress` task events, so frontend consumers can render phase-aware total-progress metadata from backend-emitted payloads.
 - 2026-03-31: `generation_tasks.py` now clears raw progress state per task run and passes the expected task owner token into `live_preview_service.py`; workers remain thin forwarders and must not read raw preview fields from `core.state` directly.

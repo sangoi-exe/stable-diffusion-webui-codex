@@ -47,7 +47,6 @@ class WanVideoRequestKeys:
         }
     )
     VIDEO_INTERPOLATION: FrozenSet[str] = frozenset({"video_interpolation"})
-    VIDEO_UPSCALING: FrozenSet[str] = frozenset({"video_upscaling"})
     WAN_STAGE_CONTAINERS: FrozenSet[str] = frozenset({"wan_single", "wan_high", "wan_low"})
     WAN_SINGLE_ALLOWED: FrozenSet[str] = frozenset(
         {
@@ -160,7 +159,6 @@ class WanVideoRequestKeys:
             | self.REVISION
             | self.VIDEO_EXPORT
             | self.VIDEO_INTERPOLATION
-            | self.VIDEO_UPSCALING
             | self.WAN_STAGE_CONTAINERS
             | self.WAN_ASSETS
             | self.GGUF_RUNTIME

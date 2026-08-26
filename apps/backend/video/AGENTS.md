@@ -1,6 +1,6 @@
 # apps/backend/video Overview
 Date: 2025-10-28
-Last Review: 2026-02-27
+Last Review: 2026-08-26
 Status: Active
 
 ## Purpose
@@ -20,5 +20,5 @@ Status: Active
 - Flow guidance requires `torch` + `torchvision`.
 - 2026-01-02: Added standardized file header docstrings to video export modules (doc-only change; part of rollout).
 - 2026-02-23: RIFE/RAFT runtime defaults now derive device identity from memory-manager mount-device authority; unsupported device/backend combinations fail loud instead of implicit CUDA→CPU fallback.
-- 2026-02-27: Added `upscaling/seedvr2.py` for SeedVR2 post-process upscaling with deterministic repo/model-dir resolution and strict frame count/size validation.
+- 2026-08-26: `upscaling/seedvr2.py` is the dedicated SeedVR2 utility runner, with deterministic repo/model-dir resolution and strict frame count/size validation. Generation pipelines no longer call it.
 - 2026-02-28: SeedVR2 upscaling now executes natively in-process (no CLI subprocess/ffmpeg intermediate path); runtime module/dependency failures are fail-loud.

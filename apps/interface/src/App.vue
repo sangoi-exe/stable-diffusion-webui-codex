@@ -7,7 +7,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Root WebUI layout and router shell.
-Renders the global header + navigation tabs + router outlet (home + enabled non-chroma model tabs + gallery/workflows + utilities) and computes
+Renders the global header + navigation tabs + router outlet (home + enabled non-chroma model tabs + gallery/workflows + image/video utilities) and computes
 `--sticky-offset` from the header height so sticky result headers stay aligned.
 
 Symbols (top-level; keep in sync; no ghosts):
@@ -89,6 +89,7 @@ Symbols (top-level; keep in sync; no ghosts):
         <!-- Utilities on the right -->
         <RouterLink class="tab-link" to="/tools">🔧 tools</RouterLink>
         <RouterLink class="tab-link" to="/upscale">upscale</RouterLink>
+        <RouterLink class="tab-link" to="/video-upscale">video upscale</RouterLink>
         <RouterLink class="tab-link" to="/pnginfo">png info</RouterLink>
         <RouterLink class="tab-link" to="/extensions">extensions</RouterLink>
       </nav>

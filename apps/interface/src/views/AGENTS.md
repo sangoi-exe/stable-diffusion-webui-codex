@@ -1,7 +1,7 @@
 # apps/interface/src/views Overview
 <!-- tags: frontend, views, model-tabs -->
 Date: 2025-10-28
-Last Review: 2026-05-23
+Last Review: 2026-08-26
 Status: Active
 
 ## Purpose
@@ -10,6 +10,7 @@ Status: Active
 ## Notes
 - Views should compose reusable components and stores; avoid duplicating logic that belongs in shared modules.
 - Keep routes documented in `apps/interface/src/router.ts` and the UI taxonomy in `.sangoi/frontend/guidelines/`.
+- 2026-08-26: `VideoUpscale.vue` owns the top-level `/video-upscale` utility. It submits one backend-visible source path and curated SeedVR2 options through the shared task/SSE contract, enables Run only for the configured CUDA or MPS device, renders playback/open/zoom/download output actions, and keeps no WAN tab state or browser video-upload path.
 - 2026-03-21: `ImageModelTab.vue` now snaps ZImage width/height and init-image sync to a `16px` grid, reconciles persisted state on mount/engine switch, and restricts ZImage img2img resize controls to the truthful pixel-space modes the backend currently implements.
 - 2026-03-31: `ImageModelTab.vue` must fail loud on stale SUPIR inventory selections; do not auto-heal unavailable SUPIR variants/samplers into the first reported choice, and do not let an invalid stored selection toggle SUPIR on and clear conflicting hires/IP-Adapter state before the user fixes the selection.
 - 2026-04-01: Native SDXL SUPIR mode is now split across `QuickSettingsBar.vue` (main toggle ownership beside `IMG2IMG` / `INPAINT`), `Img2ImgBasicParametersCard.vue` (SUPIR sampler + locked-scheduler row inside Basic Parameters), and `SupirModeCard.vue` (variant, control/restoration scales, color-fix, plus the bounded advanced `Restore End (Sigma)` control). `ImageModelTab.vue` owns only the shared blocking/gating state and must keep history/profile restore fail-loud for stale SUPIR/APG conflicts.
@@ -135,7 +136,7 @@ Status: Active
 - 2026-02-28: `VideoModelTab.vue` temporal controls expose only `sliding|svi2|svi2_pro` when enabled, and unsupported legacy temporal history snapshots are rejected fail-loud with user toasts.
 - 2026-02-27: `VideoModelTab.vue` WAN video state defaults/history/snapshot wiring removed obsolete output fields (`filenamePrefix`, `trimToAudio`, `saveMetadata`, `saveOutput`) and now use one `interpolationFps` contract (`0` off, active values normalized as output-FPS targets mapped to backend interpolation times).
 - 2026-02-27: `VideoModelTab.vue` WAN default video FPS is now `15` and the output panel renders interpolation in the same slider row as Loop Count/CRF.
-- 2026-02-27: `VideoModelTab.vue` now snapshots/applies SeedVR2 upscaling controls under `paramsSnapshot.upscaling`, and the generic `components/video/VideoOutputCard.vue` shell hosts the WAN-specific compact upscaling controls plus the advanced block.
+- 2026-08-26: `VideoModelTab.vue` and its WAN runtime helpers no longer snapshot, apply, render, or forward SeedVR2 controls. `VideoOutputCard.vue` remains a generic video-output shell.
 - 2026-02-27: `VideoModelTab.vue` `Reset Anchor` controls in temporal rows now render as single compact toggle buttons (no separate Enabled/Disabled label row), with tooltip attached directly to the button trigger.
 - 2026-03-02: `VideoModelTab.vue` temporal `Reset Anchor` toggle now uses a dedicated compact-width styling hook (`wan-temporal-anchor-toggle`) so the button width matches content (parity with compact output toggles).
 - 2026-02-21: `Settings.vue` renamed the inner content layout hook from `.layout` to `.settings-layout` to avoid collisions with the global app-shell `.layout` contract.

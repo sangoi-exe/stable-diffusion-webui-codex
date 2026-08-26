@@ -285,17 +285,6 @@ function defaultVideo(): WanVideoParams {
     pingpong: false,
     returnFrames: false,
     interpolationFps: 0,
-    upscalingEnabled: false,
-    upscalingModel: 'seedvr2_ema_3b_fp16.safetensors',
-    upscalingResolution: 1080,
-    upscalingMaxResolution: 0,
-    upscalingBatchSize: 5,
-    upscalingUniformBatchSize: false,
-    upscalingTemporalOverlap: 0,
-    upscalingPrependFrames: 0,
-    upscalingColorCorrection: 'lab',
-    upscalingInputNoiseScale: 0,
-    upscalingLatentNoiseScale: 0,
   }
 }
 
@@ -459,8 +448,7 @@ export function useWan22_5bVideoGeneration(tabId: string) {
     const frames = Number(currentVideo.frames) || 0
     const fps = Number(currentVideo.fps) || 0
     const seconds = fps > 0 ? frames / fps : 0
-    const upscalingTag = currentVideo.upscalingEnabled ? ' · seedvr2' : ''
-    return `${width}×${height} · ${frames}f @ ${fps}fps (~${seconds.toFixed(2)}s) · steps ${steps.value} · cfg ${cfgScale.value}${upscalingTag}`
+    return `${width}×${height} · ${frames}f @ ${fps}fps (~${seconds.toFixed(2)}s) · steps ${steps.value} · cfg ${cfgScale.value}`
   }
 
   function buildParamsSnapshot(currentVideo: WanVideoParams, currentStage: Wan5bStageParams): Record<string, unknown> {
@@ -512,19 +500,6 @@ export function useWan22_5bVideoGeneration(tabId: string) {
       },
       interpolation: {
         targetFps: currentVideo.interpolationFps,
-      },
-      upscaling: {
-        enabled: currentVideo.upscalingEnabled,
-        model: currentVideo.upscalingModel,
-        resolution: currentVideo.upscalingResolution,
-        maxResolution: currentVideo.upscalingMaxResolution,
-        batchSize: currentVideo.upscalingBatchSize,
-        uniformBatchSize: currentVideo.upscalingUniformBatchSize,
-        temporalOverlap: currentVideo.upscalingTemporalOverlap,
-        prependFrames: currentVideo.upscalingPrependFrames,
-        colorCorrection: currentVideo.upscalingColorCorrection,
-        inputNoiseScale: currentVideo.upscalingInputNoiseScale,
-        latentNoiseScale: currentVideo.upscalingLatentNoiseScale,
       },
     }
   }
@@ -660,19 +635,6 @@ export function useWan22_5bVideoGeneration(tabId: string) {
       },
       interpolation: {
         targetFps: currentVideo.interpolationFps,
-      },
-      upscaling: {
-        enabled: currentVideo.upscalingEnabled,
-        model: currentVideo.upscalingModel,
-        resolution: currentVideo.upscalingResolution,
-        maxResolution: currentVideo.upscalingMaxResolution,
-        batchSize: currentVideo.upscalingBatchSize,
-        uniformBatchSize: currentVideo.upscalingUniformBatchSize,
-        temporalOverlap: currentVideo.upscalingTemporalOverlap,
-        prependFrames: currentVideo.upscalingPrependFrames,
-        colorCorrection: currentVideo.upscalingColorCorrection,
-        inputNoiseScale: currentVideo.upscalingInputNoiseScale,
-        latentNoiseScale: currentVideo.upscalingLatentNoiseScale,
       },
     }
   }

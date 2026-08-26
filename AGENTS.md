@@ -72,7 +72,7 @@ If you touch an `apps/**` source file, you keep its **file header block** honest
 
 ## WebUI Atlas
 
-Last reviewed on 2026-07-31 during the Qwen Image Edit-2511 canonical img2img tranche.
+Last reviewed on 2026-08-26 during the dedicated SeedVR2 video-upscale tranche.
 
 <!-- Merge-safety anchor: this prompt-resident WebUI Atlas replaces the former split-file discovery front door; update it whenever a hot path, owner file, public route, or shipped entrypoint moves. -->
 
@@ -204,7 +204,7 @@ Last reviewed on 2026-07-31 during the Qwen Image Edit-2511 canonical img2img tr
 - Engine wrapper: `apps/backend/engines/ltx2/ltx2.py` or `apps/backend/engines/wan22/wan22_14b.py`
   - Delegates to `run_txt2vid(...)` for the active engine family.
 - Canonical use-case: `apps/backend/use_cases/txt2vid.py`
-  - Owns execution-profile branching, shared video plan/export helpers, optional upscaling/interpolation, and terminal `ResultEvent` emission.
+  - Owns execution-profile branching, shared video plan/export helpers, optional interpolation, and terminal `ResultEvent` emission.
 - Shared video helpers: `apps/backend/runtime/pipeline_stages/video.py`
   - Own `build_video_plan(...)`, `build_ltx2_video_plan(...)`, WAN Diffusers stage-LoRA preflight/apply, export helpers, and post-generation video stages.
 - Terminal surfaces: `apps/backend/interfaces/api/routers/generation.py` and `apps/backend/interfaces/api/routers/tasks.py`
@@ -226,9 +226,22 @@ Last reviewed on 2026-07-31 during the Qwen Image Edit-2511 canonical img2img tr
 - Canonical use-case: `apps/backend/use_cases/img2vid.py`
   - Owns image-video execution profiles, WAN temporal-mode branching, shared video plan/export helpers, and terminal `ResultEvent` emission.
 - Shared video helpers: `apps/backend/runtime/pipeline_stages/video.py`
-  - Own plan/export/upscale/interpolation helpers shared with txt2vid plus WAN Diffusers stage-LoRA preflight/apply.
+  - Own plan/export/interpolation helpers shared with txt2vid plus WAN Diffusers stage-LoRA preflight/apply.
 - Terminal surfaces: `apps/backend/interfaces/api/routers/generation.py` and `apps/backend/interfaces/api/routers/tasks.py`
   - Store the final result in the task entry and expose terminal snapshot/SSE state.
+
+#### video_upscale
+
+- Public route: `apps/backend/interfaces/api/routers/upscale.py` (`/api/video-upscale`)
+  - Validates one backend-visible video path, curated SeedVR2 controls, and a configured CUDA or MPS device. It creates the task without accepting browser-uploaded video bytes.
+- Dedicated task worker: `apps/backend/interfaces/api/tasks/video_upscale_tasks.py`
+  - Owns inference-gate coordination, progress forwarding, cancellation, terminal result/error state, and cleanup for one dedicated video-upscale task.
+- Canonical use-case: `apps/backend/use_cases/video_upscale.py`
+  - Owns source-video probe/decode, SeedVR2 frame execution, H.264 MP4 export, source-audio preservation verification, and terminal `ResultEvent` emission.
+- Runtime and file owners: `apps/backend/video/io/ffmpeg.py`, `apps/backend/video/upscaling/seedvr2.py`, and `apps/backend/video/export/ffmpeg_exporter.py`
+  - Respectively own probe/frame extraction, native SeedVR2 execution, and saved artifact encoding/muxing under the existing output route.
+- Terminal surfaces: `apps/backend/interfaces/api/task_registry.py` and `apps/backend/interfaces/api/routers/tasks.py`
+  - Keep task snapshot, SSE replay, cancellation, and output-file serving unchanged.
 
 #### vid2vid
 
@@ -253,6 +266,8 @@ Last reviewed on 2026-07-31 during the Qwen Image Edit-2511 canonical img2img tr
 - Generation Router seam: `apps/backend/interfaces/api/routers/generation.py`
   - Owns public generation routes, payload parsing, route-level capability guards, exact-engine SUPIR-mode preflight for canonical img2img/inpaint, exact `zimage_l2p` no-VAE txt2img admission, task creation, and worker thread hand-off.
   - Do not move mode execution into this file; it stays validate + dispatch + stream.
+- Video Upscale utility seam: `apps/backend/interfaces/api/routers/upscale.py`, `apps/backend/interfaces/api/tasks/video_upscale_tasks.py`, and `apps/backend/use_cases/video_upscale.py`
+  - The router validates and dispatches the dedicated source-path request. The worker owns task lifecycle. The use case owns one video-upscale pipeline. Reuse video I/O, SeedVR2 runner, export, task registry, and SSE owners instead of reactivating vid2vid or adding a browser upload path.
 - Image Task Worker: `apps/backend/interfaces/api/tasks/generation_tasks.py`
   - Owns shared image task lifecycle, inference-gate integration, encoded image result packaging/save/provenance hooks, and automation task wrapper around canonical image modes.
   - Open this file when the question is task result packaging rather than public payload parsing.
@@ -269,7 +284,7 @@ Last reviewed on 2026-07-31 during the Qwen Image Edit-2511 canonical img2img tr
 - Shared pipeline stages: `apps/backend/runtime/pipeline_stages/`
   - High-value entries: `hires_fix.py`, `masked_img2img.py`, `video.py`, `ip_adapter.py`.
   - Open this directory when the question is a shared stage reused by multiple canonical use-cases.
-  - `video.py` is the current shared owner for WAN Diffusers stage-LoRA preflight/apply across `txt2vid`, `img2vid`, and `vid2vid`.
+  - `video.py` is the current shared owner for WAN Diffusers stage-LoRA preflight/apply and shared generation video helpers across `txt2vid`, `img2vid`, and `vid2vid`. Dedicated SeedVR2 execution belongs to `use_cases/video_upscale.py` plus `video/upscaling/seedvr2.py`.
 
 ### Generated artifact and policy pointers
 

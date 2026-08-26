@@ -36,7 +36,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `WanStageParams` (interface): UI WAN stage params (high/low), including sampler/scheduler, stage prompt/negative prompt, ordered `loras[]`, and optional explicit `flowShift`, used by video tabs and payload builders.
 - `WanImg2VidMode` (type): WAN img2vid temporal mode discriminator (`solo|sliding|svi2|svi2_pro`).
 - `WanChunkSeedMode` (type): WAN sliding/SVI per-window seed strategy (`fixed|increment|random`).
-- `WanVideoParams` (interface): UI WAN video params (dims/fps/frames + optional init image + img2vid temporal controls + no-stretch guide controls (`img2vidImageScale` + crop offsets) + output/interpolation + SeedVR2 upscaling controls).
+- `WanVideoParams` (interface): UI WAN video params (dims/fps/frames + optional init image + img2vid temporal controls + no-stretch guide controls (`img2vidImageScale` + crop offsets) + output/interpolation).
 - `WanAssetsParams` (interface): WAN asset selectors (metadata/text encoder/VAE) used by WAN requests.
 - `LtxGenerationMode` (type): LTX video mode discriminator (`txt2vid|img2vid`).
 - `LtxTabParams` (interface): UI LTX video params, including checkpoint-owned `executionProfile` state plus prompt/init-image/video controls.
@@ -204,18 +204,6 @@ export interface WanVideoParams {
   returnFrames: boolean
   // Interpolation (RIFE target FPS; 0 disables interpolation)
   interpolationFps: number
-  // Optional SeedVR2 upscaling (global post-process)
-  upscalingEnabled: boolean
-  upscalingModel: string
-  upscalingResolution: number
-  upscalingMaxResolution: number
-  upscalingBatchSize: number
-  upscalingUniformBatchSize: boolean
-  upscalingTemporalOverlap: number
-  upscalingPrependFrames: number
-  upscalingColorCorrection: 'lab' | 'wavelet' | 'wavelet_adaptive' | 'hsv' | 'adain' | 'none'
-  upscalingInputNoiseScale: number
-  upscalingLatentNoiseScale: number
 }
 
 export interface WanAssetsParams {
@@ -626,17 +614,6 @@ function defaultParams<T extends BaseTabType>(
       pingpong: false,
       returnFrames: false,
       interpolationFps: 0,
-      upscalingEnabled: false,
-      upscalingModel: 'seedvr2_ema_3b_fp16.safetensors',
-      upscalingResolution: 1080,
-      upscalingMaxResolution: 0,
-      upscalingBatchSize: 5,
-      upscalingUniformBatchSize: false,
-      upscalingTemporalOverlap: 0,
-      upscalingPrependFrames: 0,
-      upscalingColorCorrection: 'lab',
-      upscalingInputNoiseScale: 0,
-      upscalingLatentNoiseScale: 0,
     }
     const assets: WanAssetsParams = { metadata: '', textEncoder: '', vae: '' }
     if (type === 'wan22_14b') {
@@ -1030,39 +1007,6 @@ function normalizeInterpolationTargetFps(rawValue: unknown, fallback: number): n
   return Math.max(0, Math.min(maxFps, Math.trunc(numeric)))
 }
 
-function normalizeUpscalingBatchSize(rawValue: unknown, fallback: number): number {
-  const fallbackInt = Number.isFinite(Number(fallback)) ? Math.max(1, Math.trunc(Number(fallback))) : 5
-  const numeric = Number(rawValue)
-  if (!Number.isFinite(numeric)) return fallbackInt
-  const intValue = Math.max(1, Math.trunc(numeric))
-  const remainder = (intValue - 1) % 4
-  if (remainder === 0) return intValue
-  const down = intValue - remainder
-  const up = down + 4
-  const downValid = down >= 1
-  if (downValid) {
-    const downDistance = Math.abs(intValue - down)
-    const upDistance = Math.abs(up - intValue)
-    return downDistance <= upDistance ? down : up
-  }
-  return up
-}
-
-function normalizeUpscalingColorCorrection(rawValue: unknown, fallback: WanVideoParams['upscalingColorCorrection']): WanVideoParams['upscalingColorCorrection'] {
-  const value = String(rawValue || '').trim().toLowerCase()
-  if (
-    value === 'lab'
-    || value === 'wavelet'
-    || value === 'wavelet_adaptive'
-    || value === 'hsv'
-    || value === 'adain'
-    || value === 'none'
-  ) {
-    return value
-  }
-  return fallback
-}
-
 function normalizeUnitInterval(rawValue: unknown, fallback: number): number {
   const numeric = Number(rawValue)
   if (!Number.isFinite(numeric)) return Math.min(1, Math.max(0, Number(fallback) || 0))
@@ -1308,33 +1252,6 @@ function normalizeWanVideoParams(raw: Partial<WanVideoParams>, defaults: WanVide
     merged.interpolationFps,
     defaults.interpolationFps,
   )
-  merged.upscalingEnabled = Boolean(merged.upscalingEnabled)
-  merged.upscalingUniformBatchSize = Boolean(merged.upscalingUniformBatchSize)
-  const upscalingModel = String(merged.upscalingModel || '').trim()
-  merged.upscalingModel = upscalingModel || defaults.upscalingModel
-  const resolution = Number(merged.upscalingResolution)
-  merged.upscalingResolution = Number.isFinite(resolution)
-    ? Math.max(16, Math.trunc(resolution))
-    : defaults.upscalingResolution
-  const maxResolution = Number(merged.upscalingMaxResolution)
-  merged.upscalingMaxResolution = Number.isFinite(maxResolution)
-    ? Math.max(0, Math.trunc(maxResolution))
-    : defaults.upscalingMaxResolution
-  merged.upscalingBatchSize = normalizeUpscalingBatchSize(merged.upscalingBatchSize, defaults.upscalingBatchSize)
-  const overlap = Number(merged.upscalingTemporalOverlap)
-  merged.upscalingTemporalOverlap = Number.isFinite(overlap)
-    ? Math.max(0, Math.trunc(overlap))
-    : defaults.upscalingTemporalOverlap
-  const prepend = Number(merged.upscalingPrependFrames)
-  merged.upscalingPrependFrames = Number.isFinite(prepend)
-    ? Math.max(0, Math.trunc(prepend))
-    : defaults.upscalingPrependFrames
-  merged.upscalingColorCorrection = normalizeUpscalingColorCorrection(
-    merged.upscalingColorCorrection,
-    defaults.upscalingColorCorrection,
-  )
-  merged.upscalingInputNoiseScale = normalizeUnitInterval(merged.upscalingInputNoiseScale, defaults.upscalingInputNoiseScale)
-  merged.upscalingLatentNoiseScale = normalizeUnitInterval(merged.upscalingLatentNoiseScale, defaults.upscalingLatentNoiseScale)
 
   return {
     width: merged.width,
@@ -1364,17 +1281,6 @@ function normalizeWanVideoParams(raw: Partial<WanVideoParams>, defaults: WanVide
     pingpong: merged.pingpong,
     returnFrames: merged.returnFrames,
     interpolationFps: merged.interpolationFps,
-    upscalingEnabled: merged.upscalingEnabled,
-    upscalingModel: merged.upscalingModel,
-    upscalingResolution: merged.upscalingResolution,
-    upscalingMaxResolution: merged.upscalingMaxResolution,
-    upscalingBatchSize: merged.upscalingBatchSize,
-    upscalingUniformBatchSize: merged.upscalingUniformBatchSize,
-    upscalingTemporalOverlap: merged.upscalingTemporalOverlap,
-    upscalingPrependFrames: merged.upscalingPrependFrames,
-    upscalingColorCorrection: merged.upscalingColorCorrection,
-    upscalingInputNoiseScale: merged.upscalingInputNoiseScale,
-    upscalingLatentNoiseScale: merged.upscalingLatentNoiseScale,
   }
 }
 

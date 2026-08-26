@@ -21,7 +21,6 @@ Symbols (top-level; keep in sync; no ghosts):
 - `WanStageInput` (interface): UI-friendly low-stage params that map to WAN stage overrides in payload.
 - `WanVideoOutputInput` (interface): Output options (format, pix_fmt, CRF, loop, pingpong, return-frames) mapped into payload; save flags are backend-owned defaults.
 - `WanInterpolationInput` (interface): Interpolation target FPS input (`0`=off, values above base FPS enable backend interpolation).
-- `WanVideoUpscalingInput` (interface): Optional SeedVR2 upscaling input mapped to backend `video_upscaling`.
 - `WanAssetsInput` (interface): WAN asset selection (metadata/text encoder/VAE) used to fill payload fields.
 - `WanVideoCommonInput` (interface): Shared input fields for txt2vid/img2vid (dims, top-level WAN core owners, stage params, assets).
 - `WanImg2VidInput` (interface): Img2vid-specific input extending common WAN fields with temporal-mode controls (`solo|sliding|svi2|svi2_pro`) and no-stretch guide controls (`imageScale` + crop offsets).
@@ -35,7 +34,6 @@ Symbols (top-level; keep in sync; no ghosts):
 - `addWanAssets` (function): Injects selected WAN assets into the payload (skips unset/empty values).
 - `addWanOutput` (function): Injects output-related fields into the payload.
 - `addWanInterpolation` (function): Injects interpolation config into the payload.
-- `addWanUpscaling` (function): Injects optional SeedVR2 upscaling config into the payload when enabled.
 - `buildWanTxt2VidPayload` (function): Builds a validated txt2vid payload from UI common input.
 - `buildWanImg2VidPayload` (function): Builds a validated img2vid payload from UI input plus init image data.
 */
@@ -98,40 +96,6 @@ const VideoInterpolationSchema = z
   })
   .strict()
 
-const VideoUpscalingColorCorrectionEnum = z.enum([
-  'lab',
-  'wavelet',
-  'wavelet_adaptive',
-  'hsv',
-  'adain',
-  'none',
-])
-
-const VideoUpscalingSchema = z
-  .object({
-    enabled: z.boolean(),
-    dit_model: z.string().min(1).optional(),
-    resolution: z.number().int().min(16).optional(),
-    max_resolution: z.number().int().min(0).optional(),
-    batch_size: z.number().int().min(1).optional(),
-    uniform_batch_size: z.boolean().optional(),
-    temporal_overlap: z.number().int().min(0).optional(),
-    prepend_frames: z.number().int().min(0).optional(),
-    color_correction: VideoUpscalingColorCorrectionEnum.optional(),
-    input_noise_scale: z.number().min(0).max(1).optional(),
-    latent_noise_scale: z.number().min(0).max(1).optional(),
-  })
-  .strict()
-  .superRefine((payload, ctx) => {
-    if (payload.batch_size !== undefined && (payload.batch_size - 1) % 4 !== 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'video_upscaling.batch_size must satisfy 4n+1',
-        path: ['batch_size'],
-      })
-    }
-  })
-
 const WanHighStageSchema = z
   .object({
     model_sha: Sha256Schema,
@@ -188,7 +152,6 @@ const CommonWanVideoPayloadSchema = z
     video_loop_count: z.number().int().min(0).optional(),
     video_pingpong: z.boolean(),
     video_interpolation: VideoInterpolationSchema.optional(),
-    video_upscaling: VideoUpscalingSchema.optional(),
 
     wan_high: WanHighStageSchema.optional(),
     wan_low: WanStageSchema.optional(),
@@ -379,20 +342,6 @@ export interface WanInterpolationInput {
   targetFps: number
 }
 
-export interface WanVideoUpscalingInput {
-  enabled: boolean
-  model: string
-  resolution: number
-  maxResolution: number
-  batchSize: number
-  uniformBatchSize: boolean
-  temporalOverlap: number
-  prependFrames: number
-  colorCorrection: 'lab' | 'wavelet' | 'wavelet_adaptive' | 'hsv' | 'adain' | 'none'
-  inputNoiseScale: number
-  latentNoiseScale: number
-}
-
 export interface WanAssetsInput {
   metadataRepo: string
   textEncoderSha: string
@@ -420,7 +369,6 @@ export interface WanVideoCommonInput {
   assets: WanAssetsInput
   output: WanVideoOutputInput
   interpolation: WanInterpolationInput
-  upscaling: WanVideoUpscalingInput
 }
 
 export interface WanImg2VidInput extends WanVideoCommonInput {
@@ -677,56 +625,6 @@ function addWanInterpolation(
   }
 }
 
-function addWanUpscaling(
-  payload: Record<string, unknown>,
-  upscaling: WanVideoUpscalingInput,
-): void {
-  if (!upscaling.enabled) return
-  const normalizedModel = String(upscaling.model || '').trim()
-  const upscalingPayload: Record<string, unknown> = {
-    enabled: true,
-  }
-  if (normalizedModel) upscalingPayload.dit_model = normalizedModel
-  if (Number.isFinite(Number(upscaling.resolution))) {
-    upscalingPayload.resolution = Math.max(16, Math.trunc(Number(upscaling.resolution)))
-  }
-  if (Number.isFinite(Number(upscaling.maxResolution))) {
-    upscalingPayload.max_resolution = Math.max(0, Math.trunc(Number(upscaling.maxResolution)))
-  }
-  if (Number.isFinite(Number(upscaling.batchSize))) {
-    const batch = Math.max(1, Math.trunc(Number(upscaling.batchSize)))
-    const remainder = (batch - 1) % 4
-    upscalingPayload.batch_size = remainder === 0 ? batch : batch + (4 - remainder)
-  }
-  upscalingPayload.uniform_batch_size = Boolean(upscaling.uniformBatchSize)
-  if (Number.isFinite(Number(upscaling.temporalOverlap))) {
-    upscalingPayload.temporal_overlap = Math.max(0, Math.trunc(Number(upscaling.temporalOverlap)))
-  }
-  if (Number.isFinite(Number(upscaling.prependFrames))) {
-    upscalingPayload.prepend_frames = Math.max(0, Math.trunc(Number(upscaling.prependFrames)))
-  }
-  const colorCorrection = String(upscaling.colorCorrection || '').trim().toLowerCase()
-  if (
-    colorCorrection === 'lab'
-    || colorCorrection === 'wavelet'
-    || colorCorrection === 'wavelet_adaptive'
-    || colorCorrection === 'hsv'
-    || colorCorrection === 'adain'
-    || colorCorrection === 'none'
-  ) {
-    upscalingPayload.color_correction = colorCorrection
-  }
-  if (Number.isFinite(Number(upscaling.inputNoiseScale))) {
-    const value = Number(upscaling.inputNoiseScale)
-    upscalingPayload.input_noise_scale = Math.min(1, Math.max(0, value))
-  }
-  if (Number.isFinite(Number(upscaling.latentNoiseScale))) {
-    const value = Number(upscaling.latentNoiseScale)
-    upscalingPayload.latent_noise_scale = Math.min(1, Math.max(0, value))
-  }
-  payload.video_upscaling = upscalingPayload
-}
-
 export function buildWanTxt2VidPayload(input: WanVideoCommonInput): WanTxt2VidPayload {
   const totalSteps = input.steps + input.low.steps
   const width = snapWanDim(input.width)
@@ -754,7 +652,6 @@ export function buildWanTxt2VidPayload(input: WanVideoCommonInput): WanTxt2VidPa
   payload.txt2vid_scheduler = requireCanonicalWanScheduler(input.scheduler, 'WAN txt2vid scheduler')
   addWanOutput(payload, input.output)
   addWanInterpolation(payload, input.interpolation, input.fps)
-  addWanUpscaling(payload, input.upscaling)
 
   payload.wan_high = stageToPayload(input.high, { includeCoreFields: false })
   payload.wan_low = stageToPayload(input.low)
@@ -845,7 +742,6 @@ export function buildWanImg2VidPayload(input: WanImg2VidInput): WanImg2VidPayloa
   }
   addWanOutput(payload, input.output)
   addWanInterpolation(payload, input.interpolation, input.fps)
-  addWanUpscaling(payload, input.upscaling)
 
   payload.wan_high = stageToPayload(input.high, { includeCoreFields: false })
   payload.wan_low = stageToPayload(input.low)

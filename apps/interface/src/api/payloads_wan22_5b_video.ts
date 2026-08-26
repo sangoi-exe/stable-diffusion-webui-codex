@@ -67,20 +67,6 @@ const VideoInterpolationSchema = z.object({
   times: z.number().int().min(2),
   model: z.literal(WAN_INTERPOLATION_MODEL),
 })
-const VideoUpscalingSchema = z.object({
-  enabled: z.boolean(),
-  model: z.string().trim().min(1),
-  resolution: z.number().int().min(16),
-  max_resolution: z.number().int().min(0),
-  batch_size: z.number().int().min(1),
-  uniform_batch_size: z.boolean(),
-  temporal_overlap: z.number().int().min(0),
-  prepend_frames: z.number().int().min(0),
-  color_correction: z.enum(['lab', 'wavelet', 'wavelet_adaptive', 'hsv', 'adain', 'none']),
-  input_noise_scale: z.number().min(0).max(1),
-  latent_noise_scale: z.number().min(0).max(1),
-})
-
 const CommonVideoExportShape = {
   video_format: z.string().trim().min(1).optional(),
   video_pix_fmt: z.string().trim().min(1).optional(),
@@ -89,7 +75,6 @@ const CommonVideoExportShape = {
   video_pingpong: z.boolean().optional(),
   video_return_frames: z.boolean().optional(),
   video_interpolation: VideoInterpolationSchema.optional(),
-  video_upscaling: VideoUpscalingSchema.optional(),
 }
 
 export const Wan22_5bTxt2VidPayloadSchema = z.object({
@@ -170,20 +155,6 @@ export interface Wan22_5bInterpolationInput {
   targetFps: number
 }
 
-export interface Wan22_5bVideoUpscalingInput {
-  enabled: boolean
-  model: string
-  resolution: number
-  maxResolution: number
-  batchSize: number
-  uniformBatchSize: boolean
-  temporalOverlap: number
-  prependFrames: number
-  colorCorrection: 'lab' | 'wavelet' | 'wavelet_adaptive' | 'hsv' | 'adain' | 'none'
-  inputNoiseScale: number
-  latentNoiseScale: number
-}
-
 export interface Wan22_5bAssetsInput {
   metadataRepo: string
   textEncoderSha: string
@@ -210,7 +181,6 @@ export interface Wan22_5bVideoCommonInput {
   assets: Wan22_5bAssetsInput
   output: Wan22_5bVideoOutputInput
   interpolation: Wan22_5bInterpolationInput
-  upscaling: Wan22_5bVideoUpscalingInput
 }
 
 export interface Wan22_5bImg2VidInput extends Wan22_5bVideoCommonInput {
@@ -347,23 +317,6 @@ function addWanInterpolation(payload: Record<string, unknown>, interpolation: Wa
   }
 }
 
-function addWanUpscaling(payload: Record<string, unknown>, upscaling: Wan22_5bVideoUpscalingInput): void {
-  if (!upscaling.enabled) return
-  payload.video_upscaling = {
-    enabled: true,
-    model: String(upscaling.model || '').trim(),
-    resolution: Math.max(16, Math.trunc(Number(upscaling.resolution) || 0)),
-    max_resolution: Math.max(0, Math.trunc(Number(upscaling.maxResolution) || 0)),
-    batch_size: Math.max(1, Math.trunc(Number(upscaling.batchSize) || 1)),
-    uniform_batch_size: Boolean(upscaling.uniformBatchSize),
-    temporal_overlap: Math.max(0, Math.trunc(Number(upscaling.temporalOverlap) || 0)),
-    prepend_frames: Math.max(0, Math.trunc(Number(upscaling.prependFrames) || 0)),
-    color_correction: upscaling.colorCorrection,
-    input_noise_scale: Math.min(1, Math.max(0, Number(upscaling.inputNoiseScale) || 0)),
-    latent_noise_scale: Math.min(1, Math.max(0, Number(upscaling.latentNoiseScale) || 0)),
-  }
-}
-
 function normalizeGuideOffset(rawValue: unknown, fieldName: string, fallback: number): number {
   if (rawValue === undefined || rawValue === null || rawValue === '') return fallback
   const numeric = Number(rawValue)
@@ -400,7 +353,6 @@ export function buildWan22_5bTxt2VidPayload(input: Wan22_5bVideoCommonInput): Wa
   addWanAssets(payload, input.assets)
   addWanOutput(payload, input.output)
   addWanInterpolation(payload, input.interpolation, input.fps)
-  addWanUpscaling(payload, input.upscaling)
   return Wan22_5bTxt2VidPayloadSchema.parse(payload)
 }
 
@@ -438,6 +390,5 @@ export function buildWan22_5bImg2VidPayload(input: Wan22_5bImg2VidInput): Wan22_
   addWanAssets(payload, input.assets)
   addWanOutput(payload, input.output)
   addWanInterpolation(payload, input.interpolation, input.fps)
-  addWanUpscaling(payload, input.upscaling)
   return Wan22_5bImg2VidPayloadSchema.parse(payload)
 }

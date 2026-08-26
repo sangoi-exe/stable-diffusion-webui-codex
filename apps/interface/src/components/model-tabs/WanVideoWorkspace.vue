@@ -16,7 +16,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `GuidedStep` (type): Guided-generation step definition (message + CSS selector to highlight/focus).
 - `AspectMode` (type): Aspect ratio mode presets for width/height controls.
 - `defaultStage` (function): Returns default WAN stage params (high/low) for new tabs/resets.
-- `defaultVideo` (function): Returns default video params (dims/init-image/output/interpolation/upscaling fields) for new tabs/resets.
+- `defaultVideo` (function): Returns default video params (dims/init-image/output/interpolation fields) for new tabs/resets.
 - `defaultAssets` (function): Returns default (empty) assets selection.
 - `normalizeFrameCount` (function): Clamps/snap-normalizes WAN frame counts to the `4n+1` domain.
 - `normalizeAttentionMode` (function): Normalizes UI attention mode values (`global|sliding`).
@@ -820,17 +820,6 @@ function defaultVideo(): WanVideoParams {
     pingpong: false,
     returnFrames: false,
     interpolationFps: 0,
-    upscalingEnabled: false,
-    upscalingModel: 'seedvr2_ema_3b_fp16.safetensors',
-    upscalingResolution: 1080,
-    upscalingMaxResolution: 0,
-    upscalingBatchSize: 5,
-    upscalingUniformBatchSize: false,
-    upscalingTemporalOverlap: 0,
-    upscalingPrependFrames: 0,
-    upscalingColorCorrection: 'lab',
-    upscalingInputNoiseScale: 0,
-    upscalingLatentNoiseScale: 0,
   }
 }
 
@@ -921,21 +910,6 @@ function normalizeInterpolationTargetFps(rawValue: unknown, fallback: number): n
   const numeric = Number(rawValue)
   if (!Number.isFinite(numeric)) return fallbackNormalized
   return Math.max(0, Math.min(maxFps, Math.trunc(numeric)))
-}
-
-function normalizeUpscalingColorCorrection(rawValue: unknown, fallback: WanVideoParams['upscalingColorCorrection']): WanVideoParams['upscalingColorCorrection'] {
-  const value = String(rawValue || '').trim().toLowerCase()
-  if (
-    value === 'lab'
-    || value === 'wavelet'
-    || value === 'wavelet_adaptive'
-    || value === 'hsv'
-    || value === 'adain'
-    || value === 'none'
-  ) {
-    return value
-  }
-  return fallback
 }
 
 function normalizeGuideOffset(rawValue: unknown, fallback: number): number {
@@ -2001,19 +1975,6 @@ function buildCurrentSnapshot(): Record<string, unknown> {
     interpolation: {
       targetFps: video.value.interpolationFps,
     },
-    upscaling: {
-      enabled: video.value.upscalingEnabled,
-      model: video.value.upscalingModel,
-      resolution: video.value.upscalingResolution,
-      maxResolution: video.value.upscalingMaxResolution,
-      batchSize: video.value.upscalingBatchSize,
-      uniformBatchSize: video.value.upscalingUniformBatchSize,
-      temporalOverlap: video.value.upscalingTemporalOverlap,
-      prependFrames: video.value.upscalingPrependFrames,
-      colorCorrection: video.value.upscalingColorCorrection,
-      inputNoiseScale: video.value.upscalingInputNoiseScale,
-      latentNoiseScale: video.value.upscalingLatentNoiseScale,
-    },
   }
 }
 
@@ -2065,7 +2026,6 @@ function applyHistory(item: VideoRunHistoryItem): void {
 
   const output = isRecord(snap.output) ? snap.output : {}
   const interpolation = isRecord(snap.interpolation) ? snap.interpolation : {}
-  const upscaling = isRecord(snap.upscaling) ? snap.upscaling : {}
   const i2v = isRecord(snap.img2vid) ? snap.img2vid : {}
   const i2vModeRaw = typeof i2v.mode === 'string' ? i2v.mode : ''
   const hasSnapshotWindowFrames = typeof i2v.windowFrames === 'number' && Number.isFinite(i2v.windowFrames) && Number(i2v.windowFrames) > 0
@@ -2116,33 +2076,6 @@ function applyHistory(item: VideoRunHistoryItem): void {
     pingpong: Boolean(output.pingpong),
     returnFrames: typeof output.returnFrames === 'boolean' ? output.returnFrames : video.value.returnFrames,
     interpolationFps: historyInterpolationFps,
-    upscalingEnabled: typeof upscaling.enabled === 'boolean' ? upscaling.enabled : video.value.upscalingEnabled,
-    upscalingModel: String(upscaling.model || video.value.upscalingModel),
-    upscalingResolution: typeof upscaling.resolution === 'number' && Number.isFinite(upscaling.resolution)
-      ? Number(upscaling.resolution)
-      : video.value.upscalingResolution,
-    upscalingMaxResolution: typeof upscaling.maxResolution === 'number' && Number.isFinite(upscaling.maxResolution)
-      ? Number(upscaling.maxResolution)
-      : video.value.upscalingMaxResolution,
-    upscalingBatchSize: typeof upscaling.batchSize === 'number' && Number.isFinite(upscaling.batchSize)
-      ? Number(upscaling.batchSize)
-      : video.value.upscalingBatchSize,
-    upscalingUniformBatchSize: typeof upscaling.uniformBatchSize === 'boolean'
-      ? upscaling.uniformBatchSize
-      : video.value.upscalingUniformBatchSize,
-    upscalingTemporalOverlap: typeof upscaling.temporalOverlap === 'number' && Number.isFinite(upscaling.temporalOverlap)
-      ? Number(upscaling.temporalOverlap)
-      : video.value.upscalingTemporalOverlap,
-    upscalingPrependFrames: typeof upscaling.prependFrames === 'number' && Number.isFinite(upscaling.prependFrames)
-      ? Number(upscaling.prependFrames)
-      : video.value.upscalingPrependFrames,
-    upscalingColorCorrection: normalizeUpscalingColorCorrection(upscaling.colorCorrection, video.value.upscalingColorCorrection),
-    upscalingInputNoiseScale: typeof upscaling.inputNoiseScale === 'number' && Number.isFinite(upscaling.inputNoiseScale)
-      ? Number(upscaling.inputNoiseScale)
-      : video.value.upscalingInputNoiseScale,
-    upscalingLatentNoiseScale: typeof upscaling.latentNoiseScale === 'number' && Number.isFinite(upscaling.latentNoiseScale)
-      ? Number(upscaling.latentNoiseScale)
-      : video.value.upscalingLatentNoiseScale,
   })
 
   const hi = isRecord(snap.high) ? snap.high : {}
