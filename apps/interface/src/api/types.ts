@@ -213,6 +213,8 @@ export interface VideoUpscaleRequest {
   color_correction: SeedVR2ColorCorrection
   input_noise_scale: number
   latent_noise_scale: number
+  streaming: boolean
+  smart_fallback: boolean
 }
 
 export interface ImageAutomationLoopRequest {

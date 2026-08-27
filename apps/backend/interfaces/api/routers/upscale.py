@@ -12,10 +12,12 @@ Exposes:
 - remote HF upscaler listing + downloads (`GET/POST /api/upscalers/*`), with optional manifest-based metadata enrichment
   (`upscalers/manifest.json`, schema v1) and explicit `manifest_error`/`manifest_errors` surfacing
 - standalone upscaling tasks (`POST /api/upscale`)
-- dedicated SeedVR2 video-upscale tasks (`POST /api/video-upscale`)
+- dedicated SeedVR2 video-upscale tasks (`POST /api/video-upscale`, source preflight, and explicit execution policy)
 Remote listing/download respects the upscaler safeweights policy (`CODEX_SAFE_WEIGHTS=1` blocks non-`.safetensors` weights).
 
 Symbols (top-level; keep in sync; no ghosts):
+- `_parse_video_upscale_request` (function): Validates the strict dedicated SeedVR2 request payload.
+- `_preflight_video_upscale_source` (function): Verifies a backend-visible source video before task registration.
 - `build_router` (function): Build the APIRouter for upscaler endpoints.
 """
 
@@ -26,6 +28,7 @@ import asyncio
 import json
 import logging
 import math
+from dataclasses import replace
 from uuid import uuid4
 from pathlib import Path
 from typing import Any, Dict, List
@@ -103,6 +106,8 @@ def _parse_video_upscale_request(payload: Dict[str, Any]):
         "color_correction",
         "input_noise_scale",
         "latent_noise_scale",
+        "streaming",
+        "smart_fallback",
     }
     unknown_fields = sorted(str(key) for key in payload if key not in allowed_fields)
     if unknown_fields:
@@ -148,11 +153,26 @@ def _parse_video_upscale_request(payload: Dict[str, Any]):
     if (batch_size - 1) % 4 != 0:
         raise HTTPException(status_code=400, detail="'batch_size' must satisfy 4n+1")
     temporal_overlap = optional_int("temporal_overlap", default=0, minimum=0)
+    if temporal_overlap >= batch_size:
+        raise HTTPException(status_code=400, detail="'temporal_overlap' must be lower than 'batch_size'")
     prepend_frames = optional_int("prepend_frames", default=0, minimum=0)
 
     uniform_batch_size = payload.get("uniform_batch_size", False)
     if not isinstance(uniform_batch_size, bool):
         raise HTTPException(status_code=400, detail="'uniform_batch_size' must be a boolean")
+
+    streaming = payload.get("streaming", False)
+    if not isinstance(streaming, bool):
+        raise HTTPException(status_code=400, detail="'streaming' must be a boolean")
+
+    smart_fallback = payload.get("smart_fallback", False)
+    if not isinstance(smart_fallback, bool):
+        raise HTTPException(status_code=400, detail="'smart_fallback' must be a boolean")
+    if streaming and smart_fallback:
+        raise HTTPException(
+            status_code=400,
+            detail="'streaming' and 'smart_fallback' cannot both be enabled.",
+        )
 
     color_correction_raw = payload.get("color_correction", "lab")
     if not isinstance(color_correction_raw, str):
@@ -185,8 +205,25 @@ def _parse_video_upscale_request(payload: Dict[str, Any]):
             color_correction=color_correction,
             input_noise_scale=optional_float("input_noise_scale", default=0.0),
             latent_noise_scale=optional_float("latent_noise_scale", default=0.0),
+            streaming=streaming,
+            smart_fallback=smart_fallback,
         ),
     )
+
+
+def _preflight_video_upscale_source(video_path: str) -> str:
+    source_path = Path(video_path).expanduser()
+    if not source_path.is_file():
+        raise HTTPException(status_code=400, detail="'video_path' must identify a readable file")
+
+    from apps.backend.video.io.ffmpeg import probe_video
+
+    try:
+        probe_video(str(source_path))
+    except Exception as exc:
+        _router_log.warning("video-upscale source probe failed for %s: %s", source_path, exc, exc_info=False)
+        raise HTTPException(status_code=400, detail="'video_path' must identify a readable video file") from None
+    return str(source_path.resolve())
 
 
 def build_router(
@@ -428,6 +465,10 @@ def build_router(
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Payload must be JSON object")
         request = _parse_video_upscale_request(payload)
+        request = replace(
+            request,
+            video_path=await asyncio.to_thread(_preflight_video_upscale_source, request.video_path),
+        )
 
         loop = asyncio.get_running_loop()
         entry = TaskEntry(loop)

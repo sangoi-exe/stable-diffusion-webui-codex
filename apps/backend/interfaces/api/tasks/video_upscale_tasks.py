@@ -74,10 +74,10 @@ def run_video_upscale_task(
                     entry.cancel_requested and entry.cancel_mode is TaskCancelMode.IMMEDIATE
                 ),
             ):
-                if entry.cancel_requested and entry.cancel_mode is TaskCancelMode.IMMEDIATE:
-                    entry.error = build_cancelled_task_error()
-                    return
                 if isinstance(event, ProgressEvent):
+                    if entry.cancel_requested and entry.cancel_mode is TaskCancelMode.IMMEDIATE:
+                        entry.error = build_cancelled_task_error()
+                        return
                     progress_payload: dict[str, object] = {
                         "type": "progress",
                         "stage": event.stage,

@@ -7,12 +7,12 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Canonical SeedVR2 video-upscale use case.
-Probes a backend-visible source video, extracts its frames, runs the dedicated SeedVR2 runtime, exports an H.264 MP4 artifact,
-and verifies source-audio preservation before returning a task result.
+Probes a backend-visible source video and its decoded-frame timing, runs the dedicated cancellable SeedVR2 child runner, then delegates
+timestamp-aware staged MP4 assembly, source-audio verification, and publication to the canonical video-export owner.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `VideoUpscaleRequest` (dataclass): Typed dedicated video-upscale request accepted after router validation.
-- `run_video_upscale` (function): Runs the SeedVR2 source-video to exported-video pipeline and yields task events.
+- `run_video_upscale` (function): Runs the SeedVR2 source-video to verified exported-video pipeline and yields task events.
 """
 
 from __future__ import annotations
@@ -20,15 +20,14 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Callable, Iterator
 from uuid import uuid4
 
 from apps.backend.core.params.video import SeedVR2UpscaleOptions
 from apps.backend.core.requests import InferenceEvent, ProgressEvent, ResultEvent
-from apps.backend.infra.config.repo_root import repo_scratch_path
 from apps.backend.runtime.logging import get_backend_logger
-from apps.backend.video.export.ffmpeg_exporter import VideoExportResult, export_video
-from apps.backend.video.io.ffmpeg import VideoProbe, extract_frames, probe_video
+from apps.backend.video.export.ffmpeg_exporter import VideoExportResult, export_timestamped_video
+from apps.backend.video.io.ffmpeg import VideoProbe, VideoTiming, probe_video, probe_video_timing
 from apps.backend.video.upscaling.seedvr2 import run_seedvr2_upscaling
 
 
@@ -49,43 +48,58 @@ def _raise_if_cancelled(should_cancel: Callable[[], bool] | None) -> None:
         raise RuntimeError("cancelled")
 
 
-def _load_source_frames(frame_paths: list[str]) -> list[Any]:
-    try:
-        from PIL import Image  # type: ignore
-    except Exception as exc:
-        raise RuntimeError(f"Pillow is required for SeedVR2 video upscaling: {exc}") from exc
-
-    frames: list[Any] = []
-    for frame_path in frame_paths:
-        with Image.open(frame_path) as image:
-            frames.append(image.convert("RGB"))
-    if not frames:
-        raise RuntimeError("SeedVR2 video upscaling extracted no source frames.")
-    return frames
+def _new_task_work_dir() -> Path:
+    root = Path.home() / ".cache" / "codex" / "seedvr2-dedicated-video-upscale"
+    root.mkdir(parents=True, exist_ok=True)
+    work_dir = root / f"run-{uuid4().hex}"
+    work_dir.mkdir(parents=False, exist_ok=False)
+    return work_dir
 
 
-def _require_saved_export(export_result: VideoExportResult | None) -> VideoExportResult:
-    if export_result is None:
-        raise RuntimeError("SeedVR2 video export returned no result while output saving is required.")
-    if not export_result.saved or not export_result.path or not export_result.rel_path or not export_result.mime:
+def _remove_published_export(export_result: VideoExportResult) -> None:
+    for raw_path in (export_result.metadata_path, export_result.path):
+        if not raw_path:
+            continue
+        artifact_path = Path(raw_path)
+        try:
+            if artifact_path.is_file():
+                artifact_path.unlink()
+        except Exception as exc:
+            logger.warning("failed to remove incomplete SeedVR2 published artifact %s: %s", artifact_path, exc, exc_info=False)
+
+
+def _require_saved_export(export_result: VideoExportResult) -> VideoExportResult:
+    if (
+        not export_result.saved
+        or not export_result.path
+        or not export_result.metadata_path
+        or not export_result.rel_path
+        or not export_result.mime
+        or export_result.width is None
+        or export_result.height is None
+        or export_result.frame_count is None
+        or not export_result.timing_verified
+    ):
         reason = str(export_result.reason or "").strip()
         raise RuntimeError(
-            "SeedVR2 video export failed while output saving is required"
+            "SeedVR2 timestamp-aware video export failed while output saving is required"
             + (f": {reason}" if reason else ".")
         )
     return export_result
 
 
-def _source_metadata(source: Path, probe: VideoProbe) -> dict[str, object]:
+def _source_metadata(source: Path, probe: VideoProbe, timing: VideoTiming) -> dict[str, object]:
     return {
         "name": source.name,
         "width": int(probe.width),
         "height": int(probe.height),
         "fps": float(probe.fps),
         "frames": int(probe.frame_count) if probe.frame_count is not None else None,
+        "decoded_timing_frames": int(timing.frame_count),
         "duration_seconds": float(probe.duration_seconds) if probe.duration_seconds is not None else None,
         "video_codec": probe.video_codec,
         "audio_codec": probe.audio_codec,
+        "audio_duration_seconds": float(probe.audio_duration_seconds) if probe.audio_duration_seconds is not None else None,
         "has_audio": bool(probe.has_audio),
     }
 
@@ -95,87 +109,87 @@ def run_video_upscale(
     *,
     should_cancel: Callable[[], bool] | None = None,
 ) -> Iterator[InferenceEvent]:
-    """Upscale a backend-visible source video with SeedVR2 and return one saved MP4 artifact."""
+    """Upscale a backend-visible source video with SeedVR2 and return one verified saved MP4 artifact."""
 
-    source_path = Path(request.video_path).expanduser()
+    source_path = Path(request.video_path).expanduser().resolve()
     if not source_path.is_file():
         raise RuntimeError("SeedVR2 source video path does not point to a readable file.")
 
-    _raise_if_cancelled(should_cancel)
-    yield ProgressEvent(stage="probe", percent=5.0, message="Probing source video")
-    source_probe = probe_video(str(source_path))
-
-    work_dir = repo_scratch_path("video_upscale", f"seedvr2_{uuid4().hex}")
-    frames_dir = work_dir / "source_frames"
+    work_dir: Path | None = None
+    export_result: VideoExportResult | None = None
+    result_emitted = False
     try:
         _raise_if_cancelled(should_cancel)
-        yield ProgressEvent(stage="decode", percent=15.0, message="Decoding source video frames")
-        frame_paths = extract_frames(str(source_path), out_dir=str(frames_dir))
-        source_frames = _load_source_frames(frame_paths)
+        yield ProgressEvent(stage="probe", percent=5.0, message="Probing source video")
+        source_probe = probe_video(str(source_path))
 
         _raise_if_cancelled(should_cancel)
-        yield ProgressEvent(stage="upscale", percent=35.0, message="Upscaling frames with SeedVR2")
-        upscaled_frames, seedvr2_metadata = run_seedvr2_upscaling(
-            source_frames,
+        yield ProgressEvent(stage="timing", percent=12.0, message="Reading source frame timing")
+        source_timing = probe_video_timing(str(source_path))
+        source_metadata = _source_metadata(source_path, source_probe, source_timing)
+
+        work_dir = _new_task_work_dir()
+        _raise_if_cancelled(should_cancel)
+        yield ProgressEvent(stage="upscale", percent=35.0, message="Upscaling source frames with SeedVR2")
+        seedvr2_result = run_seedvr2_upscaling(
+            str(source_path),
+            source_probe=source_probe,
+            source_frame_count=source_timing.frame_count,
+            output_dir=work_dir / "seedvr2_frames",
             options=request.options,
             component_device=request.device,
+            should_cancel=should_cancel,
             logger_=logger,
         )
 
         _raise_if_cancelled(should_cancel)
-        yield ProgressEvent(stage="export", percent=85.0, message="Exporting upscaled video")
-        export_fps = float(source_probe.fps)
-        source_has_audio = bool(source_probe.has_audio)
+        yield ProgressEvent(
+            stage="export",
+            percent=85.0,
+            message="Encoding, preserving source timing, and verifying media",
+        )
         export_result = _require_saved_export(
-            export_video(
-                upscaled_frames,
-                fps=export_fps,
-                options={
-                    "filename_prefix": "seedvr2_upscale",
-                    "format": "video/h264-mp4",
-                    "pix_fmt": "yuv420p",
-                    "crf": 23,
-                    "save_metadata": True,
-                    "save_output": True,
-                },
+            export_timestamped_video(
+                seedvr2_result.frame_paths,
+                timing=source_timing,
                 task="video-upscale",
-                audio_source_path=str(source_path) if source_has_audio else None,
+                filename_prefix="seedvr2_upscale",
+                audio_source_path=str(source_path) if source_probe.has_audio else None,
                 extra_metadata={
-                    "seedvr2": request.options.as_dict(),
-                    "source": _source_metadata(source_path, source_probe),
-                    "source_audio_preservation_required": source_has_audio,
+                    "seedvr2": {
+                        "options": request.options.as_dict(),
+                        "runtime": seedvr2_result.metadata,
+                    },
+                    "source": source_metadata,
                 },
+                should_cancel=should_cancel,
             )
         )
 
-        output_probe: VideoProbe | None = None
-        if source_has_audio:
-            _raise_if_cancelled(should_cancel)
-            yield ProgressEvent(stage="verify_audio", percent=95.0, message="Verifying preserved source audio")
-            output_probe = probe_video(str(export_result.path))
-            if not output_probe.has_audio:
-                raise RuntimeError("SeedVR2 export completed without the required preserved source audio stream.")
-
-        output_width = int(upscaled_frames[0].size[0])
-        output_height = int(upscaled_frames[0].size[1])
+        _raise_if_cancelled(should_cancel)
+        output = {
+            "width": int(export_result.width),
+            "height": int(export_result.height),
+            "fps": float(export_result.fps) if export_result.fps is not None else None,
+            "frames": int(export_result.frame_count),
+            "rel_path": export_result.rel_path,
+            "mime": export_result.mime,
+            "timing_verified": bool(export_result.timing_verified),
+            "timing_contract": "source_decoded_pts_offsets",
+        }
         info = {
             "task": "video_upscale",
             "seedvr2": {
                 "options": request.options.as_dict(),
-                "runtime": seedvr2_metadata,
+                "runtime": seedvr2_result.metadata,
             },
-            "source": _source_metadata(source_path, source_probe),
-            "output": {
-                "width": output_width,
-                "height": output_height,
-                "fps": float(export_result.fps if export_result.fps is not None else export_fps),
-                "frames": len(upscaled_frames),
-                "rel_path": export_result.rel_path,
-                "mime": export_result.mime,
-            },
+            "source": source_metadata,
+            "output": output,
             "audio": {
-                "source_has_audio": source_has_audio,
-                "preserved": bool(output_probe.has_audio) if output_probe is not None else False,
+                "source_has_audio": bool(source_probe.has_audio),
+                "preserved": bool(export_result.audio_verified),
+                "codec": source_probe.audio_codec if source_probe.has_audio else None,
+                "duration_seconds": source_probe.audio_duration_seconds if source_probe.has_audio else None,
             },
         }
         yield ResultEvent(
@@ -188,5 +202,9 @@ def run_video_upscale(
                 },
             }
         )
+        result_emitted = True
     finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
+        if export_result is not None and not result_emitted:
+            _remove_published_export(export_result)
+        if work_dir is not None:
+            shutil.rmtree(work_dir, ignore_errors=True)

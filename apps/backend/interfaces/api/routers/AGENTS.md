@@ -1,7 +1,7 @@
 # apps/backend/interfaces/api/routers Overview
 <!-- tags: backend, api, fastapi, routers -->
 Date: 2026-01-08
-Last Review: 2026-08-26
+Last Review: 2026-08-27
 Status: Active
 
 ## Purpose
@@ -147,7 +147,7 @@ Status: Active
 - 2026-02-22: `generation.py` now validates `gguf_cache_policy`/`gguf_cache_limit_mb` fail-loud in video prepare paths (`txt2vid` + `img2vid`): invalid policy, non-integer/negative limits, missing-policy limit, and incompatible policy-limit combinations now return HTTP 400 synchronously.
 - 2026-02-22: `generation.py` now validates `gguf_te_device` fail-loud in WAN video prepare paths (`txt2vid` + `img2vid`), accepting only `auto|cpu|cuda|cuda:<index>` (with `gpu` normalized to `cuda`).
 - 2026-02-22: `generation.py` gate-release failure handling now logs warning-level diagnostics instead of swallowing exceptions silently in video worker teardown.
-- 2026-08-26: `upscale.py` owns `POST /api/video-upscale`. It validates a backend-visible source path, curated SeedVR2 options, and the configured CUDA or MPS device before task dispatch. Generation routes reject the removed `video_upscaling` field.
+- 2026-08-27: `upscale.py` owns `POST /api/video-upscale`. It probes the backend-visible source video before task registration, validates curated SeedVR2 options and the configured CUDA or MPS device, and rejects the stale mutually enabled `streaming` plus `smart_fallback` payload before task dispatch. Generation routes reject the removed `video_upscaling` field.
 - 2026-03-01: `generation.py` now validates/forwards WAN img2vid guide fields (`img2vid_image_scale`, `img2vid_crop_offset_x`, `img2vid_crop_offset_y`) into request extras with strict scale/range checks so runtime init-image preprocessing matches the UI framing guide.
 - 2026-03-02: `generation.py` keeps `img2vid_image_scale` optional at API boundary (field omitted when not provided); runtime receives no forced `1.0` fallback and applies its own auto-fit minimum scale policy.
 - 2026-03-03: `models.py` inventory refresh logs now emit an explicit warning when `wan22.gguf=0`, including resolved `wan22_ckpt` roots and actionable guidance (WAN22 GGUF discovery under those roots is recursive; refresh after copying files).

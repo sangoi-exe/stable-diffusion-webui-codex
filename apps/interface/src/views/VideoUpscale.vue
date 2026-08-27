@@ -7,8 +7,9 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Dedicated SeedVR2 video-upscale utility route.
-Lets users select a backend-visible source-video path without uploading video bytes through the browser, configure curated SeedVR2 options,
-run the task through the shared task/SSE contract, and play, open, zoom, or download the exported MP4 result with truthful audio status.
+Lets users select a backend-visible source-video path without uploading video bytes through the browser, configure curated SeedVR2 options and
+the explicit streaming/smart-fallback policy, run the task through the shared task/SSE contract, and play, open, zoom, or download the
+exported MP4 result with truthful media status.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `VideoUpscale` (component): Dedicated SeedVR2 source-video upscale workspace.
@@ -92,7 +93,7 @@ Symbols (top-level; keep in sync; no ghosts):
                 :inputStep="16"
                 :disabled="isRunning"
                 inputClass="cdx-input-w-md"
-                tooltip="Target long edge in pixels. SeedVR2 keeps the source aspect ratio."
+                tooltip="Target shortest edge in pixels. SeedVR2 keeps the source aspect ratio."
                 @update:modelValue="resolution = $event"
               />
 
@@ -132,11 +133,27 @@ Symbols (top-level; keep in sync; no ghosts):
                 </span>
               </label>
 
+              <label class="cdx-video-upscale__toggle-field">
+                <input v-model="streaming" type="checkbox" :disabled="isRunning" />
+                <span>
+                  <strong>Streaming</strong>
+                  <small>Process the source in bounded GPU chunks without a whole-video GPU attempt.</small>
+                </span>
+              </label>
+
+              <label class="cdx-video-upscale__toggle-field">
+                <input v-model="smartFallback" type="checkbox" :disabled="isRunning || streaming" />
+                <span>
+                  <strong>Smart fallback</strong>
+                  <small>Try direct GPU execution first, then use streaming once only after a capacity failure or GPU OOM.</small>
+                </span>
+              </label>
+
               <SliderField
                 label="Temporal overlap"
                 :modelValue="temporalOverlap"
                 :min="0"
-                :max="128"
+                :max="Math.max(0, batchSize - 1)"
                 :step="1"
                 :disabled="isRunning"
                 inputClass="cdx-input-w-md"
@@ -352,6 +369,8 @@ const prependFrames = ref(0)
 const colorCorrection = ref<SeedVR2ColorCorrection>('lab')
 const inputNoiseScale = ref(0)
 const latentNoiseScale = ref(0)
+const streaming = ref(false)
+const smartFallback = ref(false)
 
 const taskId = ref('')
 const isRunning = ref(false)
@@ -443,6 +462,14 @@ watch(outputUrl, (currentOutputUrl) => {
   if (!currentOutputUrl) videoZoomOpen.value = false
 })
 
+watch(streaming, (enabled) => {
+  if (enabled) smartFallback.value = false
+})
+
+watch(batchSize, (value) => {
+  if (temporalOverlap.value >= value) temporalOverlap.value = Math.max(0, value - 1)
+})
+
 function handleTaskEvent(event: TaskEvent): void {
   switch (event.type) {
     case 'status':
@@ -524,6 +551,8 @@ async function start(): Promise<void> {
     color_correction: colorCorrection.value,
     input_noise_scale: inputNoiseScale.value,
     latent_noise_scale: latentNoiseScale.value,
+    streaming: streaming.value,
+    smart_fallback: smartFallback.value,
   }
 
   isRunning.value = true

@@ -1,7 +1,7 @@
 # apps/interface/src/api Overview
 <!-- tags: frontend, api, payloads -->
 Date: 2025-10-28
-Last Review: 2026-08-26
+Last Review: 2026-08-27
 Status: Active
 
 ## Purpose
@@ -53,7 +53,7 @@ Status: Active
 - 2026-03-02: `payloads_video.ts` now keeps `img2vid_image_scale` optional in WAN img2vid payloads (omits the field when unset), so backend runtime auto-fit minimum scale can resolve guide geometry without a forced frontend `1.0` default.
 - 2026-03-06: `payloads_video.ts` WAN video requests now emit the current canonical router-accepted sha-first common fields: top-level `device` plus WAN asset selectors `wan_metadata_repo`, `wan_vae_sha`, and `wan_tenc_sha` only.
 - 2026-02-27: `payloads_video.ts` WAN output contract now hard-sets `video_save_output=true` and `video_save_metadata=true`, removed obsolete output fields (`video_filename_prefix`, `video_trim_to_audio`), and maps interpolation through one `targetFps` input (`0` disables; values above base FPS emit `video_interpolation.times >= 2` via `ceil(targetFps/baseFps)` with fixed model `rife47.pth`).
-- 2026-08-26: `types.ts` and `client.ts` own the dedicated `POST /api/video-upscale` JSON DTO/client seam. It sends a backend-visible source path and curated SeedVR2 options. WAN video payload builders no longer emit SeedVR2 fields.
+- 2026-08-27: `types.ts` and `client.ts` own the dedicated `POST /api/video-upscale` JSON DTO/client seam. It sends a backend-visible source path, curated SeedVR2 options, and mutually exclusive `streaming` / `smart_fallback` execution-policy flags. WAN video payload builders no longer emit SeedVR2 fields.
 - 2026-02-22: `client.ts` adds `fetchObliterateVram(payload?)` for `POST /api/obliterate-vram` with default `external_kill_mode='disabled'`; `types.ts` defines request/response DTOs (including external kill mode + skip/failure rows) so quick settings can report safe-default cleanup status fail-loud.
 - Inventory helpers (`InventoryResponse`) are served by `/api/models/inventory`; the client exposes cached fetch (`fetchModelInventory`), synchronous rescan (`refreshModelInventory` -> `POST /api/models/inventory/refresh`), and async rescan task start (`startModelInventoryRefreshTask` -> `POST /api/models/inventory/refresh/async`) for SSE-driven completion updates.
 - 2026-03-13: `client.ts::refreshModelInventoryAsync()` now recovers from SSE replay gaps by polling `GET /api/tasks/{id}` for the normalized `result.inventory` snapshot before failing; truncated live `result` streams are no longer treated as terminal false failures.

@@ -6,33 +6,40 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Fail-loud SeedVR2 in-process runner for dedicated video upscaling.
-Validates frame inputs, provisions deterministic repo-local SeedVR2 runtime assets (repo checkout),
-loads SeedVR2 Python modules directly from the checkout, runs upscaling in-process on tensors, and
-returns validated PIL output frames.
+Purpose: Fail-loud SeedVR2 child-process runner for dedicated video upscaling.
+Prepares the deterministic SeedVR2 checkout and model directory, measures available accelerator memory, selects the approved direct or bounded
+streaming CLI invocation, terminates the active child for task-scoped cancellation, and returns validated PNG paths without materializing source
+or output videos in the backend process.
 
 Symbols (top-level; keep in sync; no ghosts):
-- `run_seedvr2_upscaling` (function): Executes SeedVR2 upscaling from in-memory frames and returns `(frames_out, metadata)`.
+- `SeedVR2OutOfMemoryError` (class): Typed local execution failure that maps to the public out-of-memory task result.
+- `SeedVR2UpscaleResult` (dataclass): Validated child-output frame paths, dimensions, and runtime evidence for one SeedVR2 run.
+- `run_seedvr2_upscaling` (function): Executes the selected direct or streaming SeedVR2 child route for one source video.
 - `__all__` (constant): Explicit export list for this module.
 """
 
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import logging
+import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
+import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
-from uuid import uuid4
+from typing import Any, Callable, Sequence
 
 from apps.backend.core.params.video import SeedVR2UpscaleOptions
-from apps.backend.infra.config.repo_root import get_repo_root, repo_scratch_path
+from apps.backend.infra.config.repo_root import get_repo_root
+from apps.backend.video.io.ffmpeg import VideoProbe
+
 
 _SEEDVR2_REPO_ENV = "CODEX_SEEDVR2_REPO_DIR"
 _SEEDVR2_REPO_URL_ENV = "CODEX_SEEDVR2_REPO_URL"
@@ -45,7 +52,31 @@ _DEFAULT_SEEDVR2_RUNTIME_ROOT_RELATIVE = Path(".uv/xdg-data/seedvr2")
 _DEFAULT_SEEDVR2_REPO_RELATIVE = _DEFAULT_SEEDVR2_RUNTIME_ROOT_RELATIVE / "repo"
 _DEFAULT_SEEDVR2_MODEL_DIR_RELATIVE = Path(".uv/xdg-data/seedvr2")
 _SEEDVR2_REPO_LOCK_FILE = ".seedvr2-repo.lock"
-_STDERR_PREVIEW_LIMIT = 4000
+_CHILD_OUTPUT_LIMIT = 4000
+_CHILD_OUTPUT_READ_SIZE = 1024
+_CHILD_POLL_SECONDS = 0.05
+_CHILD_TERMINATE_TIMEOUT_SECONDS = 5.0
+_MIB = 1024 * 1024
+_GIB = 1024 * _MIB
+_MINIMUM_OPERATIONAL_RESERVE_BYTES = _GIB
+_RUNTIME_RESERVATION_BYTES = 768 * _MIB
+_PER_PADDED_OUTPUT_PIXEL_BYTES = 72
+_MODEL_RESERVATION_BYTES = {
+    "seedvr2_ema_3b_fp16.safetensors": 8 * _GIB,
+    "seedvr2_ema_7b_fp16.safetensors": 16 * _GIB,
+    "seedvr2_ema_7b_sharp_fp16.safetensors": 16 * _GIB,
+}
+_OOM_MARKERS = (
+    "out of memory",
+    "cuda out of memory",
+    "cuda oom",
+    "not enough memory",
+    "alloc_failed",
+    "allocation failed",
+    "cublas_status_alloc_failed",
+    "cudnn_status_alloc_failed",
+)
+_OOM_MARKER_SUFFIX_SIZE = max(len(marker) for marker in _OOM_MARKERS) - 1
 
 try:
     import fcntl  # type: ignore
@@ -58,11 +89,56 @@ except Exception:  # pragma: no cover - non-windows fallback
     msvcrt = None
 
 
-@dataclass(frozen=True)
+class SeedVR2OutOfMemoryError(RuntimeError):
+    """Fail with a message that the public task error owner classifies as OOM."""
+
+
+@dataclass(frozen=True, slots=True)
+class SeedVR2UpscaleResult:
+    frame_paths: tuple[str, ...]
+    output_width: int
+    output_height: int
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class _SeedVR2RepoResolution:
     repo_dir: Path
     uses_default_repo_path: bool
     pinned_ref: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SeedVR2MemoryBudget:
+    device_label: str
+    metric: str
+    available_bytes: int
+    operational_reserve_bytes: int
+    model_reservation_bytes: int
+    runtime_reservation_bytes: int
+    per_frame_estimate_bytes: int
+    target_width: int
+    target_height: int
+    padded_width: int
+    padded_height: int
+
+    @property
+    def usable_frame_bytes(self) -> int:
+        return (
+            self.available_bytes
+            - self.operational_reserve_bytes
+            - self.model_reservation_bytes
+            - self.runtime_reservation_bytes
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _SeedVR2ExecutionPlan:
+    mode: str
+    chunk_size: int
+    selection_reason: str
+    direct_required_bytes: int
+    budget: _SeedVR2MemoryBudget
 
 
 def _truncate_text(text: str, *, max_chars: int) -> str:
@@ -98,7 +174,7 @@ def _run_checked_subprocess(
     if proc.returncode == 0:
         return proc
 
-    stderr_preview = _truncate_text(proc.stderr or proc.stdout or "", max_chars=_STDERR_PREVIEW_LIMIT)
+    stderr_preview = _truncate_text(proc.stderr or proc.stdout or "", max_chars=_CHILD_OUTPUT_LIMIT)
     raise RuntimeError(
         f"{purpose} failed (exit {proc.returncode}; command={list(cmd)!r}).\n"
         f"stderr:\n{stderr_preview}"
@@ -192,7 +268,6 @@ def _bootstrap_default_seedvr2_repo(*, repo_dir: Path, repo_url: str, repo_ref: 
         )
 
     _ensure_default_repo_is_git_checkout(git_bin=git_bin, repo_dir=repo_dir)
-
     try:
         _run_checked_subprocess(
             [git_bin, "-C", str(repo_dir), "checkout", "--detach", repo_ref],
@@ -234,7 +309,6 @@ def _resolve_seedvr2_repo_dir() -> _SeedVR2RepoResolution:
             "SeedVR2 repo directory is missing. "
             f"Expected '{resolved}'. Set {_SEEDVR2_REPO_ENV} to a valid checkout path."
         )
-
     entrypoint_path = resolved / "inference_cli.py"
     if not entrypoint_path.is_file():
         raise RuntimeError(
@@ -281,7 +355,7 @@ def _normalize_cuda_device_index(component_device: str | None) -> int | None:
         exact_match = re.fullmatch(r"cuda:(\d+)", raw_device)
         if exact_match:
             requested_component_cuda_index = int(exact_match.group(1))
-        elif raw_device not in {"cuda", "cpu"}:
+        elif raw_device not in {"cuda", "cpu", "mps"}:
             return None
 
     raw_visible = str(os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
@@ -329,389 +403,647 @@ def _sanitize_metadata_path(path: Path) -> str:
     return f"CODEX_ROOT/{relative.as_posix()}"
 
 
-def _validate_input_frames(frames: Sequence[Any]) -> tuple[list[Any], tuple[int, int]]:
-    from PIL import Image  # type: ignore
-
-    frames_list = frames if isinstance(frames, list) else list(frames)
-    if not frames_list:
-        raise RuntimeError("SeedVR2 upscaling requires a non-empty frame sequence.")
-
-    first = frames_list[0]
-    if not isinstance(first, Image.Image):
-        raise RuntimeError(
-            "SeedVR2 upscaling requires PIL image frames; "
-            f"frame[0] is {type(first).__name__}."
-        )
-    size = first.size
-    if size[0] <= 0 or size[1] <= 0:
-        raise RuntimeError(f"SeedVR2 upscaling received invalid frame size: {size!r}.")
-
-    for index, frame in enumerate(frames_list, start=1):
-        if not isinstance(frame, Image.Image):
-            raise RuntimeError(
-                "SeedVR2 upscaling requires PIL image frames; "
-                f"frame[{index - 1}] is {type(frame).__name__}."
-            )
-        if frame.size != size:
-            raise RuntimeError(
-                "SeedVR2 upscaling requires same-size frames; "
-                f"frame[0]={size!r} frame[{index - 1}]={frame.size!r}."
-            )
-    return frames_list, size
+def _raise_if_cancelled(should_cancel: Callable[[], bool] | None) -> None:
+    if should_cancel is not None and should_cancel():
+        raise RuntimeError("cancelled")
 
 
-def _load_seedvr2_inference_module(repo_dir: Path) -> Any:
-    module_path = repo_dir / "inference_cli.py"
-    if not module_path.is_file():
-        raise RuntimeError(
-            f"SeedVR2 runtime entrypoint not found at '{module_path}'. "
-            "Verify the repository checkout contains inference_cli.py."
-        )
-
-    module_name = f"codex_seedvr2_runtime_{os.getpid()}_{uuid4().hex}"
-    spec = importlib.util.spec_from_file_location(module_name, str(module_path))
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Failed to build import spec for SeedVR2 module at '{module_path}'.")
-
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except ModuleNotFoundError as exc:
-        missing_name = str(exc.name or "<unknown>")
-        requirements_path = repo_dir / "requirements.txt"
-        raise RuntimeError(
-            "SeedVR2 in-process runtime import failed due to missing dependency "
-            f"'{missing_name}'. Install runtime dependencies from '{requirements_path}' into this backend environment."
-        ) from exc
-    except Exception as exc:
-        raise RuntimeError(f"Failed to import SeedVR2 runtime module from '{module_path}': {exc}") from exc
-    return module
+def _target_dimensions(*, source_width: int, source_height: int, options: SeedVR2UpscaleOptions) -> tuple[int, int, int, int]:
+    if source_width <= 0 or source_height <= 0:
+        raise RuntimeError(f"SeedVR2 source dimensions must be positive, got {source_width}x{source_height}.")
+    resolution = int(options.resolution or 0)
+    if resolution <= 0:
+        raise RuntimeError(f"SeedVR2 resolution must be positive, got {options.resolution!r}.")
+    scale = float(resolution) / float(min(source_width, source_height))
+    target_width = max(2, int(round(source_width * scale)))
+    target_height = max(2, int(round(source_height * scale)))
+    max_resolution = int(options.max_resolution or 0)
+    if max_resolution > 0 and max(target_width, target_height) > max_resolution:
+        maximum_scale = float(max_resolution) / float(max(target_width, target_height))
+        target_width = max(2, int(round(target_width * maximum_scale)))
+        target_height = max(2, int(round(target_height * maximum_scale)))
+    target_width = max(2, (target_width // 2) * 2)
+    target_height = max(2, (target_height // 2) * 2)
+    padded_width = int(math.ceil(target_width / 16.0) * 16)
+    padded_height = int(math.ceil(target_height / 16.0) * 16)
+    return target_width, target_height, padded_width, padded_height
 
 
-def _build_seedvr2_runtime_args(
+def _read_accelerator_memory(
     *,
-    module: Any,
-    options: SeedVR2UpscaleOptions,
-    model_dir: Path,
+    component_device: str | None,
     cuda_device_index: int | None,
-) -> Any:
-    if not hasattr(module, "parse_arguments"):
-        raise RuntimeError("SeedVR2 runtime module is missing parse_arguments().")
-
-    original_argv = list(sys.argv)
+) -> tuple[str, str, int]:
+    raw_device = str(component_device or "").strip().lower()
     try:
-        sys.argv = ["inference_cli.py", "__codex_in_memory__.png", "--output_format", "png"]
+        import torch  # type: ignore
+    except Exception as exc:
+        raise RuntimeError(f"SeedVR2 VRAM admission requires torch: {exc}") from exc
+
+    if raw_device.startswith("cuda"):
+        if not bool(torch.cuda.is_available()):
+            raise SeedVR2OutOfMemoryError("out of memory: CUDA is unavailable for SeedVR2 execution.")
+        device_index = 0 if cuda_device_index is None else int(cuda_device_index)
+        device = torch.device("cuda", device_index)
         try:
-            args = module.parse_arguments()
-        except SystemExit as exc:
-            raise RuntimeError(
-                "Failed to build SeedVR2 runtime argument namespace for in-process execution. "
-                f"parse_arguments exited with code {exc.code!r}."
-            ) from exc
-    finally:
-        sys.argv = original_argv
+            from apps.backend.runtime.memory import memory_management
 
-    args.input = "__codex_in_memory__.png"
-    args.output = None
-    args.output_format = "png"
-    args.model_dir = str(model_dir)
-    args.debug = False
-    args.chunk_size = 0
-    args.skip_first_frames = 0
-    args.load_cap = 0
-    args.cache_dit = False
-    args.cache_vae = False
+            free_bytes = int(memory_management.manager.get_free_memory(device))
+        except Exception as exc:
+            raise RuntimeError(f"SeedVR2 failed to measure available CUDA VRAM on {device}: {exc}") from exc
+        if free_bytes <= 0:
+            raise SeedVR2OutOfMemoryError(f"out of memory: CUDA device {device_index} reports no free VRAM.")
+        return f"cuda:{device_index}", "cuda_mem_get_info_free_bytes", free_bytes
 
-    if options.dit_model:
-        args.dit_model = str(options.dit_model)
-    if options.resolution is not None:
-        args.resolution = int(options.resolution)
-    if options.max_resolution is not None:
-        args.max_resolution = int(options.max_resolution)
-    if options.batch_size is not None:
-        args.batch_size = int(options.batch_size)
-    if options.uniform_batch_size is not None:
-        args.uniform_batch_size = bool(options.uniform_batch_size)
-    if options.temporal_overlap is not None:
-        args.temporal_overlap = int(options.temporal_overlap)
-    if options.prepend_frames is not None:
-        args.prepend_frames = int(options.prepend_frames)
-    if options.color_correction:
-        args.color_correction = str(options.color_correction)
-    if options.input_noise_scale is not None:
-        args.input_noise_scale = float(options.input_noise_scale)
-    if options.latent_noise_scale is not None:
-        args.latent_noise_scale = float(options.latent_noise_scale)
-
-    args.cuda_device = str(cuda_device_index) if cuda_device_index is not None else None
-    return args
-
-
-def _resolve_seedvr2_runtime_device_id(*, module: Any, cuda_device_index: int | None) -> str:
-    if not hasattr(module, "get_gpu_backend"):
-        raise RuntimeError("SeedVR2 runtime module is missing get_gpu_backend().")
-    if not hasattr(module, "torch"):
-        raise RuntimeError("SeedVR2 runtime module did not initialize torch runtime.")
-
-    backend = str(module.get_gpu_backend() or "").strip().lower()
-    if backend == "cuda":
-        torch_mod = module.torch
-        if not bool(torch_mod.cuda.is_available()):
-            raise RuntimeError(
-                "SeedVR2 in-process runtime selected CUDA backend but torch reports CUDA unavailable."
+    if raw_device == "mps":
+        mps_runtime = getattr(torch, "mps", None)
+        available = bool(getattr(getattr(torch, "backends", None), "mps", None) and torch.backends.mps.is_available())
+        if not available or mps_runtime is None:
+            raise SeedVR2OutOfMemoryError("out of memory: MPS is unavailable for SeedVR2 execution.")
+        recommended_max_memory = getattr(mps_runtime, "recommended_max_memory", None)
+        current_allocated_memory = getattr(mps_runtime, "current_allocated_memory", None)
+        if not callable(recommended_max_memory) or not callable(current_allocated_memory):
+            raise SeedVR2OutOfMemoryError(
+                "out of memory: MPS cannot report available accelerator memory for SeedVR2 admission."
             )
-        visible_count = int(torch_mod.cuda.device_count())
-        if visible_count <= 0:
-            raise RuntimeError(
-                "SeedVR2 in-process runtime selected CUDA backend but no visible CUDA devices were found."
-            )
-        requested_index = 0 if cuda_device_index is None else int(cuda_device_index)
-        if requested_index < 0 or requested_index >= visible_count:
-            raise RuntimeError(
-                "SeedVR2 in-process CUDA device index is out of range for visible devices: "
-                f"requested={requested_index}, visible_count={visible_count}. "
-                f"Set {_SEEDVR2_CUDA_DEVICE_ENV} to a valid visible index."
-            )
-        return str(requested_index)
-
-    if backend == "mps":
-        return "0"
+        try:
+            free_bytes = int(recommended_max_memory()) - int(current_allocated_memory())
+        except Exception as exc:
+            raise RuntimeError(f"SeedVR2 failed to measure available MPS accelerator memory: {exc}") from exc
+        if free_bytes <= 0:
+            raise SeedVR2OutOfMemoryError("out of memory: MPS reports no free accelerator memory.")
+        return "mps", "mps_recommended_max_minus_current_allocated_bytes", free_bytes
 
     raise RuntimeError(
-        "SeedVR2 in-process runtime requires CUDA or MPS backend, "
-        f"but detected backend={backend!r}."
+        "SeedVR2 VRAM admission requires a CUDA or MPS device, "
+        f"got component_device={component_device!r}."
     )
 
 
-def _frames_to_seedvr2_tensor(*, module: Any, frames_list: list[Any]) -> Any:
-    np_mod = getattr(module, "np", None)
-    torch_mod = getattr(module, "torch", None)
-    if np_mod is None:
-        raise RuntimeError("SeedVR2 runtime module did not provide numpy (np) namespace.")
-    if torch_mod is None:
-        raise RuntimeError("SeedVR2 runtime module did not provide torch namespace.")
+def _operational_reserve_bytes() -> int:
+    try:
+        from apps.backend.runtime.memory import memory_management
 
-    frame_arrays: list[Any] = []
-    for index, frame in enumerate(frames_list, start=1):
-        rgb_frame = frame.convert("RGB")
-        frame_array = np_mod.asarray(rgb_frame, dtype=np_mod.float32)
-        if frame_array.ndim != 3 or int(frame_array.shape[2]) != 3:
-            raise RuntimeError(
-                "SeedVR2 input frame conversion produced invalid array shape for frame "
-                f"{index - 1}: {tuple(frame_array.shape)!r}."
-            )
-        frame_arrays.append(frame_array / 255.0)
-
-    stacked = np_mod.stack(frame_arrays, axis=0)
-    return torch_mod.from_numpy(stacked).to(torch_mod.float16)
+        budgets = memory_management.manager.config.budgets
+        hard_reservation_bytes = max(0, int(budgets.hard_reservation_mb)) * _MIB
+        safety_margin_bytes = max(0, int(budgets.safety_margin_mb)) * _MIB
+        minimum_inference_bytes = max(0, int(budgets.minimum_inference_mb)) * _MIB
+    except Exception as exc:
+        raise RuntimeError(f"SeedVR2 failed to read the runtime VRAM reserve policy: {exc}") from exc
+    return max(_MINIMUM_OPERATIONAL_RESERVE_BYTES, hard_reservation_bytes, minimum_inference_bytes) + safety_margin_bytes
 
 
-def _collect_in_process_output_frames(*, module: Any, result_tensor: Any, expected_count: int) -> list[Any]:
-    from PIL import Image  # type: ignore
-
-    torch_mod = getattr(module, "torch", None)
-    if torch_mod is None:
-        raise RuntimeError("SeedVR2 runtime module did not provide torch namespace.")
-    if not bool(torch_mod.is_tensor(result_tensor)):
-        raise RuntimeError(
-            "SeedVR2 in-process runtime returned a non-tensor result "
-            f"({type(result_tensor).__name__})."
-        )
-
-    output_tensor = result_tensor.detach()
-    if output_tensor.ndim != 4:
-        raise RuntimeError(
-            "SeedVR2 in-process runtime returned tensor with invalid rank; "
-            f"expected 4D [T,H,W,C], got shape={tuple(output_tensor.shape)!r}."
-        )
-
-    frame_count = int(output_tensor.shape[0])
-    height = int(output_tensor.shape[1])
-    width = int(output_tensor.shape[2])
-    channels = int(output_tensor.shape[3])
-
-    if frame_count != int(expected_count):
-        raise RuntimeError(
-            "SeedVR2 in-process output frame count mismatch: "
-            f"expected {expected_count}, got {frame_count}."
-        )
-    if height <= 0 or width <= 0:
-        raise RuntimeError(
-            "SeedVR2 in-process output contains non-positive frame dimensions: "
-            f"shape={tuple(output_tensor.shape)!r}."
-        )
-    if channels != 3:
-        raise RuntimeError(
-            "SeedVR2 in-process output channel mismatch: expected RGB (3 channels), "
-            f"got {channels}."
-        )
-
-    output_cpu = output_tensor.to(device="cpu", dtype=torch_mod.float32).clamp_(0.0, 1.0)
-    output_np = (output_cpu.numpy() * 255.0).round().astype("uint8")
-
-    out_frames: list[Any] = []
-    for frame_index in range(frame_count):
-        out_frames.append(Image.fromarray(output_np[frame_index], mode="RGB"))
-
-    first_size = out_frames[0].size
-    for index, frame in enumerate(out_frames, start=1):
-        if frame.size != first_size:
-            raise RuntimeError(
-                "SeedVR2 in-process produced inconsistent output frame sizes: "
-                f"frame[0]={first_size!r} frame[{index - 1}]={frame.size!r}."
-            )
-
-    return out_frames
+def _model_reservation_bytes(options: SeedVR2UpscaleOptions) -> int:
+    model_name = str(options.dit_model or "").strip()
+    try:
+        return _MODEL_RESERVATION_BYTES[model_name]
+    except KeyError as exc:
+        raise RuntimeError(f"SeedVR2 VRAM admission has no reservation for model {model_name!r}.") from exc
 
 
-def _run_seedvr2_in_process(
+def _build_memory_budget(
     *,
-    frames_list: list[Any],
+    source_probe: VideoProbe,
     options: SeedVR2UpscaleOptions,
-    repo_dir: Path,
-    model_dir: Path,
+    component_device: str | None,
     cuda_device_index: int | None,
-) -> tuple[list[Any], dict[str, Any]]:
-    module = _load_seedvr2_inference_module(repo_dir)
-
-    required_symbols = (
-        "Debug",
-        "DEFAULT_VAE",
-        "download_weight",
-        "_single_gpu_direct_processing",
-    )
-    missing = [name for name in required_symbols if not hasattr(module, name)]
-    if missing:
-        raise RuntimeError(
-            "SeedVR2 runtime module is missing required symbols for in-process execution: "
-            f"{', '.join(sorted(missing))}."
-        )
-
-    runtime_args = _build_seedvr2_runtime_args(
-        module=module,
+) -> _SeedVR2MemoryBudget:
+    target_width, target_height, padded_width, padded_height = _target_dimensions(
+        source_width=int(source_probe.width),
+        source_height=int(source_probe.height),
         options=options,
-        model_dir=model_dir,
+    )
+    device_label, metric, available_bytes = _read_accelerator_memory(
+        component_device=component_device,
         cuda_device_index=cuda_device_index,
     )
-    attention_mode = str(getattr(runtime_args, "attention_mode", "sdpa") or "sdpa").strip().lower()
-    sdpa_flash_runtime: bool | None = None
-    if attention_mode == "sdpa":
-        torch_mod = getattr(module, "torch", None)
-        backends = getattr(torch_mod, "backends", None) if torch_mod is not None else None
-        cuda_backend = getattr(backends, "cuda", None) if backends is not None else None
-        if cuda_backend is not None and hasattr(cuda_backend, "flash_sdp_enabled"):
-            try:
-                sdpa_flash_runtime = bool(cuda_backend.flash_sdp_enabled())
-            except Exception:
-                sdpa_flash_runtime = None
-
-    try:
-        module.debug = module.Debug(enabled=False)
-    except Exception as exc:
-        raise RuntimeError(f"Failed to initialize SeedVR2 runtime debug context: {exc}") from exc
-
-    try:
-        download_ok = bool(
-            module.download_weight(
-                dit_model=runtime_args.dit_model,
-                vae_model=module.DEFAULT_VAE,
-                model_dir=str(model_dir),
-                debug=module.debug,
-            )
-        )
-    except Exception as exc:
-        raise RuntimeError(f"SeedVR2 model preparation failed: {exc}") from exc
-    if not download_ok:
-        raise RuntimeError(
-            "SeedVR2 model preparation failed: download_weight reported failure. "
-            f"DiT model={runtime_args.dit_model!r}, VAE model={module.DEFAULT_VAE!r}, model_dir='{model_dir}'."
-        )
-
-    device_id = _resolve_seedvr2_runtime_device_id(module=module, cuda_device_index=cuda_device_index)
-    input_tensor = _frames_to_seedvr2_tensor(module=module, frames_list=frames_list)
-
-    try:
-        output_tensor = module._single_gpu_direct_processing(
-            frames_tensor=input_tensor,
-            args=runtime_args,
-            device_id=device_id,
-            runner_cache=None,
-        )
-    except Exception as exc:
-        raise RuntimeError(f"SeedVR2 in-process runtime execution failed: {exc}") from exc
-
-    out_frames = _collect_in_process_output_frames(
-        module=module,
-        result_tensor=output_tensor,
-        expected_count=len(frames_list),
+    per_frame_estimate_bytes = max(1, padded_width * padded_height * _PER_PADDED_OUTPUT_PIXEL_BYTES)
+    return _SeedVR2MemoryBudget(
+        device_label=device_label,
+        metric=metric,
+        available_bytes=available_bytes,
+        operational_reserve_bytes=_operational_reserve_bytes(),
+        model_reservation_bytes=_model_reservation_bytes(options),
+        runtime_reservation_bytes=_RUNTIME_RESERVATION_BYTES,
+        per_frame_estimate_bytes=per_frame_estimate_bytes,
+        target_width=target_width,
+        target_height=target_height,
+        padded_width=padded_width,
+        padded_height=padded_height,
     )
-    runtime_meta: dict[str, Any] = {"attention_mode": attention_mode}
-    if sdpa_flash_runtime is not None:
-        runtime_meta["sdpa_flash_runtime"] = bool(sdpa_flash_runtime)
-    return out_frames, runtime_meta
+
+
+def _streaming_chunk_size(
+    *,
+    budget: _SeedVR2MemoryBudget,
+    source_frame_count: int,
+    options: SeedVR2UpscaleOptions,
+) -> int:
+    if source_frame_count <= 0:
+        raise RuntimeError(f"SeedVR2 source frame count must be positive, got {source_frame_count}.")
+    temporal_context = int(options.temporal_overlap or 0)
+    priming_context = int(options.prepend_frames or 0)
+    available_frame_slots = budget.usable_frame_bytes // budget.per_frame_estimate_bytes
+    maximum_new_frames = int(available_frame_slots) - temporal_context - priming_context
+    if maximum_new_frames < 1:
+        raise SeedVR2OutOfMemoryError(
+            "out of memory: SeedVR2 streaming cannot admit even one new frame after the measured VRAM reserve; "
+            f"available_bytes={budget.available_bytes}, reserve_bytes={budget.operational_reserve_bytes}, "
+            f"model_bytes={budget.model_reservation_bytes}, runtime_bytes={budget.runtime_reservation_bytes}, "
+            f"per_frame_bytes={budget.per_frame_estimate_bytes}, temporal_context={temporal_context}, "
+            f"priming_context={priming_context}."
+        )
+    bounded_source_limit = source_frame_count - 1 if source_frame_count > 1 else 1
+    return max(1, min(maximum_new_frames, bounded_source_limit))
+
+
+def _select_execution_plan(
+    *,
+    source_probe: VideoProbe,
+    source_frame_count: int,
+    options: SeedVR2UpscaleOptions,
+    component_device: str | None,
+    cuda_device_index: int | None,
+) -> _SeedVR2ExecutionPlan:
+    if bool(options.streaming) and bool(options.smart_fallback):
+        raise RuntimeError("SeedVR2 streaming and smart_fallback cannot both be enabled.")
+    temporal_overlap = int(options.temporal_overlap or 0)
+    batch_size = int(options.batch_size or 0)
+    if temporal_overlap < 0 or temporal_overlap >= batch_size:
+        raise RuntimeError(
+            "SeedVR2 temporal_overlap must be greater than or equal to 0 and lower than batch_size; "
+            f"got temporal_overlap={temporal_overlap}, batch_size={batch_size}."
+        )
+    budget = _build_memory_budget(
+        source_probe=source_probe,
+        options=options,
+        component_device=component_device,
+        cuda_device_index=cuda_device_index,
+    )
+    processing_frames = int(source_frame_count) + int(options.prepend_frames or 0)
+    direct_required_bytes = (
+        budget.operational_reserve_bytes
+        + budget.model_reservation_bytes
+        + budget.runtime_reservation_bytes
+        + processing_frames * budget.per_frame_estimate_bytes
+    )
+    if bool(options.streaming):
+        return _SeedVR2ExecutionPlan(
+            mode="streaming",
+            chunk_size=_streaming_chunk_size(
+                budget=budget,
+                source_frame_count=source_frame_count,
+                options=options,
+            ),
+            selection_reason="streaming_requested",
+            direct_required_bytes=direct_required_bytes,
+            budget=budget,
+        )
+    if direct_required_bytes <= budget.available_bytes:
+        return _SeedVR2ExecutionPlan(
+            mode="direct",
+            chunk_size=0,
+            selection_reason="direct_vram_admitted",
+            direct_required_bytes=direct_required_bytes,
+            budget=budget,
+        )
+    if bool(options.smart_fallback):
+        return _SeedVR2ExecutionPlan(
+            mode="streaming",
+            chunk_size=_streaming_chunk_size(
+                budget=budget,
+                source_frame_count=source_frame_count,
+                options=options,
+            ),
+            selection_reason="smart_fallback_after_direct_capacity_rejection",
+            direct_required_bytes=direct_required_bytes,
+            budget=budget,
+        )
+    raise SeedVR2OutOfMemoryError(
+        "out of memory: SeedVR2 direct GPU execution exceeds measured available VRAM and smart fallback is disabled; "
+        f"required_bytes={direct_required_bytes}, available_bytes={budget.available_bytes}, "
+        f"reserve_bytes={budget.operational_reserve_bytes}."
+    )
+
+
+def _seedvr2_child_command(
+    *,
+    repo_dir: Path,
+    source_path: Path,
+    output_root: Path,
+    model_dir: Path,
+    options: SeedVR2UpscaleOptions,
+    cuda_device_index: int | None,
+    plan: _SeedVR2ExecutionPlan,
+) -> list[str]:
+    command = [
+        sys.executable,
+        str(repo_dir / "inference_cli.py"),
+        str(source_path),
+        "--output",
+        str(output_root),
+        "--output_format",
+        "png",
+        "--model_dir",
+        str(model_dir),
+        "--dit_model",
+        str(options.dit_model),
+        "--resolution",
+        str(int(options.resolution or 0)),
+        "--max_resolution",
+        str(int(options.max_resolution or 0)),
+        "--batch_size",
+        str(int(options.batch_size or 0)),
+        "--skip_first_frames",
+        "0",
+        "--load_cap",
+        "0",
+        "--prepend_frames",
+        str(int(options.prepend_frames or 0)),
+        "--temporal_overlap",
+        str(int(options.temporal_overlap or 0)),
+        "--color_correction",
+        str(options.color_correction or "lab"),
+        "--input_noise_scale",
+        format(float(options.input_noise_scale or 0.0), ".12g"),
+        "--latent_noise_scale",
+        format(float(options.latent_noise_scale or 0.0), ".12g"),
+    ]
+    if bool(options.uniform_batch_size):
+        command.append("--uniform_batch_size")
+    if plan.mode == "streaming":
+        if plan.chunk_size <= 0:
+            raise RuntimeError("SeedVR2 streaming plan must have a positive chunk size.")
+        command += ["--chunk_size", str(plan.chunk_size)]
+    if cuda_device_index is not None:
+        command += ["--cuda_device", str(cuda_device_index)]
+    return command
+
+
+def _terminate_seedvr2_child(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=_CHILD_TERMINATE_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+    try:
+        process.wait(timeout=_CHILD_TERMINATE_TIMEOUT_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    if os.name != "nt":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            pass
+    try:
+        process.kill()
+    except Exception:
+        pass
+    try:
+        process.wait(timeout=_CHILD_TERMINATE_TIMEOUT_SECONDS)
+    except Exception:
+        pass
+
+
+def _run_seedvr2_child(
+    command: Sequence[str],
+    *,
+    repo_dir: Path,
+    should_cancel: Callable[[], bool] | None,
+) -> str:
+    environment = os.environ.copy()
+    environment["PYTHONUNBUFFERED"] = "1"
+    popen_kwargs: dict[str, Any] = {
+        "cwd": str(repo_dir),
+        "env": environment,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+        "bufsize": 1,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+    try:
+        process = subprocess.Popen(list(command), **popen_kwargs)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"SeedVR2 child executable was not found: {command[0]!r}.") from exc
+    except Exception as exc:
+        raise RuntimeError(f"SeedVR2 child execution failed to start: {exc}") from exc
+
+    output_parts: deque[str] = deque()
+    output_size = 0
+    oom_marker_seen = False
+    oom_marker_suffix = ""
+
+    def drain_output() -> None:
+        nonlocal oom_marker_seen, oom_marker_suffix, output_size
+        if process.stdout is None:
+            return
+        while chunk := process.stdout.read(_CHILD_OUTPUT_READ_SIZE):
+            marker_text = (oom_marker_suffix + chunk).lower()
+            if any(marker in marker_text for marker in _OOM_MARKERS):
+                oom_marker_seen = True
+            oom_marker_suffix = marker_text[-_OOM_MARKER_SUFFIX_SIZE:]
+            if len(chunk) >= _CHILD_OUTPUT_LIMIT:
+                output_parts.clear()
+                output_parts.append(chunk[-_CHILD_OUTPUT_LIMIT:])
+                output_size = _CHILD_OUTPUT_LIMIT
+                continue
+            output_parts.append(chunk)
+            output_size += len(chunk)
+            while output_size > _CHILD_OUTPUT_LIMIT:
+                discarded = output_parts.popleft()
+                overflow = output_size - _CHILD_OUTPUT_LIMIT
+                if len(discarded) > overflow:
+                    output_parts.appendleft(discarded[overflow:])
+                    output_size -= overflow
+                else:
+                    output_size -= len(discarded)
+
+    reader = threading.Thread(target=drain_output, name="seedvr2-child-output", daemon=True)
+    reader.start()
+    try:
+        while process.poll() is None:
+            _raise_if_cancelled(should_cancel)
+            if process.poll() is None:
+                time.sleep(_CHILD_POLL_SECONDS)
+    except RuntimeError as exc:
+        if str(exc) != "cancelled":
+            raise
+        if process.poll() is None:
+            _terminate_seedvr2_child(process)
+            raise
+    finally:
+        reader.join(timeout=_CHILD_TERMINATE_TIMEOUT_SECONDS)
+
+    output = "".join(output_parts).strip()
+    if process.returncode == 0:
+        return output
+    if oom_marker_seen:
+        raise SeedVR2OutOfMemoryError(
+            "out of memory: SeedVR2 child GPU execution failed. "
+            f"Child output: {_truncate_text(output, max_chars=_CHILD_OUTPUT_LIMIT)}"
+        )
+    raise RuntimeError(
+        "SeedVR2 child execution failed "
+        f"(exit {process.returncode}; command={list(command)!r}).\n"
+        f"output:\n{_truncate_text(output, max_chars=_CHILD_OUTPUT_LIMIT)}"
+    )
+
+
+def _collect_output_frame_paths(
+    *,
+    output_root: Path,
+    expected_frame_count: int,
+    prepend_frames: int,
+) -> tuple[tuple[str, ...], int, int, int]:
+    if expected_frame_count <= 0:
+        raise RuntimeError(f"SeedVR2 expected frame count must be positive, got {expected_frame_count}.")
+    png_paths = tuple(sorted(path for path in output_root.rglob("*.png") if path.is_file()))
+    if not png_paths:
+        raise RuntimeError(f"SeedVR2 child produced no PNG frames under '{output_root}'.")
+    raw_frame_count = len(png_paths)
+    if raw_frame_count == expected_frame_count:
+        normalized_paths = png_paths
+        removed_priming_frames = 0
+    elif prepend_frames > 0 and raw_frame_count == expected_frame_count + prepend_frames:
+        normalized_paths = png_paths[prepend_frames:]
+        removed_priming_frames = prepend_frames
+    else:
+        raise RuntimeError(
+            "SeedVR2 child output frame count does not match the source/timing contract: "
+            f"expected={expected_frame_count}, raw_output={raw_frame_count}, prepend_frames={prepend_frames}."
+        )
+    if len(normalized_paths) != expected_frame_count:
+        raise RuntimeError(
+            "SeedVR2 priming-frame normalization failed to restore the source/timing frame cardinality: "
+            f"expected={expected_frame_count}, normalized={len(normalized_paths)}."
+        )
+
+    try:
+        from PIL import Image  # type: ignore
+    except Exception as exc:
+        raise RuntimeError(f"Pillow is required to inspect SeedVR2 output frames: {exc}") from exc
+
+    output_width: int | None = None
+    output_height: int | None = None
+    for index, output_path in enumerate(normalized_paths):
+        try:
+            with Image.open(output_path) as image:
+                width, height = image.size
+        except Exception as exc:
+            raise RuntimeError(f"SeedVR2 child output frame {index} is unreadable: '{output_path}': {exc}") from exc
+        if width <= 0 or height <= 0:
+            raise RuntimeError(f"SeedVR2 child output frame {index} has invalid dimensions {width}x{height}.")
+        if output_width is None or output_height is None:
+            output_width, output_height = int(width), int(height)
+        elif (width, height) != (output_width, output_height):
+            raise RuntimeError(
+                "SeedVR2 child produced inconsistent output dimensions: "
+                f"frame[0]={output_width}x{output_height}, frame[{index}]={width}x{height}."
+            )
+    assert output_width is not None and output_height is not None
+    return tuple(str(path) for path in normalized_paths), output_width, output_height, removed_priming_frames
+
+
+def _run_plan(
+    *,
+    source_path: Path,
+    output_root: Path,
+    source_frame_count: int,
+    repo_dir: Path,
+    model_dir: Path,
+    options: SeedVR2UpscaleOptions,
+    cuda_device_index: int | None,
+    plan: _SeedVR2ExecutionPlan,
+    should_cancel: Callable[[], bool] | None,
+) -> tuple[tuple[str, ...], int, int, int, str]:
+    output_root.mkdir(parents=True, exist_ok=False)
+    command = _seedvr2_child_command(
+        repo_dir=repo_dir,
+        source_path=source_path,
+        output_root=output_root,
+        model_dir=model_dir,
+        options=options,
+        cuda_device_index=cuda_device_index,
+        plan=plan,
+    )
+    child_output = _run_seedvr2_child(command, repo_dir=repo_dir, should_cancel=should_cancel)
+    frame_paths, output_width, output_height, removed_priming_frames = _collect_output_frame_paths(
+        output_root=output_root,
+        expected_frame_count=source_frame_count,
+        prepend_frames=int(options.prepend_frames or 0),
+    )
+    return frame_paths, output_width, output_height, removed_priming_frames, child_output
+
+
+def _plan_metadata(plan: _SeedVR2ExecutionPlan) -> dict[str, object]:
+    budget = plan.budget
+    return {
+        "mode": plan.mode,
+        "selection_reason": plan.selection_reason,
+        "chunk_size": int(plan.chunk_size),
+        "direct_required_bytes": int(plan.direct_required_bytes),
+        "device": budget.device_label,
+        "memory_metric": budget.metric,
+        "available_bytes": int(budget.available_bytes),
+        "operational_reserve_bytes": int(budget.operational_reserve_bytes),
+        "model_reservation_bytes": int(budget.model_reservation_bytes),
+        "runtime_reservation_bytes": int(budget.runtime_reservation_bytes),
+        "per_frame_estimate_bytes": int(budget.per_frame_estimate_bytes),
+        "target_size_estimate": {"width": int(budget.target_width), "height": int(budget.target_height)},
+        "padded_size_estimate": {"width": int(budget.padded_width), "height": int(budget.padded_height)},
+    }
 
 
 def run_seedvr2_upscaling(
-    frames: Sequence[Any],
+    source_path: str,
     *,
+    source_probe: VideoProbe,
+    source_frame_count: int,
+    output_dir: str | Path,
     options: SeedVR2UpscaleOptions,
     component_device: str | None,
+    should_cancel: Callable[[], bool] | None = None,
     logger_: logging.Logger | None = None,
-) -> tuple[list[Any], dict[str, Any]]:
-    frames_list, input_size = _validate_input_frames(frames)
+) -> SeedVR2UpscaleResult:
+    """Run one bounded SeedVR2 child execution and return source-cardinality PNG output paths."""
+
+    resolved_source_path = Path(source_path).expanduser().resolve()
+    if not resolved_source_path.is_file():
+        raise RuntimeError("SeedVR2 source video path does not point to a readable file.")
+    if source_frame_count <= 0:
+        raise RuntimeError(f"SeedVR2 source timing returned invalid frame count {source_frame_count}.")
+    _raise_if_cancelled(should_cancel)
     repo_resolution = _resolve_seedvr2_repo_dir()
-    repo_dir = repo_resolution.repo_dir
     model_dir = _resolve_seedvr2_model_dir()
     cuda_device_index = _normalize_cuda_device_index(component_device)
+    output_base_dir = Path(output_dir).expanduser().resolve()
+    if output_base_dir.exists():
+        raise RuntimeError(f"SeedVR2 output directory must not already exist: '{output_base_dir}'.")
+    output_base_dir.mkdir(parents=True, exist_ok=False)
 
-    out_frames, runtime_meta = _run_seedvr2_in_process(
-        frames_list=frames_list,
+    plan = _select_execution_plan(
+        source_probe=source_probe,
+        source_frame_count=source_frame_count,
         options=options,
-        repo_dir=repo_dir,
-        model_dir=model_dir,
+        component_device=component_device,
         cuda_device_index=cuda_device_index,
     )
+    selected_plan = plan
+    fallback_attempted = (
+        plan.mode == "streaming"
+        and plan.selection_reason == "smart_fallback_after_direct_capacity_rejection"
+    )
+    try:
+        frame_paths, output_width, output_height, removed_priming_frames, child_output = _run_plan(
+            source_path=resolved_source_path,
+            output_root=output_base_dir / plan.mode,
+            source_frame_count=source_frame_count,
+            repo_dir=repo_resolution.repo_dir,
+            model_dir=model_dir,
+            options=options,
+            cuda_device_index=cuda_device_index,
+            plan=plan,
+            should_cancel=should_cancel,
+        )
+    except SeedVR2OutOfMemoryError:
+        if plan.mode != "direct" or not bool(options.smart_fallback):
+            raise
+        if should_cancel is not None and should_cancel():
+            raise
+        fallback_attempted = True
+        selected_plan = _select_execution_plan(
+            source_probe=source_probe,
+            source_frame_count=source_frame_count,
+            options=SeedVR2UpscaleOptions(
+                **{**options.as_dict(), "streaming": True, "smart_fallback": False}
+            ),
+            component_device=component_device,
+            cuda_device_index=cuda_device_index,
+        )
+        if selected_plan.mode != "streaming":
+            raise RuntimeError("SeedVR2 smart-fallback retry did not produce a streaming plan.")
+        frame_paths, output_width, output_height, removed_priming_frames, child_output = _run_plan(
+            source_path=resolved_source_path,
+            output_root=output_base_dir / "streaming_after_direct_oom",
+            source_frame_count=source_frame_count,
+            repo_dir=repo_resolution.repo_dir,
+            model_dir=model_dir,
+            options=options,
+            cuda_device_index=cuda_device_index,
+            plan=selected_plan,
+            should_cancel=should_cancel,
+        )
+    _raise_if_cancelled(should_cancel)
 
-    output_size = out_frames[0].size
-    run_id = uuid4().hex
-    work_dir = repo_scratch_path("seedvr2", run_id)
-    meta: dict[str, Any] = {
+    metadata: dict[str, Any] = {
         "applied": True,
         "runner": "seedvr2",
-        "execution_mode": "in_process",
-        "input_frames": len(frames_list),
-        "output_frames": len(out_frames),
-        "input_size": {"width": int(input_size[0]), "height": int(input_size[1])},
-        "output_size": {"width": int(output_size[0]), "height": int(output_size[1])},
-        "work_dir": _sanitize_metadata_path(work_dir),
-        "repo_dir": _sanitize_metadata_path(repo_dir),
+        "execution_mode": selected_plan.mode,
+        "smart_fallback_attempted": fallback_attempted,
+        "input_frames": int(source_frame_count),
+        "raw_child_output_frames": int(source_frame_count + removed_priming_frames),
+        "output_frames": len(frame_paths),
+        "priming_frames_removed": int(removed_priming_frames),
+        "input_size": {"width": int(source_probe.width), "height": int(source_probe.height)},
+        "output_size": {"width": int(output_width), "height": int(output_height)},
+        "execution": _plan_metadata(selected_plan),
+        "repo_dir": _sanitize_metadata_path(repo_resolution.repo_dir),
         "model_dir": _sanitize_metadata_path(model_dir),
     }
     if repo_resolution.uses_default_repo_path:
-        meta["repo_ref"] = repo_resolution.pinned_ref
+        metadata["repo_ref"] = repo_resolution.pinned_ref
     if cuda_device_index is not None:
-        meta["cuda_device"] = int(cuda_device_index)
-    if runtime_meta:
-        meta["attention"] = dict(runtime_meta)
+        metadata["cuda_device"] = int(cuda_device_index)
+    if child_output:
+        metadata["child_output_tail"] = _truncate_text(child_output, max_chars=1000)
 
     if logger_ is not None:
         logger_.info(
-            "video upscaling (SeedVR2 in-process): %d frame(s) %dx%d -> %dx%d",
-            len(frames_list),
-            int(input_size[0]),
-            int(input_size[1]),
-            int(output_size[0]),
-            int(output_size[1]),
+            "video upscaling (SeedVR2 child %s): %d frame(s) %dx%d -> %dx%d, chunk_size=%d, available_vram_bytes=%d",
+            selected_plan.mode,
+            source_frame_count,
+            int(source_probe.width),
+            int(source_probe.height),
+            output_width,
+            output_height,
+            selected_plan.chunk_size,
+            selected_plan.budget.available_bytes,
         )
-        if str(runtime_meta.get("attention_mode") or "").strip().lower() == "sdpa":
-            sdpa_flash_runtime = runtime_meta.get("sdpa_flash_runtime")
-            logger_.info(
-                "seedvr2 attention runtime: mode=sdpa sdpa_flash_runtime=%s "
-                "(SeedVR2 'Flash Attention' optimization check reports flash-attn package availability, not PyTorch SDPA flash kernels).",
-                sdpa_flash_runtime if sdpa_flash_runtime is not None else "unknown",
-            )
 
-    return out_frames, meta
+    return SeedVR2UpscaleResult(
+        frame_paths=frame_paths,
+        output_width=output_width,
+        output_height=output_height,
+        metadata=metadata,
+    )
 
 
-__all__ = ["run_seedvr2_upscaling"]
+__all__ = ["SeedVR2OutOfMemoryError", "SeedVR2UpscaleResult", "run_seedvr2_upscaling"]

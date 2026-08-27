@@ -1,7 +1,7 @@
 # apps/backend/interfaces/api/tasks Overview
 <!-- tags: backend, api, tasks, orchestration -->
 Date: 2026-01-30
-Last Review: 2026-08-26
+Last Review: 2026-08-27
 Status: Active
 
 ## Purpose
@@ -36,6 +36,6 @@ Status: Active
 - 2026-02-21: `generation_tasks.py` now parses `samples_save` via shared strict bool parsing before output persistence, removing permissive `bool("false")==True` behavior.
 - 2026-02-22: task workers now log warning-level diagnostics when inference-gate release fails (`generation_tasks.py`, `upscale_tasks.py`) instead of silently swallowing release errors.
 - 2026-03-31: standalone SUPIR task workers were removed when SUPIR mode moved into the canonical SDXL `img2img.py` owner path; this package owns generic generation workers plus standalone image upscale, dedicated SeedVR2 video-upscale, and download tasks.
-- 2026-08-26: `video_upscale_tasks.py` owns the dedicated SeedVR2 task lifecycle only. It forwards use-case progress and preserves cancellation, task result, error, cleanup, inference-gate, and SSE contracts without becoming a second video pipeline.
+- 2026-08-27: `video_upscale_tasks.py` owns the dedicated SeedVR2 task lifecycle only. It forwards use-case progress, passes immediate cancellation into the active child runner, and lets an already-emitted `ResultEvent` win over a late cancel flag so it does not publish a cancelled terminal state for a verified artifact. It preserves result, error, cleanup, inference-gate, and SSE contracts without becoming a second video pipeline.
 - 2026-03-02: `generation_tasks.py` now preserves `ProgressEvent.message` and `ProgressEvent.data` in streamed `progress` task events, so frontend consumers can render phase-aware total-progress metadata from backend-emitted payloads.
 - 2026-03-31: `generation_tasks.py` now clears raw progress state per task run and passes the expected task owner token into `live_preview_service.py`; workers remain thin forwarders and must not read raw preview fields from `core.state` directly.

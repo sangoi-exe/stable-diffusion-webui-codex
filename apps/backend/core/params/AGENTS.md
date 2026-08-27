@@ -1,6 +1,6 @@
 # apps/backend/core/params Overview
 Date: 2025-10-28
-Last Review: 2026-08-26
+Last Review: 2026-08-27
 Status: Active
 
 ## Purpose
@@ -12,4 +12,4 @@ Status: Active
 ## Notes
 - When adding new task types, define parameter modules here to keep orchestration logic in `core` free from request-shape details.
 - Ensure new schemas remain compatible with use-case orchestrators and are validated before reaching engines.
-- 2026-08-26: `video.py` defines `SeedVR2UpscaleOptions` for the dedicated `POST /api/video-upscale` route. Generation requests no longer own a `video_upscaling` field.
+- 2026-08-27: `video.py` defines `SeedVR2UpscaleOptions` for the dedicated `POST /api/video-upscale` route, including the mutually exclusive `streaming` and `smart_fallback` execution-policy flags. Generation requests no longer own a `video_upscaling` field.
