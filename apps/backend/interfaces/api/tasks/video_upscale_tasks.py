@@ -7,8 +7,8 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Task orchestration for the dedicated SeedVR2 video-upscale endpoint.
-Owns task status, inference-gate coordination, cancellation boundaries, event forwarding, terminal result storage, and cleanup while the
-canonical use case owns source-video processing and export.
+Owns task status, inference-gate coordination, cancellation boundaries, event forwarding, terminal result storage, and final task-snapshot
+cleanup while the canonical use case owns source-video processing and export.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `run_video_upscale_task` (function): Starts one dedicated SeedVR2 video-upscale task worker.
@@ -28,7 +28,11 @@ from apps.backend.interfaces.api.public_errors import (
 )
 from apps.backend.interfaces.api.task_registry import TaskCancelMode, TaskEntry
 from apps.backend.runtime.logging import get_backend_logger
-from apps.backend.use_cases.video_upscale import VideoUpscaleRequest, run_video_upscale
+from apps.backend.use_cases.video_upscale import (
+    VideoUpscaleRequest,
+    cleanup_video_upscale_source_admission,
+    run_video_upscale,
+)
 
 
 logger = get_backend_logger(__name__)
@@ -124,6 +128,18 @@ def run_video_upscale_task(
             entry.error = build_public_task_error(err)
             success = False
         finally:
+            try:
+                cleanup_video_upscale_source_admission(request.source)
+            except Exception as cleanup_error:
+                logger.error(
+                    "video-upscale task-work cleanup failed (task_id=%s): %s",
+                    task_id,
+                    cleanup_error,
+                    exc_info=False,
+                )
+                if entry.error is None:
+                    entry.error = build_public_task_error(cleanup_error)
+                success = False
             if success:
                 result_obj = entry.result.get("result") if isinstance(entry.result, dict) else None
                 if not isinstance(result_obj, dict):

@@ -7,13 +7,16 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Canonical SeedVR2 video-upscale use case.
-Consumes router-admitted source media and resource evidence, runs the dedicated cancellable SeedVR2 child runner, then delegates timestamp-aware
-staged MP4 assembly, source-audio/A-V-origin verification, ordered publication, and cleanup to the existing video owners.
+Consumes one router-created immutable source snapshot and resource admission, runs the dedicated cancellable SeedVR2 child runner, then delegates
+timestamp-aware staged MP4 assembly, source-audio/A-V-origin verification, atomic artifact-directory publication, and cleanup to existing owners.
 
 Symbols (top-level; keep in sync; no ghosts):
-- `VideoUpscaleSourceAdmission` (dataclass): Exact source media, geometry, and dynamic host/scratch evidence accepted before task creation.
+- `VideoUpscaleSourceAdmission` (dataclass): Immutable source snapshot, exact media, geometry, and dynamic host/scratch evidence.
 - `VideoUpscaleRequest` (dataclass): Typed dedicated video-upscale request accepted after router validation.
 - `video_upscale_work_root` (function): Returns the task-work filesystem root used by admission and execution.
+- `create_video_upscale_work_dir` (function): Creates the task-owned directory before source snapshot admission.
+- `cleanup_video_upscale_work_dir` (function): Idempotently removes one exact task-owned work directory.
+- `cleanup_video_upscale_source_admission` (function): Idempotently removes one admission's complete task-work directory.
 - `run_video_upscale` (function): Runs the SeedVR2 source-video to verified exported-video pipeline and yields task events.
 """
 
@@ -28,9 +31,13 @@ from uuid import uuid4
 from apps.backend.core.params.video import SeedVR2UpscaleOptions
 from apps.backend.core.requests import InferenceEvent, ProgressEvent, ResultEvent
 from apps.backend.runtime.logging import get_backend_logger
-from apps.backend.video.export.ffmpeg_exporter import VideoExportResult, export_timestamped_video
+from apps.backend.video.export.ffmpeg_exporter import (
+    VideoExportResult,
+    export_timestamped_video,
+    video_export_output_root,
+)
 from apps.backend.video.io.ffmpeg import VideoProbe, VideoTiming
-from apps.backend.video.upscaling.seedvr2 import run_seedvr2_upscaling
+from apps.backend.video.upscaling.seedvr2 import SeedVR2HostMemoryAdmission, run_seedvr2_upscaling
 
 
 logger = get_backend_logger(__name__)
@@ -40,16 +47,17 @@ logger = get_backend_logger(__name__)
 class VideoUpscaleSourceAdmission:
     """Source media and dynamic resource evidence accepted before task creation."""
 
-    path: str
+    source_name: str
+    snapshot_path: str
+    snapshot_size_bytes: int
+    work_dir: str
     probe: VideoProbe
     timing: VideoTiming
     target_width: int
     target_height: int
     padded_width: int
     padded_height: int
-    host_timing_required_bytes: int
-    host_available_bytes: int
-    host_reserve_bytes: int
+    host_memory: SeedVR2HostMemoryAdmission
     work_scratch_required_bytes: int
     work_scratch_available_bytes: int
     output_scratch_required_bytes: int
@@ -76,7 +84,7 @@ def video_upscale_work_root() -> Path:
     return Path.home() / ".cache" / "codex" / "seedvr2-dedicated-video-upscale"
 
 
-def _new_task_work_dir() -> Path:
+def create_video_upscale_work_dir() -> Path:
     root = video_upscale_work_root()
     root.mkdir(parents=True, exist_ok=True)
     work_dir = root / f"run-{uuid4().hex}"
@@ -85,36 +93,46 @@ def _new_task_work_dir() -> Path:
 
 
 def _remove_published_export(export_result: VideoExportResult) -> None:
-    video_path = Path(export_result.path) if export_result.path else None
-    metadata_path = Path(export_result.metadata_path) if export_result.metadata_path else None
-    if video_path is not None and video_path.is_file():
+    artifact_root = Path(export_result.artifact_root).resolve() if export_result.artifact_root else None
+    if artifact_root is not None and artifact_root.exists():
+        output_root = video_export_output_root().resolve()
         try:
-            video_path.unlink()
-        except OSError as exc:
+            artifact_root.relative_to(output_root)
+        except ValueError as exc:
             raise RuntimeError(
-                f"SeedVR2 failed to remove incomplete published video '{video_path}': {exc}"
+                f"SeedVR2 refused to remove published artifact outside output root: '{artifact_root}'."
             ) from exc
-    if metadata_path is not None and metadata_path.is_file():
         try:
-            metadata_path.unlink()
+            shutil.rmtree(artifact_root)
         except OSError as exc:
             raise RuntimeError(
-                f"SeedVR2 failed to remove incomplete published metadata '{metadata_path}': {exc}"
+                f"SeedVR2 failed to remove incomplete published artifact directory '{artifact_root}': {exc}"
             ) from exc
 
 
-def _remove_task_work_dir(work_dir: Path) -> None:
+def cleanup_video_upscale_work_dir(work_dir: str | Path) -> None:
+    resolved_work_dir = Path(work_dir).expanduser().resolve()
+    root = video_upscale_work_root().expanduser().resolve()
+    if resolved_work_dir.parent != root or not resolved_work_dir.name.startswith("run-"):
+        raise RuntimeError(f"SeedVR2 refused to remove non-task work directory '{resolved_work_dir}'.")
     try:
-        shutil.rmtree(work_dir)
+        shutil.rmtree(resolved_work_dir)
     except FileNotFoundError:
         return
     except OSError as exc:
-        raise RuntimeError(f"SeedVR2 failed to remove task work directory '{work_dir}': {exc}") from exc
+        raise RuntimeError(f"SeedVR2 failed to remove task work directory '{resolved_work_dir}': {exc}") from exc
+
+
+def cleanup_video_upscale_source_admission(admission: VideoUpscaleSourceAdmission) -> None:
+    """Remove the task-owned snapshot and all work artifacts for one admitted request."""
+
+    cleanup_video_upscale_work_dir(admission.work_dir)
 
 
 def _require_saved_export(export_result: VideoExportResult) -> VideoExportResult:
     if (
         not export_result.saved
+        or not export_result.artifact_root
         or not export_result.path
         or not export_result.metadata_path
         or not export_result.rel_path
@@ -132,11 +150,14 @@ def _require_saved_export(export_result: VideoExportResult) -> VideoExportResult
     return export_result
 
 
-def _source_metadata(source: Path, probe: VideoProbe, timing: VideoTiming) -> dict[str, object]:
+def _source_metadata(admission: VideoUpscaleSourceAdmission) -> dict[str, object]:
+    probe = admission.probe
+    timing = admission.timing
     video_origin_seconds = float(timing.frames[0].presentation_seconds)
     audio_origin_seconds = float(probe.audio_start_seconds) if probe.audio_start_seconds is not None else None
     return {
-        "name": source.name,
+        "name": admission.source_name,
+        "snapshot_size_bytes": int(admission.snapshot_size_bytes),
         "width": int(probe.width),
         "height": int(probe.height),
         "fps": float(probe.fps),
@@ -158,11 +179,7 @@ def _admission_metadata(admission: VideoUpscaleSourceAdmission) -> dict[str, obj
     return {
         "target_size": {"width": admission.target_width, "height": admission.target_height},
         "padded_size": {"width": admission.padded_width, "height": admission.padded_height},
-        "host_timing": {
-            "required_bytes": admission.host_timing_required_bytes,
-            "available_bytes": admission.host_available_bytes,
-            "reserve_bytes": admission.host_reserve_bytes,
-        },
+        "host_memory": admission.host_memory.as_dict(),
         "scratch": {
             "shared_filesystem": admission.shared_scratch_filesystem,
             "reserve_bytes": admission.scratch_reserve_bytes,
@@ -189,9 +206,14 @@ def run_video_upscale(
     """Upscale a backend-visible source video with SeedVR2 and return one verified saved MP4 artifact."""
 
     admission = request.source
-    source_path = Path(admission.path).expanduser().resolve()
+    source_path = Path(admission.snapshot_path).expanduser().resolve()
     if not source_path.is_file():
-        raise RuntimeError("SeedVR2 source video path does not point to a readable file.")
+        raise RuntimeError("SeedVR2 admitted source snapshot does not point to a readable file.")
+    work_dir = Path(admission.work_dir).expanduser().resolve()
+    if not work_dir.is_dir() or source_path.parent != work_dir:
+        raise RuntimeError("SeedVR2 admitted source snapshot is outside its task-owned work directory.")
+    if source_path.stat().st_size != admission.snapshot_size_bytes:
+        raise RuntimeError("SeedVR2 admitted source snapshot size changed before execution.")
     source_probe = admission.probe
     source_timing = admission.timing
     if source_probe.decoded_frame_count != source_timing.frame_count:
@@ -200,16 +222,15 @@ def run_video_upscale(
             f"probe={source_probe.decoded_frame_count}, timing={source_timing.frame_count}."
         )
 
-    work_dir: Path | None = None
+    active_work_dir: Path | None = work_dir
     export_result: VideoExportResult | None = None
     result_emitted = False
     try:
         _raise_if_cancelled(should_cancel)
         yield ProgressEvent(stage="admission", percent=12.0, message="Source media and resource budget admitted")
-        source_metadata = _source_metadata(source_path, source_probe, source_timing)
+        source_metadata = _source_metadata(admission)
         admission_metadata = _admission_metadata(admission)
 
-        work_dir = _new_task_work_dir()
         _raise_if_cancelled(should_cancel)
         yield ProgressEvent(stage="upscale", percent=35.0, message="Upscaling source frames with SeedVR2")
         seedvr2_result = run_seedvr2_upscaling(
@@ -219,6 +240,7 @@ def run_video_upscale(
             output_dir=work_dir / "seedvr2_frames",
             options=request.options,
             component_device=request.device,
+            host_memory=admission.host_memory,
             should_cancel=should_cancel,
             logger_=logger,
         )
@@ -249,8 +271,8 @@ def run_video_upscale(
             )
         )
 
-        _remove_task_work_dir(work_dir)
-        work_dir = None
+        cleanup_video_upscale_work_dir(work_dir)
+        active_work_dir = None
         _raise_if_cancelled(should_cancel)
         output = {
             "width": int(export_result.width),
@@ -302,9 +324,9 @@ def run_video_upscale(
                 _remove_published_export(export_result)
             except RuntimeError as exc:
                 cleanup_failures.append(str(exc))
-        if work_dir is not None:
+        if active_work_dir is not None:
             try:
-                _remove_task_work_dir(work_dir)
+                cleanup_video_upscale_work_dir(active_work_dir)
             except RuntimeError as exc:
                 cleanup_failures.append(str(exc))
         if cleanup_failures:

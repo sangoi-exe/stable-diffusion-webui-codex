@@ -12,12 +12,12 @@ Exposes:
 - remote HF upscaler listing + downloads (`GET/POST /api/upscalers/*`), with optional manifest-based metadata enrichment
   (`upscalers/manifest.json`, schema v1) and explicit `manifest_error`/`manifest_errors` surfacing
 - standalone upscaling tasks (`POST /api/upscale`)
-- dedicated SeedVR2 video-upscale tasks (`POST /api/video-upscale`, exact media/resource admission, and explicit execution policy)
+- dedicated SeedVR2 video-upscale tasks (`POST /api/video-upscale`, immutable source snapshot, exact media/resource admission, and execution policy)
 Remote listing/download respects the upscaler safeweights policy (`CODEX_SAFE_WEIGHTS=1` blocks non-`.safetensors` weights).
 
 Symbols (top-level; keep in sync; no ghosts):
 - `_parse_video_upscale_request` (function): Validates the strict dedicated SeedVR2 request payload.
-- `_preflight_video_upscale_source` (function): Admits exact source media, timing, host memory, and scratch capacity before task registration.
+- `_preflight_video_upscale_source` (function): Snapshots and admits exact source media, timing, host memory, and scratch capacity before registration.
 - `build_router` (function): Build the APIRouter for upscaler endpoints.
 """
 
@@ -42,13 +42,23 @@ from apps.backend.infra.config.paths import get_paths_for
 from apps.backend.interfaces.api.device_selection import parse_device_from_payload
 from apps.backend.interfaces.api.upscalers_manifest import validate_upscalers_manifest
 from apps.backend.runtime.vision.upscalers.safeweights import allowed_upscaler_weight_suffixes, safeweights_enabled
-from apps.backend.video.export.ffmpeg_exporter import video_export_output_root
+from apps.backend.video.export.ffmpeg_exporter import (
+    VideoExportError,
+    validate_timestamped_mp4_source,
+    video_export_output_root,
+)
 from apps.backend.video.io.ffmpeg import probe_video, probe_video_timing
-from apps.backend.video.upscaling.seedvr2 import calculate_seedvr2_target_dimensions
+from apps.backend.video.upscaling.seedvr2 import (
+    calculate_seedvr2_host_memory_admission,
+    calculate_seedvr2_target_dimensions,
+)
 from apps.backend.core.params.video import SeedVR2UpscaleOptions
 from apps.backend.use_cases.video_upscale import (
     VideoUpscaleRequest,
     VideoUpscaleSourceAdmission,
+    cleanup_video_upscale_source_admission,
+    cleanup_video_upscale_work_dir,
+    create_video_upscale_work_dir,
     video_upscale_work_root,
 )
 
@@ -67,9 +77,6 @@ _SEEDVR2_COLOR_CORRECTIONS = frozenset({"lab", "wavelet", "wavelet_adaptive", "h
 _SEEDVR2_BATCH_SIZES = frozenset({1, 5, 9, 13, 17, 33, 65, 129})
 _MIB = 1024 * 1024
 _GIB = 1024 * _MIB
-_HOST_TIMING_BASE_BYTES = 64 * _MIB
-_HOST_TIMING_BYTES_PER_FRAME = 4096
-_HOST_OPERATIONAL_RESERVE_BYTES = _GIB
 _WORK_SCRATCH_BASE_BYTES = 128 * _MIB
 _WORK_SCRATCH_BYTES_PER_PADDED_PIXEL = 5
 _OUTPUT_SCRATCH_BASE_BYTES = 128 * _MIB
@@ -251,80 +258,17 @@ def _preflight_video_upscale_source(
     source_path = Path(video_path).expanduser().resolve()
     if not source_path.is_file() or not os.access(source_path, os.R_OK):
         raise HTTPException(status_code=400, detail="'video_path' must identify a readable file")
-
     try:
-        source_probe = probe_video(str(source_path), count_frames=True)
-    except Exception as exc:
-        _router_log.warning("video-upscale source probe failed for %s: %s", source_path, exc, exc_info=False)
-        raise HTTPException(status_code=400, detail="'video_path' must identify a readable video file") from None
-    source_frame_count = source_probe.decoded_frame_count
-    if source_frame_count is None or source_frame_count <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Source video does not expose the exact decoded frame count required for SeedVR2 admission.",
-        )
-    if not source_probe.video_codec:
-        raise HTTPException(status_code=400, detail="Source video does not expose a verifiable video codec.")
-    if source_probe.has_audio and (
-        not source_probe.audio_codec
-        or source_probe.audio_duration_seconds is None
-        or source_probe.audio_start_seconds is None
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Source audio stream does not expose codec, duration, and start-time evidence "
-                "required for verified preservation."
-            ),
-        )
-
-    try:
-        target_width, target_height, padded_width, padded_height = calculate_seedvr2_target_dimensions(
-            source_width=source_probe.width,
-            source_height=source_probe.height,
-            options=options,
-        )
-    except Exception as exc:
-        _router_log.warning("video-upscale target geometry admission failed for %s: %s", source_path, exc, exc_info=False)
-        raise HTTPException(status_code=400, detail="Source video and target resolution produce invalid SeedVR2 geometry.") from None
-
-    host_timing_required_bytes = _HOST_TIMING_BASE_BYTES + source_frame_count * _HOST_TIMING_BYTES_PER_FRAME
-    try:
-        import psutil  # type: ignore
-
-        host_available_bytes = int(psutil.virtual_memory().available)
-    except Exception as exc:
-        _router_log.error("video-upscale host-memory admission failed: %s", exc, exc_info=False)
-        raise HTTPException(
-            status_code=500,
-            detail="SeedVR2 admission could not read current host-memory capacity.",
-        ) from None
-    if host_timing_required_bytes + _HOST_OPERATIONAL_RESERVE_BYTES > host_available_bytes:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "SeedVR2 source exceeds current host-memory admission for decoded timing: "
-                f"required_bytes={host_timing_required_bytes}, available_bytes={host_available_bytes}, "
-                f"reserve_bytes={_HOST_OPERATIONAL_RESERVE_BYTES}."
-            ),
-        )
-
-    padded_frame_pixels = padded_width * padded_height
-    work_frame_count = source_frame_count + int(options.prepend_frames or 0)
-    work_scratch_required_bytes = (
-        _WORK_SCRATCH_BASE_BYTES
-        + work_frame_count * padded_frame_pixels * _WORK_SCRATCH_BYTES_PER_PADDED_PIXEL
-    )
-    output_scratch_required_bytes = (
-        _OUTPUT_SCRATCH_BASE_BYTES
-        + source_frame_count * padded_frame_pixels * _OUTPUT_SCRATCH_BYTES_PER_PADDED_PIXEL
-    )
-    try:
+        source_size_bytes = int(source_path.stat().st_size)
+        if source_size_bytes <= 0:
+            raise HTTPException(status_code=400, detail="'video_path' must identify a non-empty video file")
         work_capacity_path = _nearest_existing_capacity_path(video_upscale_work_root())
         output_capacity_path = _nearest_existing_capacity_path(video_export_output_root())
         work_usage = shutil.disk_usage(work_capacity_path)
         output_usage = shutil.disk_usage(output_capacity_path)
         shared_scratch_filesystem = os.stat(work_capacity_path).st_dev == os.stat(output_capacity_path).st_dev
+    except HTTPException:
+        raise
     except Exception as exc:
         _router_log.error("video-upscale scratch admission failed: %s", exc, exc_info=False)
         raise HTTPException(
@@ -334,72 +278,229 @@ def _preflight_video_upscale_source(
 
     work_scratch_available_bytes = int(work_usage.free)
     output_scratch_available_bytes = int(output_usage.free)
-    if shared_scratch_filesystem:
-        combined_required_bytes = work_scratch_required_bytes + output_scratch_required_bytes
-        if combined_required_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > work_scratch_available_bytes:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "SeedVR2 source exceeds current shared scratch admission: "
-                    f"required_bytes={combined_required_bytes}, available_bytes={work_scratch_available_bytes}, "
-                    f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
-                ),
-            )
-    else:
-        if work_scratch_required_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > work_scratch_available_bytes:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "SeedVR2 source exceeds current task-work scratch admission: "
-                    f"required_bytes={work_scratch_required_bytes}, available_bytes={work_scratch_available_bytes}, "
-                    f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
-                ),
-            )
-        if output_scratch_required_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > output_scratch_available_bytes:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "SeedVR2 source exceeds current output scratch admission: "
-                    f"required_bytes={output_scratch_required_bytes}, available_bytes={output_scratch_available_bytes}, "
-                    f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
-                ),
-            )
-
-    try:
-        source_timing = probe_video_timing(str(source_path), source_probe=source_probe)
-    except Exception as exc:
-        _router_log.warning("video-upscale source timing admission failed for %s: %s", source_path, exc, exc_info=False)
-        raise HTTPException(
-            status_code=400,
-            detail="Source video does not expose decoded timing required for verified SeedVR2 export.",
-        ) from None
-    if source_timing.frame_count != source_frame_count:
+    if source_size_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > work_scratch_available_bytes:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Source decoded frame evidence changed during admission: "
-                f"count_probe={source_frame_count}, timing_probe={source_timing.frame_count}."
+                "SeedVR2 source snapshot exceeds current task-work scratch admission: "
+                f"required_bytes={source_size_bytes}, available_bytes={work_scratch_available_bytes}, "
+                f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
             ),
         )
 
-    return VideoUpscaleSourceAdmission(
-        path=str(source_path),
-        probe=source_probe,
-        timing=source_timing,
-        target_width=target_width,
-        target_height=target_height,
-        padded_width=padded_width,
-        padded_height=padded_height,
-        host_timing_required_bytes=host_timing_required_bytes,
-        host_available_bytes=host_available_bytes,
-        host_reserve_bytes=_HOST_OPERATIONAL_RESERVE_BYTES,
-        work_scratch_required_bytes=work_scratch_required_bytes,
-        work_scratch_available_bytes=work_scratch_available_bytes,
-        output_scratch_required_bytes=output_scratch_required_bytes,
-        output_scratch_available_bytes=output_scratch_available_bytes,
-        scratch_reserve_bytes=_SCRATCH_OPERATIONAL_RESERVE_BYTES,
-        shared_scratch_filesystem=shared_scratch_filesystem,
-    )
+    work_dir: Path | None = None
+    try:
+        work_dir = create_video_upscale_work_dir()
+        snapshot_suffix = source_path.suffix
+        snapshot_path = work_dir / f"source_snapshot{snapshot_suffix}"
+        with source_path.open("rb") as source_file, snapshot_path.open("xb") as snapshot_file:
+            shutil.copyfileobj(source_file, snapshot_file, length=8 * _MIB)
+            snapshot_file.flush()
+            os.fsync(snapshot_file.fileno())
+        snapshot_size_bytes = int(snapshot_path.stat().st_size)
+        if snapshot_size_bytes <= 0:
+            raise HTTPException(status_code=400, detail="SeedVR2 could not create a non-empty source snapshot.")
+
+        try:
+            source_probe = probe_video(str(snapshot_path), count_frames=True)
+        except Exception as exc:
+            _router_log.warning("video-upscale source probe failed for %s: %s", source_path, exc, exc_info=False)
+            raise HTTPException(status_code=400, detail="'video_path' must identify a readable video file") from None
+        source_frame_count = source_probe.decoded_frame_count
+        if source_frame_count is None or source_frame_count <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Source video does not expose the exact decoded frame count required for SeedVR2 admission.",
+            )
+        if not source_probe.video_codec:
+            raise HTTPException(status_code=400, detail="Source video does not expose a verifiable video codec.")
+        if source_probe.has_audio and (
+            not source_probe.audio_codec
+            or source_probe.audio_duration_seconds is None
+            or source_probe.audio_start_seconds is None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Source audio stream does not expose codec, duration, and start-time evidence "
+                    "required for verified preservation."
+                ),
+            )
+
+        try:
+            target_width, target_height, padded_width, padded_height = calculate_seedvr2_target_dimensions(
+                source_width=source_probe.width,
+                source_height=source_probe.height,
+                options=options,
+            )
+        except Exception as exc:
+            _router_log.warning(
+                "video-upscale target geometry admission failed for %s: %s",
+                source_path,
+                exc,
+                exc_info=False,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Source video and target resolution produce invalid SeedVR2 geometry.",
+            ) from None
+
+        try:
+            import psutil  # type: ignore
+
+            host_available_bytes = int(psutil.virtual_memory().available)
+            host_memory = calculate_seedvr2_host_memory_admission(
+                source_width=int(source_probe.width),
+                source_height=int(source_probe.height),
+                source_frame_count=int(source_frame_count),
+                target_width=target_width,
+                target_height=target_height,
+                padded_width=padded_width,
+                padded_height=padded_height,
+                options=options,
+                available_bytes=host_available_bytes,
+            )
+        except Exception as exc:
+            _router_log.error("video-upscale host-memory admission failed: %s", exc, exc_info=False)
+            raise HTTPException(
+                status_code=500,
+                detail="SeedVR2 admission could not calculate current host-memory capacity.",
+            ) from None
+
+        if bool(options.streaming) and not host_memory.streaming_admitted:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "SeedVR2 streaming cannot admit one frame within current host memory: "
+                    f"required_bytes={max(host_memory.streaming_first.required_bytes, host_memory.streaming_steady.required_bytes)}, "
+                    f"available_bytes={host_memory.available_bytes}, "
+                    f"reserve_bytes={host_memory.operational_reserve_bytes}."
+                ),
+            )
+        if bool(options.smart_fallback) and not host_memory.streaming_admitted:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "SeedVR2 smart fallback cannot admit its required streaming route within current host memory: "
+                    f"required_bytes={max(host_memory.streaming_first.required_bytes, host_memory.streaming_steady.required_bytes)}, "
+                    f"available_bytes={host_memory.available_bytes}, "
+                    f"reserve_bytes={host_memory.operational_reserve_bytes}."
+                ),
+            )
+        if not bool(options.streaming) and not bool(options.smart_fallback) and not host_memory.direct_admitted:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "SeedVR2 direct execution exceeds current host-memory admission and smart fallback is disabled: "
+                    f"required_bytes={host_memory.direct.required_bytes}, "
+                    f"available_bytes={host_memory.available_bytes}, "
+                    f"reserve_bytes={host_memory.operational_reserve_bytes}."
+                ),
+            )
+
+        padded_frame_pixels = padded_width * padded_height
+        work_frame_count = source_frame_count + int(options.prepend_frames or 0)
+        work_scratch_required_bytes = (
+            snapshot_size_bytes
+            + _WORK_SCRATCH_BASE_BYTES
+            + work_frame_count * padded_frame_pixels * _WORK_SCRATCH_BYTES_PER_PADDED_PIXEL
+        )
+        output_scratch_required_bytes = (
+            _OUTPUT_SCRATCH_BASE_BYTES
+            + source_frame_count * padded_frame_pixels * _OUTPUT_SCRATCH_BYTES_PER_PADDED_PIXEL
+        )
+        if shared_scratch_filesystem:
+            combined_required_bytes = work_scratch_required_bytes + output_scratch_required_bytes
+            if combined_required_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > work_scratch_available_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "SeedVR2 source exceeds current shared scratch admission: "
+                        f"required_bytes={combined_required_bytes}, available_bytes={work_scratch_available_bytes}, "
+                        f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
+                    ),
+                )
+        else:
+            if work_scratch_required_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > work_scratch_available_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "SeedVR2 source exceeds current task-work scratch admission: "
+                        f"required_bytes={work_scratch_required_bytes}, available_bytes={work_scratch_available_bytes}, "
+                        f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
+                    ),
+                )
+            if output_scratch_required_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > output_scratch_available_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "SeedVR2 source exceeds current output scratch admission: "
+                        f"required_bytes={output_scratch_required_bytes}, available_bytes={output_scratch_available_bytes}, "
+                        f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
+                    ),
+                )
+
+        try:
+            source_timing = probe_video_timing(str(snapshot_path), source_probe=source_probe)
+        except Exception as exc:
+            _router_log.warning(
+                "video-upscale source timing admission failed for %s: %s",
+                source_path,
+                exc,
+                exc_info=False,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Source video does not expose decoded timing required for verified SeedVR2 export.",
+            ) from None
+        if source_timing.frame_count != source_frame_count:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Source decoded frame evidence changed during admission: "
+                    f"count_probe={source_frame_count}, timing_probe={source_timing.frame_count}."
+                ),
+            )
+        try:
+            validate_timestamped_mp4_source(source_probe=source_probe, timing=source_timing)
+        except VideoExportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+
+        return VideoUpscaleSourceAdmission(
+            source_name=source_path.name,
+            snapshot_path=str(snapshot_path),
+            snapshot_size_bytes=snapshot_size_bytes,
+            work_dir=str(work_dir),
+            probe=source_probe,
+            timing=source_timing,
+            target_width=target_width,
+            target_height=target_height,
+            padded_width=padded_width,
+            padded_height=padded_height,
+            host_memory=host_memory,
+            work_scratch_required_bytes=work_scratch_required_bytes,
+            work_scratch_available_bytes=work_scratch_available_bytes,
+            output_scratch_required_bytes=output_scratch_required_bytes,
+            output_scratch_available_bytes=output_scratch_available_bytes,
+            scratch_reserve_bytes=_SCRATCH_OPERATIONAL_RESERVE_BYTES,
+            shared_scratch_filesystem=shared_scratch_filesystem,
+        )
+    except BaseException as exc:
+        if work_dir is not None:
+            try:
+                cleanup_video_upscale_work_dir(work_dir)
+            except RuntimeError as cleanup_error:
+                _router_log.error(
+                    "video-upscale preflight failed and source snapshot cleanup also failed: %s; cleanup=%s",
+                    exc,
+                    cleanup_error,
+                    exc_info=False,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="SeedVR2 preflight failed and could not remove its task-owned source snapshot.",
+                ) from exc
+        raise
 
 
 def build_router(
@@ -646,20 +747,26 @@ def build_router(
             video_path,
             options,
         )
-        request = VideoUpscaleRequest(
-            source=source_admission,
-            device=device,
-            options=options,
-        )
+        worker_owns_admission = False
+        try:
+            request = VideoUpscaleRequest(
+                source=source_admission,
+                device=device,
+                options=options,
+            )
 
-        loop = asyncio.get_running_loop()
-        entry = TaskEntry(loop)
-        task_id = f"task(api-video-upscale-{uuid4().hex})"
-        register_task(task_id, entry)
+            loop = asyncio.get_running_loop()
+            entry = TaskEntry(loop)
+            task_id = f"task(api-video-upscale-{uuid4().hex})"
+            register_task(task_id, entry)
 
-        from apps.backend.interfaces.api.tasks.video_upscale_tasks import run_video_upscale_task
+            from apps.backend.interfaces.api.tasks.video_upscale_tasks import run_video_upscale_task
 
-        run_video_upscale_task(task_id=task_id, request=request, entry=entry)
-        return {"task_id": task_id}
+            run_video_upscale_task(task_id=task_id, request=request, entry=entry)
+            worker_owns_admission = True
+            return {"task_id": task_id}
+        finally:
+            if not worker_owns_admission:
+                cleanup_video_upscale_source_admission(source_admission)
 
     return router

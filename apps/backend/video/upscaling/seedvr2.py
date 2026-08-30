@@ -6,15 +6,19 @@ License: PolyForm Noncommercial 1.0.0
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
-Purpose: Fail-loud SeedVR2 child-process runner for dedicated video upscaling.
-Prepares the deterministic SeedVR2 checkout and model directory, measures available accelerator memory, selects the approved direct or bounded
-streaming CLI invocation with upstream uniform-batch padding, terminates the complete child process group for task-scoped cancellation, drains
-diagnostics to EOF, and returns validated PNG paths without materializing source or output videos in the backend process.
+Purpose: Fail-loud SeedVR2 child-process runner and resource planner for dedicated video upscaling.
+Prepares the deterministic SeedVR2 checkout and model directory, models the exact upstream batch schedule and host-memory shape, measures
+available accelerator memory, selects the approved direct or bounded streaming CLI invocation, terminates the complete child process group for
+task-scoped cancellation, drains diagnostics to EOF, and returns validated PNG paths without materializing videos in the backend process.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `SeedVR2OutOfMemoryError` (class): Typed local execution failure that maps to the public out-of-memory task result.
 - `SeedVR2UpscaleResult` (dataclass): Validated child-output frame paths, dimensions, and runtime evidence for one SeedVR2 run.
+- `SeedVR2BatchSchedule` (dataclass): Exact retained upstream batch schedule including uniform and mandatory 4n+1 padding.
+- `SeedVR2HostMemoryEstimate` (dataclass): Auditable host-memory estimate for one direct or streaming chunk shape.
+- `SeedVR2HostMemoryAdmission` (dataclass): Router-measured host-memory admission shared with runtime plan selection.
 - `calculate_seedvr2_target_dimensions` (function): Computes the exact target and padded geometry used by runtime and public admission.
+- `calculate_seedvr2_host_memory_admission` (function): Computes direct and host-bounded streaming admission from the upstream schedule.
 - `run_seedvr2_upscaling` (function): Executes the selected direct or streaming SeedVR2 child route for one source video.
 - `__all__` (constant): Explicit export list for this module.
 """
@@ -33,7 +37,7 @@ import sys
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -62,6 +66,16 @@ _GIB = 1024 * _MIB
 _MINIMUM_OPERATIONAL_RESERVE_BYTES = _GIB
 _RUNTIME_RESERVATION_BYTES = 768 * _MIB
 _PER_PADDED_OUTPUT_PIXEL_BYTES = 72
+_HOST_MEMORY_BASE_BYTES = 64 * _MIB
+_HOST_MEMORY_OPERATIONAL_RESERVE_BYTES = _GIB
+_TIMING_EVIDENCE_BYTES_PER_FRAME = 4096
+_RGB_CHANNELS = 3
+_FLOAT32_BYTES = 4
+_COMPUTE_DTYPE_BYTES = 2
+_UINT8_BYTES = 1
+_LATENT_CHANNELS = 16
+_LATENT_SPATIAL_DOWNSAMPLE = 8
+_LATENT_TEMPORAL_DOWNSAMPLE = 4
 _MODEL_RESERVATION_BYTES = {
     "seedvr2_ema_3b_fp16.safetensors": 8 * _GIB,
     "seedvr2_ema_7b_fp16.safetensors": 16 * _GIB,
@@ -103,6 +117,92 @@ class SeedVR2UpscaleResult:
 
 
 @dataclass(frozen=True, slots=True)
+class SeedVR2BatchSchedule:
+    processing_frames: int
+    batch_count: int
+    peak_effective_batch_frames: int
+    total_batch_frame_instances: int
+    total_latent_frame_instances: int
+    uniform_padding_frames: int
+    four_n_one_padding_frames: int
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "processing_frames": int(self.processing_frames),
+            "batch_count": int(self.batch_count),
+            "peak_effective_batch_frames": int(self.peak_effective_batch_frames),
+            "total_batch_frame_instances": int(self.total_batch_frame_instances),
+            "total_latent_frame_instances": int(self.total_latent_frame_instances),
+            "uniform_padding_frames": int(self.uniform_padding_frames),
+            "four_n_one_padding_frames": int(self.four_n_one_padding_frames),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SeedVR2HostMemoryEstimate:
+    new_frames: int
+    retained_context_frames: int
+    required_bytes: int
+    timing_evidence_bytes: int
+    decoder_peak_bytes: int
+    retained_context_bytes: int
+    concatenated_float32_bytes: int
+    processing_float16_bytes: int
+    retained_latent_bytes: int
+    final_output_bytes: int
+    peak_batch_bytes: int
+    png_conversion_bytes: int
+    schedule: SeedVR2BatchSchedule
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "new_frames": int(self.new_frames),
+            "retained_context_frames": int(self.retained_context_frames),
+            "required_bytes": int(self.required_bytes),
+            "timing_evidence_bytes": int(self.timing_evidence_bytes),
+            "decoder_peak_bytes": int(self.decoder_peak_bytes),
+            "retained_context_bytes": int(self.retained_context_bytes),
+            "concatenated_float32_bytes": int(self.concatenated_float32_bytes),
+            "processing_float16_bytes": int(self.processing_float16_bytes),
+            "retained_latent_bytes": int(self.retained_latent_bytes),
+            "final_output_bytes": int(self.final_output_bytes),
+            "peak_batch_bytes": int(self.peak_batch_bytes),
+            "png_conversion_bytes": int(self.png_conversion_bytes),
+            "schedule": self.schedule.as_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SeedVR2HostMemoryAdmission:
+    available_bytes: int
+    operational_reserve_bytes: int
+    direct: SeedVR2HostMemoryEstimate
+    streaming_chunk_size: int
+    streaming_first: SeedVR2HostMemoryEstimate
+    streaming_steady: SeedVR2HostMemoryEstimate
+
+    @property
+    def direct_admitted(self) -> bool:
+        return self.direct.required_bytes <= self.available_bytes
+
+    @property
+    def streaming_admitted(self) -> bool:
+        return self.streaming_chunk_size > 0
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "available_bytes": int(self.available_bytes),
+            "operational_reserve_bytes": int(self.operational_reserve_bytes),
+            "direct_admitted": bool(self.direct_admitted),
+            "streaming_admitted": bool(self.streaming_admitted),
+            "streaming_chunk_size": int(self.streaming_chunk_size),
+            "direct": self.direct.as_dict(),
+            "streaming_first": self.streaming_first.as_dict(),
+            "streaming_steady": self.streaming_steady.as_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class _SeedVR2RepoResolution:
     repo_dir: Path
     uses_default_repo_path: bool
@@ -139,9 +239,11 @@ class _SeedVR2ExecutionPlan:
     chunk_size: int
     selection_reason: str
     direct_required_bytes: int
-    direct_processing_frames: int
-    direct_uniform_padding_frames: int
+    direct_schedule: SeedVR2BatchSchedule
+    selected_first_schedule: SeedVR2BatchSchedule
+    selected_steady_schedule: SeedVR2BatchSchedule
     budget: _SeedVR2MemoryBudget
+    host_memory: SeedVR2HostMemoryAdmission
 
 
 def _truncate_text(text: str, *, max_chars: int) -> str:
@@ -500,6 +602,285 @@ def calculate_seedvr2_target_dimensions(
     return target_width, target_height, padded_width, padded_height
 
 
+def _calculate_seedvr2_batch_schedule(
+    *,
+    processing_frames: int,
+    options: SeedVR2UpscaleOptions,
+) -> SeedVR2BatchSchedule:
+    if processing_frames <= 0:
+        raise RuntimeError(f"SeedVR2 processing frame count must be positive, got {processing_frames}.")
+    batch_size = int(options.batch_size or 0)
+    temporal_overlap = int(options.temporal_overlap or 0)
+    if batch_size <= 0:
+        raise RuntimeError(f"SeedVR2 batch_size must be positive, got {batch_size}.")
+    if temporal_overlap < 0 or temporal_overlap >= batch_size:
+        raise RuntimeError(
+            "SeedVR2 batch scheduling requires temporal_overlap greater than or equal to 0 and lower than batch_size."
+        )
+
+    step = batch_size - temporal_overlap if temporal_overlap > 0 else batch_size
+    batch_count = 0
+    peak_effective_batch_frames = 0
+    total_batch_frame_instances = 0
+    total_latent_frame_instances = 0
+    uniform_padding_frames = 0
+    four_n_one_padding_frames = 0
+    for start in range(0, processing_frames, step):
+        raw_batch_frames = min(batch_size, processing_frames - start)
+        if start > 0 and raw_batch_frames <= temporal_overlap:
+            break
+        uniform_batch_frames = raw_batch_frames
+        if bool(options.uniform_batch_size) and raw_batch_frames < batch_size:
+            uniform_batch_frames = batch_size
+        effective_batch_frames = uniform_batch_frames
+        if effective_batch_frames % 4 != 1:
+            effective_batch_frames = ((effective_batch_frames - 1) // 4 + 1) * 4 + 1
+
+        batch_count += 1
+        peak_effective_batch_frames = max(peak_effective_batch_frames, effective_batch_frames)
+        total_batch_frame_instances += effective_batch_frames
+        total_latent_frame_instances += (
+            (effective_batch_frames - 1) // _LATENT_TEMPORAL_DOWNSAMPLE + 1
+        )
+        uniform_padding_frames += uniform_batch_frames - raw_batch_frames
+        four_n_one_padding_frames += effective_batch_frames - uniform_batch_frames
+
+    if batch_count <= 0 or peak_effective_batch_frames <= 0:
+        raise RuntimeError("SeedVR2 batch scheduling produced no retained upstream batch.")
+    return SeedVR2BatchSchedule(
+        processing_frames=processing_frames,
+        batch_count=batch_count,
+        peak_effective_batch_frames=peak_effective_batch_frames,
+        total_batch_frame_instances=total_batch_frame_instances,
+        total_latent_frame_instances=total_latent_frame_instances,
+        uniform_padding_frames=uniform_padding_frames,
+        four_n_one_padding_frames=four_n_one_padding_frames,
+    )
+
+
+def _calculate_host_memory_estimate(
+    *,
+    new_frames: int,
+    retained_context_frames: int,
+    processing_frames: int,
+    source_frame_count: int,
+    source_width: int,
+    source_height: int,
+    target_width: int,
+    target_height: int,
+    padded_width: int,
+    padded_height: int,
+    options: SeedVR2UpscaleOptions,
+    operational_reserve_bytes: int,
+) -> SeedVR2HostMemoryEstimate:
+    schedule = _calculate_seedvr2_batch_schedule(
+        processing_frames=processing_frames,
+        options=options,
+    )
+    timing_evidence_bytes = source_frame_count * _TIMING_EVIDENCE_BYTES_PER_FRAME
+    source_pixels = source_width * source_height
+    target_pixels = target_width * target_height
+    padded_pixels = padded_width * padded_height
+    source_float32_frame_bytes = source_pixels * _RGB_CHANNELS * _FLOAT32_BYTES
+    decoder_peak_bytes = 2 * new_frames * source_float32_frame_bytes
+    retained_context_bytes = retained_context_frames * source_float32_frame_bytes
+    concatenated_float32_bytes = (
+        processing_frames * source_float32_frame_bytes if retained_context_frames > 0 else 0
+    )
+    processing_float16_bytes = (
+        processing_frames * source_pixels * _RGB_CHANNELS * _COMPUTE_DTYPE_BYTES
+    )
+    latent_width = padded_width // _LATENT_SPATIAL_DOWNSAMPLE
+    latent_height = padded_height // _LATENT_SPATIAL_DOWNSAMPLE
+    retained_latent_bytes = (
+        schedule.total_latent_frame_instances
+        * latent_width
+        * latent_height
+        * _LATENT_CHANNELS
+        * _COMPUTE_DTYPE_BYTES
+    )
+    final_output_bytes = (
+        processing_frames * target_pixels * _RGB_CHANNELS * _COMPUTE_DTYPE_BYTES
+    )
+    peak_batch_bytes = (
+        schedule.peak_effective_batch_frames
+        * padded_pixels
+        * _RGB_CHANNELS
+        * _COMPUTE_DTYPE_BYTES
+    )
+    png_conversion_bytes = processing_frames * target_pixels * _RGB_CHANNELS * _UINT8_BYTES
+    required_bytes = (
+        operational_reserve_bytes
+        + _HOST_MEMORY_BASE_BYTES
+        + timing_evidence_bytes
+        + decoder_peak_bytes
+        + retained_context_bytes
+        + concatenated_float32_bytes
+        + processing_float16_bytes
+        + retained_latent_bytes
+        + final_output_bytes
+        + peak_batch_bytes
+        + png_conversion_bytes
+    )
+    return SeedVR2HostMemoryEstimate(
+        new_frames=new_frames,
+        retained_context_frames=retained_context_frames,
+        required_bytes=required_bytes,
+        timing_evidence_bytes=timing_evidence_bytes,
+        decoder_peak_bytes=decoder_peak_bytes,
+        retained_context_bytes=retained_context_bytes,
+        concatenated_float32_bytes=concatenated_float32_bytes,
+        processing_float16_bytes=processing_float16_bytes,
+        retained_latent_bytes=retained_latent_bytes,
+        final_output_bytes=final_output_bytes,
+        peak_batch_bytes=peak_batch_bytes,
+        png_conversion_bytes=png_conversion_bytes,
+        schedule=schedule,
+    )
+
+
+def _calculate_streaming_host_estimates(
+    *,
+    new_frames: int,
+    source_width: int,
+    source_height: int,
+    source_frame_count: int,
+    target_width: int,
+    target_height: int,
+    padded_width: int,
+    padded_height: int,
+    options: SeedVR2UpscaleOptions,
+    operational_reserve_bytes: int,
+) -> tuple[SeedVR2HostMemoryEstimate, SeedVR2HostMemoryEstimate]:
+    first_processing_frames = new_frames + int(options.prepend_frames or 0)
+    first = _calculate_host_memory_estimate(
+        new_frames=new_frames,
+        retained_context_frames=0,
+        processing_frames=first_processing_frames,
+        source_frame_count=source_frame_count,
+        source_width=source_width,
+        source_height=source_height,
+        target_width=target_width,
+        target_height=target_height,
+        padded_width=padded_width,
+        padded_height=padded_height,
+        options=options,
+        operational_reserve_bytes=operational_reserve_bytes,
+    )
+    if new_frames >= source_frame_count:
+        return first, first
+    retained_context_frames = min(int(options.temporal_overlap or 0), new_frames)
+    steady = _calculate_host_memory_estimate(
+        new_frames=new_frames,
+        retained_context_frames=retained_context_frames,
+        processing_frames=new_frames + retained_context_frames,
+        source_frame_count=source_frame_count,
+        source_width=source_width,
+        source_height=source_height,
+        target_width=target_width,
+        target_height=target_height,
+        padded_width=padded_width,
+        padded_height=padded_height,
+        options=options,
+        operational_reserve_bytes=operational_reserve_bytes,
+    )
+    return first, steady
+
+
+def calculate_seedvr2_host_memory_admission(
+    *,
+    source_width: int,
+    source_height: int,
+    source_frame_count: int,
+    target_width: int,
+    target_height: int,
+    padded_width: int,
+    padded_height: int,
+    options: SeedVR2UpscaleOptions,
+    available_bytes: int,
+) -> SeedVR2HostMemoryAdmission:
+    """Calculate direct and largest host-safe streaming shapes from exact upstream scheduling."""
+
+    if source_frame_count <= 0:
+        raise RuntimeError(f"SeedVR2 source frame count must be positive, got {source_frame_count}.")
+    if source_width <= 0 or source_height <= 0 or target_width <= 0 or target_height <= 0:
+        raise RuntimeError("SeedVR2 host admission requires positive source and target dimensions.")
+    if padded_width < target_width or padded_height < target_height:
+        raise RuntimeError("SeedVR2 padded dimensions cannot be smaller than target dimensions.")
+    if available_bytes <= 0:
+        raise RuntimeError(f"SeedVR2 available host memory must be positive, got {available_bytes}.")
+
+    operational_reserve_bytes = _HOST_MEMORY_OPERATIONAL_RESERVE_BYTES
+    direct = _calculate_host_memory_estimate(
+        new_frames=source_frame_count,
+        retained_context_frames=0,
+        processing_frames=source_frame_count + int(options.prepend_frames or 0),
+        source_frame_count=source_frame_count,
+        source_width=source_width,
+        source_height=source_height,
+        target_width=target_width,
+        target_height=target_height,
+        padded_width=padded_width,
+        padded_height=padded_height,
+        options=options,
+        operational_reserve_bytes=operational_reserve_bytes,
+    )
+
+    maximum_streaming_frames = source_frame_count - 1 if source_frame_count > 1 else 1
+    minimum_first, minimum_steady = _calculate_streaming_host_estimates(
+        new_frames=1,
+        source_width=source_width,
+        source_height=source_height,
+        source_frame_count=source_frame_count,
+        target_width=target_width,
+        target_height=target_height,
+        padded_width=padded_width,
+        padded_height=padded_height,
+        options=options,
+        operational_reserve_bytes=operational_reserve_bytes,
+    )
+    streaming_chunk_size = 0
+    streaming_first = minimum_first
+    streaming_steady = minimum_steady
+    if max(minimum_first.required_bytes, minimum_steady.required_bytes) <= available_bytes:
+        low = 1
+        high = maximum_streaming_frames
+        while low <= high:
+            candidate = (low + high) // 2
+            candidate_first, candidate_steady = _calculate_streaming_host_estimates(
+                new_frames=candidate,
+                source_width=source_width,
+                source_height=source_height,
+                source_frame_count=source_frame_count,
+                target_width=target_width,
+                target_height=target_height,
+                padded_width=padded_width,
+                padded_height=padded_height,
+                options=options,
+                operational_reserve_bytes=operational_reserve_bytes,
+            )
+            candidate_required_bytes = max(
+                candidate_first.required_bytes,
+                candidate_steady.required_bytes,
+            )
+            if candidate_required_bytes <= available_bytes:
+                streaming_chunk_size = candidate
+                streaming_first = candidate_first
+                streaming_steady = candidate_steady
+                low = candidate + 1
+            else:
+                high = candidate - 1
+
+    return SeedVR2HostMemoryAdmission(
+        available_bytes=available_bytes,
+        operational_reserve_bytes=operational_reserve_bytes,
+        direct=direct,
+        streaming_chunk_size=streaming_chunk_size,
+        streaming_first=streaming_first,
+        streaming_steady=streaming_steady,
+    )
+
+
 def _read_accelerator_memory(
     *,
     component_device: str | None,
@@ -609,59 +990,71 @@ def _streaming_chunk_size(
     budget: _SeedVR2MemoryBudget,
     source_frame_count: int,
     options: SeedVR2UpscaleOptions,
+    host_memory: SeedVR2HostMemoryAdmission,
 ) -> int:
     if source_frame_count <= 0:
         raise RuntimeError(f"SeedVR2 source frame count must be positive, got {source_frame_count}.")
-    temporal_context = int(options.temporal_overlap or 0)
-    priming_context = int(options.prepend_frames or 0)
+    if not host_memory.streaming_admitted:
+        required_bytes = max(
+            host_memory.streaming_first.required_bytes,
+            host_memory.streaming_steady.required_bytes,
+        )
+        raise SeedVR2OutOfMemoryError(
+            "out of memory: SeedVR2 streaming cannot admit one new frame within the measured host-memory reserve; "
+            f"required_bytes={required_bytes}, available_bytes={host_memory.available_bytes}, "
+            f"reserve_bytes={host_memory.operational_reserve_bytes}."
+        )
     available_frame_slots = budget.usable_frame_bytes // budget.per_frame_estimate_bytes
-    maximum_new_frames = min(
-        int(available_frame_slots) - temporal_context - priming_context,
-        source_frame_count - 1 if source_frame_count > 1 else 1,
-    )
-    while maximum_new_frames >= 1:
-        processing_frames = maximum_new_frames + temporal_context + priming_context
-        admitted_frames = _upstream_admitted_frame_count(
-            processing_frames=processing_frames,
+    maximum_new_frames = min(host_memory.streaming_chunk_size, source_frame_count)
+    low = 1
+    high = maximum_new_frames
+    selected = 0
+    while low <= high:
+        candidate = (low + high) // 2
+        first_schedule, steady_schedule = _calculate_streaming_batch_schedules(
+            new_frames=candidate,
+            source_frame_count=source_frame_count,
             options=options,
         )
-        if admitted_frames <= available_frame_slots:
-            return maximum_new_frames
-        maximum_new_frames -= 1
-    if maximum_new_frames < 1:
+        peak_effective_batch_frames = max(
+            first_schedule.peak_effective_batch_frames,
+            steady_schedule.peak_effective_batch_frames,
+        )
+        if peak_effective_batch_frames <= available_frame_slots:
+            selected = candidate
+            low = candidate + 1
+        else:
+            high = candidate - 1
+    if selected <= 0:
         raise SeedVR2OutOfMemoryError(
             "out of memory: SeedVR2 streaming cannot admit even one new frame after the measured VRAM reserve; "
             f"available_bytes={budget.available_bytes}, reserve_bytes={budget.operational_reserve_bytes}, "
             f"model_bytes={budget.model_reservation_bytes}, runtime_bytes={budget.runtime_reservation_bytes}, "
-            f"per_frame_bytes={budget.per_frame_estimate_bytes}, temporal_context={temporal_context}, "
-            f"priming_context={priming_context}."
+            f"per_frame_bytes={budget.per_frame_estimate_bytes}."
         )
-    raise RuntimeError("SeedVR2 streaming admission failed to select a positive chunk size.")
+    return selected
 
 
-def _upstream_admitted_frame_count(
+def _calculate_streaming_batch_schedules(
     *,
-    processing_frames: int,
+    new_frames: int,
+    source_frame_count: int,
     options: SeedVR2UpscaleOptions,
-) -> int:
-    if processing_frames <= 0:
-        raise RuntimeError(f"SeedVR2 processing frame count must be positive, got {processing_frames}.")
-    if not bool(options.uniform_batch_size):
-        return processing_frames
-    batch_size = int(options.batch_size or 0)
-    temporal_overlap = int(options.temporal_overlap or 0)
-    if batch_size <= 0:
-        raise RuntimeError(f"SeedVR2 batch_size must be positive, got {batch_size}.")
-    step = batch_size - temporal_overlap if temporal_overlap > 0 else batch_size
-    if step <= 0:
-        raise RuntimeError(
-            "SeedVR2 uniform-batch admission requires temporal_overlap lower than batch_size."
-        )
-    final_batch_index = max(0, ((processing_frames - temporal_overlap - 1) // step) * step)
-    final_batch_frames = min(batch_size, processing_frames - final_batch_index)
-    if final_batch_frames <= 0:
-        raise RuntimeError("SeedVR2 uniform-batch admission produced an empty final batch.")
-    return processing_frames + (batch_size - final_batch_frames)
+) -> tuple[SeedVR2BatchSchedule, SeedVR2BatchSchedule]:
+    if new_frames <= 0:
+        raise RuntimeError(f"SeedVR2 streaming new-frame count must be positive, got {new_frames}.")
+    first_schedule = _calculate_seedvr2_batch_schedule(
+        processing_frames=new_frames + int(options.prepend_frames or 0),
+        options=options,
+    )
+    if new_frames >= source_frame_count:
+        return first_schedule, first_schedule
+    retained_context_frames = min(int(options.temporal_overlap or 0), new_frames)
+    steady_schedule = _calculate_seedvr2_batch_schedule(
+        processing_frames=new_frames + retained_context_frames,
+        options=options,
+    )
+    return first_schedule, steady_schedule
 
 
 def _select_execution_plan(
@@ -671,6 +1064,7 @@ def _select_execution_plan(
     options: SeedVR2UpscaleOptions,
     component_device: str | None,
     cuda_device_index: int | None,
+    host_memory: SeedVR2HostMemoryAdmission,
 ) -> _SeedVR2ExecutionPlan:
     if bool(options.streaming) and bool(options.smart_fallback):
         raise RuntimeError("SeedVR2 streaming and smart_fallback cannot both be enabled.")
@@ -688,54 +1082,84 @@ def _select_execution_plan(
         cuda_device_index=cuda_device_index,
     )
     processing_frames = int(source_frame_count) + int(options.prepend_frames or 0)
-    admitted_processing_frames = _upstream_admitted_frame_count(
+    direct_schedule = _calculate_seedvr2_batch_schedule(
         processing_frames=processing_frames,
         options=options,
     )
-    uniform_padding_frames = admitted_processing_frames - processing_frames
     direct_required_bytes = (
         budget.operational_reserve_bytes
         + budget.model_reservation_bytes
         + budget.runtime_reservation_bytes
-        + admitted_processing_frames * budget.per_frame_estimate_bytes
+        + direct_schedule.peak_effective_batch_frames * budget.per_frame_estimate_bytes
     )
     if bool(options.streaming):
+        chunk_size = _streaming_chunk_size(
+            budget=budget,
+            source_frame_count=source_frame_count,
+            options=options,
+            host_memory=host_memory,
+        )
+        first_schedule, steady_schedule = _calculate_streaming_batch_schedules(
+            new_frames=chunk_size,
+            source_frame_count=source_frame_count,
+            options=options,
+        )
         return _SeedVR2ExecutionPlan(
             mode="streaming",
-            chunk_size=_streaming_chunk_size(
-                budget=budget,
-                source_frame_count=source_frame_count,
-                options=options,
-            ),
+            chunk_size=chunk_size,
             selection_reason="streaming_requested",
             direct_required_bytes=direct_required_bytes,
-            direct_processing_frames=admitted_processing_frames,
-            direct_uniform_padding_frames=uniform_padding_frames,
+            direct_schedule=direct_schedule,
+            selected_first_schedule=first_schedule,
+            selected_steady_schedule=steady_schedule,
             budget=budget,
+            host_memory=host_memory,
         )
-    if direct_required_bytes <= budget.available_bytes:
+    if host_memory.direct_admitted and direct_required_bytes <= budget.available_bytes:
         return _SeedVR2ExecutionPlan(
             mode="direct",
             chunk_size=0,
-            selection_reason="direct_vram_admitted",
+            selection_reason="direct_host_and_vram_admitted",
             direct_required_bytes=direct_required_bytes,
-            direct_processing_frames=admitted_processing_frames,
-            direct_uniform_padding_frames=uniform_padding_frames,
+            direct_schedule=direct_schedule,
+            selected_first_schedule=direct_schedule,
+            selected_steady_schedule=direct_schedule,
             budget=budget,
+            host_memory=host_memory,
         )
     if bool(options.smart_fallback):
+        chunk_size = _streaming_chunk_size(
+            budget=budget,
+            source_frame_count=source_frame_count,
+            options=options,
+            host_memory=host_memory,
+        )
+        first_schedule, steady_schedule = _calculate_streaming_batch_schedules(
+            new_frames=chunk_size,
+            source_frame_count=source_frame_count,
+            options=options,
+        )
+        selection_reason = (
+            "smart_fallback_after_direct_host_capacity_rejection"
+            if not host_memory.direct_admitted
+            else "smart_fallback_after_direct_vram_capacity_rejection"
+        )
         return _SeedVR2ExecutionPlan(
             mode="streaming",
-            chunk_size=_streaming_chunk_size(
-                budget=budget,
-                source_frame_count=source_frame_count,
-                options=options,
-            ),
-            selection_reason="smart_fallback_after_direct_capacity_rejection",
+            chunk_size=chunk_size,
+            selection_reason=selection_reason,
             direct_required_bytes=direct_required_bytes,
-            direct_processing_frames=admitted_processing_frames,
-            direct_uniform_padding_frames=uniform_padding_frames,
+            direct_schedule=direct_schedule,
+            selected_first_schedule=first_schedule,
+            selected_steady_schedule=steady_schedule,
             budget=budget,
+            host_memory=host_memory,
+        )
+    if not host_memory.direct_admitted:
+        raise SeedVR2OutOfMemoryError(
+            "out of memory: SeedVR2 direct execution exceeds measured available host memory and smart fallback is disabled; "
+            f"required_bytes={host_memory.direct.required_bytes}, available_bytes={host_memory.available_bytes}, "
+            f"reserve_bytes={host_memory.operational_reserve_bytes}."
         )
     raise SeedVR2OutOfMemoryError(
         "out of memory: SeedVR2 direct GPU execution exceeds measured available VRAM and smart fallback is disabled; "
@@ -1074,8 +1498,12 @@ def _plan_metadata(plan: _SeedVR2ExecutionPlan) -> dict[str, object]:
         "selection_reason": plan.selection_reason,
         "chunk_size": int(plan.chunk_size),
         "direct_required_bytes": int(plan.direct_required_bytes),
-        "direct_processing_frames": int(plan.direct_processing_frames),
-        "direct_uniform_padding_frames": int(plan.direct_uniform_padding_frames),
+        "direct_schedule": plan.direct_schedule.as_dict(),
+        "selected_schedule": {
+            "first_chunk": plan.selected_first_schedule.as_dict(),
+            "steady_chunk": plan.selected_steady_schedule.as_dict(),
+        },
+        "host_memory": plan.host_memory.as_dict(),
         "device": budget.device_label,
         "memory_metric": budget.metric,
         "available_bytes": int(budget.available_bytes),
@@ -1096,6 +1524,7 @@ def run_seedvr2_upscaling(
     output_dir: str | Path,
     options: SeedVR2UpscaleOptions,
     component_device: str | None,
+    host_memory: SeedVR2HostMemoryAdmission,
     should_cancel: Callable[[], bool] | None = None,
     logger_: logging.Logger | None = None,
 ) -> SeedVR2UpscaleResult:
@@ -1121,11 +1550,12 @@ def run_seedvr2_upscaling(
         options=options,
         component_device=component_device,
         cuda_device_index=cuda_device_index,
+        host_memory=host_memory,
     )
     selected_plan = plan
     fallback_attempted = (
         plan.mode == "streaming"
-        and plan.selection_reason == "smart_fallback_after_direct_capacity_rejection"
+        and plan.selection_reason.startswith("smart_fallback_after_direct_")
     )
     try:
         frame_paths, output_width, output_height, removed_priming_frames, child_output = _run_plan(
@@ -1153,9 +1583,14 @@ def run_seedvr2_upscaling(
             ),
             component_device=component_device,
             cuda_device_index=cuda_device_index,
+            host_memory=host_memory,
         )
         if selected_plan.mode != "streaming":
             raise RuntimeError("SeedVR2 smart-fallback retry did not produce a streaming plan.")
+        selected_plan = replace(
+            selected_plan,
+            selection_reason="smart_fallback_after_direct_oom",
+        )
         frame_paths, output_width, output_height, removed_priming_frames, child_output = _run_plan(
             source_path=resolved_source_path,
             output_root=output_base_dir / "streaming_after_direct_oom",
@@ -1213,8 +1648,12 @@ def run_seedvr2_upscaling(
 
 
 __all__ = [
+    "SeedVR2BatchSchedule",
+    "SeedVR2HostMemoryAdmission",
+    "SeedVR2HostMemoryEstimate",
     "SeedVR2OutOfMemoryError",
     "SeedVR2UpscaleResult",
+    "calculate_seedvr2_host_memory_admission",
     "calculate_seedvr2_target_dimensions",
     "run_seedvr2_upscaling",
 ]

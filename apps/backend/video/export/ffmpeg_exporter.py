@@ -7,8 +7,8 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Encode frame sequences to a video container via ffmpeg (mp4/webm/gif).
-Writes CFR frame sequences to a workspace-local temp dir, and also builds verified timestamp-aware MP4 artifacts from staged PNG paths before
-ordered sidecar-before-media publication under `/api/output/{rel_path}`, including terminal VFR duration and relative source A/V-origin proof.
+Writes CFR frame sequences to a workspace-local temp dir, and also validates and builds verified timestamp-aware MP4 artifacts from staged PNG
+paths before atomic directory publication under `/api/output/{rel_path}`, including terminal VFR duration and relative source A/V-origin proof.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `VideoExportError` (class): Explicit export error surfaced when ffmpeg/Pillow or encoding fails.
@@ -16,10 +16,11 @@ Symbols (top-level; keep in sync; no ghosts):
 - `video_export_output_root` (function): Resolves the repo-local output root (`CODEX_ROOT/output`).
 - `_sanitize_filename_prefix` (function): Sanitizes a user/task-provided filename prefix for safe output paths.
 - `resolve_video_export_container` (function): Maps a format token to an output container + codec kind.
+- `validate_timestamped_mp4_source` (function): Validates source timing and AAC stream-copy evidence before SeedVR2 execution.
 - `_audio_codec_for` (function): Chooses an audio codec for a given output container.
-- `VideoExportResult` (dataclass): Export result container (saved flag + path/rel_path/mime + metadata).
+- `VideoExportResult` (dataclass): Export result container (saved flag + artifact root/path/rel_path/mime + metadata).
 - `export_video` (function): Main entrypoint; writes frames and runs ffmpeg to produce the final video file.
-- `export_timestamped_video` (function): Builds, verifies, and ordered-publishes a VFR MP4 from ordered frame paths and source timing.
+- `export_timestamped_video` (function): Builds, verifies, and atomically publishes a VFR MP4 plus metadata from ordered frame paths.
 """
 
 from __future__ import annotations
@@ -108,6 +109,7 @@ def _audio_codec_for(container: str) -> str | None:
 @dataclass(frozen=True)
 class VideoExportResult:
     saved: bool
+    artifact_root: str | None = None
     path: str | None = None
     metadata_path: str | None = None
     rel_path: str | None = None
@@ -126,6 +128,7 @@ _TIMING_TOLERANCE_SECONDS = 0.001
 _AUDIO_DURATION_TOLERANCE_SECONDS = 0.050
 _AUDIO_ORIGIN_TOLERANCE_SECONDS = 0.001
 _TIMESTAMP_MANIFEST_FRAMERATE = 1_000_000
+_TIMESTAMPED_MP4_AUDIO_CODEC = "aac"
 _PROCESS_OUTPUT_LIMIT = 4000
 _PROCESS_TERMINATE_TIMEOUT_SECONDS = 5.0
 
@@ -142,6 +145,39 @@ def _expected_timestamped_video_duration(timing: VideoTiming) -> float:
         return expected_video_duration_seconds(timing)
     except Mp4TimingError as exc:
         raise VideoExportError(str(exc)) from exc
+
+
+def validate_timestamped_mp4_source(*, source_probe: VideoProbe, timing: VideoTiming) -> None:
+    """Validate the fixed timestamped H.264 MP4 source contract before expensive execution."""
+
+    if not timing.frames:
+        raise VideoExportError("Timestamp-aware export requires decoded source timing.")
+    if Path(source_probe.path).expanduser().resolve() != Path(timing.path).expanduser().resolve():
+        raise VideoExportError("Timestamp-aware export source probe and decoded timing refer to different files.")
+    if source_probe.decoded_frame_count != timing.frame_count:
+        raise VideoExportError(
+            "Timestamp-aware export source frame evidence is inconsistent: "
+            f"probe={source_probe.decoded_frame_count}, timing={timing.frame_count}."
+        )
+    first_video_origin = float(timing.frames[0].presentation_seconds)
+    if not math.isfinite(first_video_origin):
+        raise VideoExportError("Timestamp-aware export requires a finite decoded video-stream origin.")
+    _expected_timestamped_video_duration(timing)
+
+    if not source_probe.has_audio:
+        return
+    audio_codec = str(source_probe.audio_codec or "").strip().lower()
+    if audio_codec != _TIMESTAMPED_MP4_AUDIO_CODEC:
+        raise VideoExportError(
+            "Timestamp-aware MP4 export supports stream-copy source audio only when the codec is "
+            f"'{_TIMESTAMPED_MP4_AUDIO_CODEC}'; got {audio_codec or 'unknown'!r}."
+        )
+    audio_duration = source_probe.audio_duration_seconds
+    if audio_duration is None or not math.isfinite(float(audio_duration)) or float(audio_duration) <= 0.0:
+        raise VideoExportError("Timestamp-aware export requires a positive finite source-audio duration.")
+    audio_origin = source_probe.audio_start_seconds
+    if audio_origin is None or not math.isfinite(float(audio_origin)):
+        raise VideoExportError("Timestamp-aware export requires a finite source-audio stream origin.")
 
 
 def _patch_mp4_terminal_duration(*, staged_path: Path, timing: VideoTiming) -> None:
@@ -442,36 +478,21 @@ def _verify_timestamped_export(
 
 def _publish_verified_artifacts(
     *,
-    staged_video_path: Path,
-    staged_metadata_path: Path,
-    final_video_path: Path,
-    final_metadata_path: Path,
+    staging_dir: Path,
+    final_artifact_dir: Path,
     should_cancel: Callable[[], bool] | None,
 ) -> None:
-    """Publish already-verified siblings and remove either one if publication is interrupted."""
+    """Publish one already-verified artifact directory with one atomic rename."""
 
-    published_paths: list[Path] = []
+    _raise_if_cancelled(should_cancel)
+    if final_artifact_dir.exists():
+        raise VideoExportError(f"Timestamp-aware export destination already exists: '{final_artifact_dir}'.")
     try:
-        _raise_if_cancelled(should_cancel)
-        os.replace(staged_metadata_path, final_metadata_path)
-        published_paths.append(final_metadata_path)
-        _raise_if_cancelled(should_cancel)
-        os.replace(staged_video_path, final_video_path)
-        published_paths.append(final_video_path)
-    except Exception as publication_error:
-        cleanup_failures: list[str] = []
-        for published_path in reversed(published_paths):
-            try:
-                published_path.unlink(missing_ok=True)
-            except Exception as cleanup_error:
-                cleanup_failures.append(f"{published_path}: {cleanup_error}")
-        residue = [str(path) for path in published_paths if path.exists()]
-        if cleanup_failures or residue:
-            details = "; ".join(cleanup_failures + ([f"residue={residue}"] if residue else []))
-            raise VideoExportError(
-                "Timestamp-aware export publication rollback failed; " + details
-            ) from publication_error
-        raise
+        os.replace(staging_dir, final_artifact_dir)
+    except OSError as exc:
+        raise VideoExportError(
+            f"Timestamp-aware export could not atomically publish '{final_artifact_dir}': {exc}"
+        ) from exc
 
 
 def export_timestamped_video(
@@ -488,8 +509,7 @@ def export_timestamped_video(
     """Encode a verified VFR MP4, then publish its media and sidecar only after verification."""
 
     _raise_if_cancelled(should_cancel)
-    if not timing.frames:
-        raise VideoExportError("Timestamp-aware export requires decoded source timing.")
+    validate_timestamped_mp4_source(source_probe=source_probe, timing=timing)
 
     ffmpeg = _which("ffmpeg")
     source_audio_probe: VideoProbe | None = None
@@ -513,10 +533,12 @@ def export_timestamped_video(
     out_dir = video_export_output_root() / f"{task}-videos" / date_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     run_id = uuid4().hex
-    output_name = f"{prefix}_{datetime.now().strftime('%H%M%S')}_{run_id}.mp4"
-    final_video_path = out_dir / output_name
+    artifact_name = f"{prefix}_{datetime.now().strftime('%H%M%S')}_{run_id}"
+    output_name = f"{artifact_name}.mp4"
+    final_artifact_dir = out_dir / artifact_name
+    final_video_path = final_artifact_dir / output_name
     final_metadata_path = final_video_path.with_suffix(final_video_path.suffix + ".json")
-    staging_dir = out_dir / f".{output_name}.{uuid4().hex}.staging"
+    staging_dir = out_dir / f".{artifact_name}.{uuid4().hex}.staging"
     staging_video_path = staging_dir / output_name
     staging_metadata_path = staging_dir / final_metadata_path.name
     manifest_path = staging_dir / "frames.ffconcat"
@@ -530,7 +552,7 @@ def export_timestamped_video(
             timing=timing,
             should_cancel=should_cancel,
         )
-        command: list[str] = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+        command: list[str] = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-copyts"]
         if source_audio_probe is not None:
             command += ["-itsoffset", format(float(timing.frames[0].presentation_seconds), ".12g")]
         command += [
@@ -607,12 +629,14 @@ def export_timestamped_video(
         if extra_metadata:
             metadata.update(dict(extra_metadata))
         staging_metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            manifest_path.unlink()
+        except OSError as exc:
+            raise VideoExportError(f"Timestamp-aware export could not remove its staged manifest: {exc}") from exc
         _raise_if_cancelled(should_cancel)
         _publish_verified_artifacts(
-            staged_video_path=staging_video_path,
-            staged_metadata_path=staging_metadata_path,
-            final_video_path=final_video_path,
-            final_metadata_path=final_metadata_path,
+            staging_dir=staging_dir,
+            final_artifact_dir=final_artifact_dir,
             should_cancel=should_cancel,
         )
     except BaseException as exc:
@@ -631,6 +655,7 @@ def export_timestamped_video(
 
     return VideoExportResult(
         saved=True,
+        artifact_root=str(final_artifact_dir),
         path=str(final_video_path),
         metadata_path=str(final_metadata_path),
         rel_path=str(final_video_path.relative_to(video_export_output_root())).replace(os.sep, "/"),
