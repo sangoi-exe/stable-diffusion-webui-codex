@@ -8,8 +8,8 @@ Required Notice: see NOTICE
 
 Purpose: Dedicated SeedVR2 video-upscale utility route.
 Lets users select a backend-visible source-video path without uploading video bytes through the browser, configure curated SeedVR2 options and
-the explicit streaming/smart-fallback policy, run the task through the shared task/SSE contract, and play, open, zoom, or download the
-exported MP4 result with truthful media status.
+the explicit streaming/smart-fallback policy, surface route-local admission failures before task creation, run the accepted task through the
+shared task/SSE contract, and play, open, zoom, or download the exported MP4 result with truthful media status.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `VideoUpscale` (component): Dedicated SeedVR2 source-video upscale workspace.
@@ -18,6 +18,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `handleTaskEvent` (function): Applies the shared task/SSE event contract to route-local state.
 - `openBrowser` / `loadBrowserPath` / `openBrowserItem` (functions): Operate the narrow backend file-browser integration for source-video paths.
 - `seedvr2DeviceSupported` (computed): Gates the run action to CUDA or MPS, the supported SeedVR2 backends.
+- `admissionIssue` (computed): Provides the one visible route-local reason that prevents task submission.
 - `toOutputUrl` (function): Converts a task output relative path into the existing output-file URL.
 -->
 
@@ -51,7 +52,7 @@ Symbols (top-level; keep in sync; no ghosts):
               />
               <button class="btn btn-sm btn-outline" type="button" :disabled="isRunning" @click="openBrowser">Browse server files</button>
             </div>
-            <p class="caption">The backend validates the selected file before decoding. Remote URLs and browser uploads are not accepted.</p>
+            <p class="caption">Before task creation, the backend validates a readable local video plus its timing, host-memory, and scratch admission. Remote URLs and browser uploads are not accepted.</p>
           </div>
 
           <div class="panel-section">
@@ -85,7 +86,7 @@ Symbols (top-level; keep in sync; no ghosts):
               </div>
 
               <SliderField
-                label="Target resolution"
+                label="Target shortest edge"
                 :modelValue="resolution"
                 :min="16"
                 :max="4096"
@@ -145,7 +146,8 @@ Symbols (top-level; keep in sync; no ghosts):
                 <input v-model="smartFallback" type="checkbox" :disabled="isRunning || streaming" />
                 <span>
                   <strong>Smart fallback</strong>
-                  <small>Try direct GPU execution first, then use streaming once only after a capacity failure or GPU OOM.</small>
+                  <small v-if="streaming">Unavailable while Streaming is enabled because Streaming already starts in bounded chunks.</small>
+                  <small v-else>Try direct GPU execution first, then use streaming once only after a capacity failure or GPU OOM.</small>
                 </span>
               </label>
 
@@ -216,7 +218,7 @@ Symbols (top-level; keep in sync; no ghosts):
         <RunProgressStatus
           v-if="errorMessage"
           variant="error"
-          title="Video upscale failed"
+          :title="errorTitle"
           :message="errorMessage"
           :show-progress-bar="false"
         />
@@ -228,6 +230,13 @@ Symbols (top-level; keep in sync; no ghosts):
           :step="progress?.step ?? null"
           :total-steps="progress?.totalSteps ?? null"
           :eta-seconds="progress?.etaSeconds ?? null"
+        />
+        <RunProgressStatus
+          v-else-if="admissionIssue"
+          variant="info"
+          title="Ready check"
+          :message="admissionIssue"
+          :show-progress-bar="false"
         />
         <RunProgressStatus
           v-else-if="outputUrl"
@@ -320,7 +329,7 @@ Symbols (top-level; keep in sync; no ghosts):
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { cancelTask, startVideoUpscale, subscribeTask } from '../api/client'
-import type { SeedVR2ColorCorrection, SeedVR2DitModel, TaskEvent, VideoUpscaleRequest } from '../api/types'
+import type { SeedVR2BatchSize, SeedVR2ColorCorrection, SeedVR2DitModel, TaskEvent, VideoUpscaleRequest } from '../api/types'
 import { useQuicksettingsStore } from '../stores/quicksettings'
 import { formatJson, useResultsCard } from '../composables/useResultsCard'
 import Modal from '../components/ui/Modal.vue'
@@ -362,7 +371,7 @@ const videoPath = ref('')
 const ditModel = ref<SeedVR2DitModel>('seedvr2_ema_3b_fp16.safetensors')
 const resolution = ref(1080)
 const maxResolution = ref(0)
-const batchSize = ref(5)
+const batchSize = ref<SeedVR2BatchSize>(5)
 const uniformBatchSize = ref(false)
 const temporalOverlap = ref(0)
 const prependFrames = ref(0)
@@ -375,6 +384,7 @@ const smartFallback = ref(false)
 const taskId = ref('')
 const isRunning = ref(false)
 const errorMessage = ref('')
+const errorKind = ref<'admission' | 'runtime' | null>(null)
 const progress = ref<ProgressState | null>(null)
 const resultInfo = ref<unknown>(null)
 const outputUrl = ref('')
@@ -422,19 +432,27 @@ function stopTaskStream(): void {
 
 const currentDevice = computed(() => String(quicksettings.currentDevice || '').trim().toLowerCase())
 const seedvr2DeviceSupported = computed(() => currentDevice.value === 'cuda' || currentDevice.value === 'mps')
-const canRun = computed(() => (
-  !isRunning.value
-  && Boolean(videoPath.value.trim())
-  && Boolean(currentDevice.value)
-  && seedvr2DeviceSupported.value
-))
-const generateTitle = computed(() => {
-  if (isRunning.value) return 'A video-upscale task is already running.'
+const admissionIssue = computed<string | null>(() => {
   if (!videoPath.value.trim()) return 'Choose a backend-visible source video path.'
   if (!currentDevice.value) return 'Choose a device in QuickSettings.'
   if (!seedvr2DeviceSupported.value) return 'SeedVR2 video upscaling requires CUDA or MPS.'
+  if (temporalOverlap.value < 0 || temporalOverlap.value >= batchSize.value) {
+    return 'Temporal overlap must be greater than or equal to 0 and lower than Batch size.'
+  }
+  if (streaming.value && smartFallback.value) {
+    return 'Streaming and Smart fallback cannot both be enabled.'
+  }
+  return null
+})
+const canRun = computed(() => !isRunning.value && admissionIssue.value === null)
+const generateTitle = computed(() => {
+  if (isRunning.value) return 'A video-upscale task is already running.'
+  if (admissionIssue.value) return admissionIssue.value
   return 'Start SeedVR2 video upscaling.'
 })
+const errorTitle = computed(() => (
+  errorKind.value === 'admission' ? 'Video admission rejected' : 'Video upscale failed'
+))
 
 const audioStatus = computed(() => {
   if (!isRecord(resultInfo.value) || !isRecord(resultInfo.value.audio)) return 'Audio status unavailable.'
@@ -460,6 +478,12 @@ const resultDimensions = computed(() => {
 
 watch(outputUrl, (currentOutputUrl) => {
   if (!currentOutputUrl) videoZoomOpen.value = false
+})
+
+watch(videoPath, () => {
+  if (errorKind.value !== 'admission') return
+  errorKind.value = null
+  errorMessage.value = ''
 })
 
 watch(streaming, (enabled) => {
@@ -495,6 +519,7 @@ function handleTaskEvent(event: TaskEvent): void {
     case 'result': {
       const relPath = typeof event.video?.rel_path === 'string' ? event.video.rel_path : ''
       if (!relPath) {
+        errorKind.value = 'runtime'
         errorMessage.value = 'Video-upscale task completed without a saved video artifact.'
         isRunning.value = false
         stopTaskStream()
@@ -504,6 +529,7 @@ function handleTaskEvent(event: TaskEvent): void {
         outputUrl.value = toOutputUrl(relPath)
         resultInfo.value = event.info
       } catch (error) {
+        errorKind.value = 'runtime'
         errorMessage.value = error instanceof Error ? error.message : String(error)
         isRunning.value = false
         stopTaskStream()
@@ -511,6 +537,7 @@ function handleTaskEvent(event: TaskEvent): void {
       break
     }
     case 'error':
+      errorKind.value = 'runtime'
       errorMessage.value = event.message
       isRunning.value = false
       stopTaskStream()
@@ -532,6 +559,7 @@ async function start(): Promise<void> {
 
   stopTaskStream()
   errorMessage.value = ''
+  errorKind.value = null
   progress.value = null
   resultInfo.value = null
   outputUrl.value = ''
@@ -565,6 +593,7 @@ async function start(): Promise<void> {
     })
   } catch (error) {
     isRunning.value = false
+    errorKind.value = 'admission'
     errorMessage.value = error instanceof Error ? error.message : String(error)
   }
 }

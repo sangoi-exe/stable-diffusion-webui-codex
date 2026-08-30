@@ -7,8 +7,8 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Preserve the verified terminal VFR frame duration in one staged H.264 MP4 artifact.
-Parses only the bounded atom path emitted by the local ffmpeg export contract, validates every structural field and fixed-offset write before
-modifying bytes, then patches the video track's terminal sample duration before the existing exporter verifies and publishes the artifact.
+Parses only the bounded atom path emitted by the local ffmpeg export contract, including its optional leading empty edit for delayed video,
+validates every structural field and fixed-offset write, then patches the video track before the exporter verifies and publishes the artifact.
 This is not a generic MP4 editing API.
 
 Symbols (top-level; keep in sync; no ghosts):
@@ -104,6 +104,14 @@ def _read_mp4_uint(handle: Any, *, offset: int, width: int, field: str) -> int:
     return int.from_bytes(raw, byteorder="big", signed=False)
 
 
+def _read_mp4_int(handle: Any, *, offset: int, width: int, field: str) -> int:
+    handle.seek(offset)
+    raw = handle.read(width)
+    if len(raw) != width:
+        raise Mp4TimingError(f"Timestamp-aware MP4 has a truncated {field} field at byte {offset}.")
+    return int.from_bytes(raw, byteorder="big", signed=True)
+
+
 def _validate_mp4_atom_field(atom: _Mp4Atom, *, offset: int, width: int, field: str) -> None:
     if width <= 0 or offset < atom.payload_offset or offset + width > atom.end_offset:
         raise Mp4TimingError(
@@ -163,24 +171,83 @@ def _mp4_track_duration_field(handle: Any, atom: _Mp4Atom) -> tuple[int, int]:
     return duration_offset, duration_width
 
 
-def _mp4_edit_duration_field(handle: Any, atom: _Mp4Atom) -> tuple[int, int]:
+def _mp4_edit_duration_fields(handle: Any, atom: _Mp4Atom) -> tuple[int, int, int]:
     version = _mp4_version(handle, atom, owner="elst")
     entry_count_offset = atom.payload_offset + 4
     _validate_mp4_atom_field(atom, offset=entry_count_offset, width=4, field="elst entry count")
     entry_count = _read_mp4_uint(handle, offset=entry_count_offset, width=4, field="elst entry count")
-    if entry_count != 1:
+    if entry_count not in {1, 2}:
         raise Mp4TimingError(
-            "Timestamp-aware MP4 requires one video edit-list entry for terminal-duration preservation, "
+            "Timestamp-aware MP4 requires one media edit with at most one leading empty edit, "
             f"found {entry_count}."
         )
     if version == 0:
-        duration_offset, duration_width, entry_width = atom.payload_offset + 8, 4, 12
+        duration_width, entry_width = 4, 12
     elif version == 1:
-        duration_offset, duration_width, entry_width = atom.payload_offset + 8, 8, 20
+        duration_width, entry_width = 8, 20
     else:
         raise Mp4TimingError(f"Timestamp-aware MP4 elst atom has unsupported version {version}.")
-    _validate_mp4_atom_field(atom, offset=atom.payload_offset + 8, width=entry_width, field="elst entry")
-    return duration_offset, duration_width
+
+    entries_offset = atom.payload_offset + 8
+    _validate_mp4_atom_field(
+        atom,
+        offset=entries_offset,
+        width=entry_count * entry_width,
+        field="elst entries",
+    )
+    entries: list[tuple[int, int, int]] = []
+    for entry_index in range(entry_count):
+        duration_offset = entries_offset + entry_index * entry_width
+        media_time_offset = duration_offset + duration_width
+        rate_offset = media_time_offset + duration_width
+        segment_duration = _read_mp4_uint(
+            handle,
+            offset=duration_offset,
+            width=duration_width,
+            field=f"elst[{entry_index}] segment duration",
+        )
+        media_time = _read_mp4_int(
+            handle,
+            offset=media_time_offset,
+            width=duration_width,
+            field=f"elst[{entry_index}] media time",
+        )
+        rate_integer = _read_mp4_int(
+            handle,
+            offset=rate_offset,
+            width=2,
+            field=f"elst[{entry_index}] media rate integer",
+        )
+        rate_fraction = _read_mp4_int(
+            handle,
+            offset=rate_offset + 2,
+            width=2,
+            field=f"elst[{entry_index}] media rate fraction",
+        )
+        if (rate_integer, rate_fraction) != (1, 0):
+            raise Mp4TimingError(
+                "Timestamp-aware MP4 requires normal-rate video edit-list entries; "
+                f"elst[{entry_index}] has rate {rate_integer}+{rate_fraction}/65536."
+            )
+        entries.append((duration_offset, segment_duration, media_time))
+
+    leading_empty_duration_units = 0
+    media_entry_index = 0
+    if entry_count == 2:
+        _, leading_empty_duration_units, leading_media_time = entries[0]
+        if leading_empty_duration_units <= 0 or leading_media_time != -1:
+            raise Mp4TimingError(
+                "Timestamp-aware MP4 has an invalid leading video edit; expected a positive empty edit."
+            )
+        media_entry_index = 1
+
+    media_duration_offset, _, media_time = entries[media_entry_index]
+    if media_time != 0:
+        raise Mp4TimingError(
+            "Timestamp-aware MP4 requires the video media edit to start at media time zero; "
+            f"found {media_time}."
+        )
+    return media_duration_offset, duration_width, leading_empty_duration_units
 
 
 def _find_mp4_video_track(handle: Any, moov_atom: _Mp4Atom) -> _Mp4Atom:
@@ -329,12 +396,16 @@ def patch_terminal_frame_duration(
                 "Timestamp-aware MP4 terminal duration cannot represent the decoded source timing within tolerance: "
                 f"source={expected_duration_seconds:.9f}, patched={patched_duration_seconds:.9f}."
             )
-        movie_duration_units = int(round(patched_duration_seconds * movie_timescale))
-        if movie_duration_units <= 0:
+        media_edit_duration_units = int(round(patched_duration_seconds * movie_timescale))
+        if media_edit_duration_units <= 0:
             raise Mp4TimingError("Timestamp-aware MP4 terminal duration rounded to zero movie ticks.")
 
         tkhd_duration_offset, tkhd_duration_width = _mp4_track_duration_field(handle, tkhd_atom)
-        elst_duration_offset, elst_duration_width = _mp4_edit_duration_field(handle, elst_atom)
+        elst_duration_offset, elst_duration_width, leading_empty_duration_units = _mp4_edit_duration_fields(
+            handle,
+            elst_atom,
+        )
+        track_duration_units = leading_empty_duration_units + media_edit_duration_units
         current_movie_duration = _read_mp4_uint(
             handle, offset=mvhd_duration_offset, width=mvhd_duration_width, field="mvhd duration"
         )
@@ -354,19 +425,19 @@ def patch_terminal_frame_duration(
             _Mp4Write(
                 offset=tkhd_duration_offset,
                 width=tkhd_duration_width,
-                value=movie_duration_units,
+                value=track_duration_units,
                 field="tkhd duration",
             ),
             _Mp4Write(
                 offset=elst_duration_offset,
                 width=elst_duration_width,
-                value=movie_duration_units,
-                field="elst segment duration",
+                value=media_edit_duration_units,
+                field="elst media segment duration",
             ),
             _Mp4Write(
                 offset=mvhd_duration_offset,
                 width=mvhd_duration_width,
-                value=max(current_movie_duration, movie_duration_units),
+                value=max(current_movie_duration, track_duration_units),
                 field="mvhd duration",
             ),
         )

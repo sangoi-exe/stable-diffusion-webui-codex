@@ -25,7 +25,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `OptionsResponse` (interface): `/api/options` response shape.
 - `OptionsUpdateResponse` (interface): `/api/options` update response shape.
 - `TaskStartResponse` (interface): Start-task response shape (`task_id`) used by multiple endpoints.
-- `SeedVR2DitModel` / `SeedVR2ColorCorrection` (types): Curated dedicated SeedVR2 video-upscale option domains.
+- `SeedVR2DitModel` / `SeedVR2ColorCorrection` / `SeedVR2BatchSize` (types): Curated dedicated SeedVR2 video-upscale option domains.
 - `VideoUpscaleRequest` (interface): JSON request shape for `POST /api/video-upscale`.
 - `Txt2ImgStartResponse` (interface): Start-task response shape (`task_id`).
 - `UpscalerKind` (type): Allowed upscaler kind values (`latent`/`spandrel`).
@@ -199,6 +199,7 @@ export type SeedVR2DitModel =
   | 'seedvr2_ema_7b_sharp_fp16.safetensors'
 
 export type SeedVR2ColorCorrection = 'lab' | 'wavelet' | 'wavelet_adaptive' | 'hsv' | 'adain' | 'none'
+export type SeedVR2BatchSize = 1 | 5 | 9 | 13 | 17 | 33 | 65 | 129
 
 export interface VideoUpscaleRequest {
   video_path: string
@@ -206,7 +207,7 @@ export interface VideoUpscaleRequest {
   dit_model: SeedVR2DitModel
   resolution: number
   max_resolution: number
-  batch_size: number
+  batch_size: SeedVR2BatchSize
   uniform_batch_size: boolean
   temporal_overlap: number
   prepend_frames: number

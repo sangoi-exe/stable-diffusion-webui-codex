@@ -72,7 +72,7 @@ If you touch an `apps/**` source file, you keep its **file header block** honest
 
 ## WebUI Atlas
 
-Last reviewed on 2026-08-26 during the dedicated SeedVR2 video-upscale tranche.
+Last reviewed on 2026-08-30 during the SeedVR2 R2 admission, cancellation, and media-correctness tranche.
 
 <!-- Merge-safety anchor: this prompt-resident WebUI Atlas replaces the former split-file discovery front door; update it whenever a hot path, owner file, public route, or shipped entrypoint moves. -->
 
@@ -234,13 +234,13 @@ Last reviewed on 2026-08-26 during the dedicated SeedVR2 video-upscale tranche.
 #### video_upscale
 
 - Public route: `apps/backend/interfaces/api/routers/upscale.py` (`/api/video-upscale`)
-  - Validates one backend-visible video path, curated SeedVR2 controls, and a configured CUDA or MPS device. It creates the task without accepting browser-uploaded video bytes.
+  - Before task registration, validates one backend-visible video path, exact decoded count/timing and stream origins, the curated SeedVR2 controls, upstream-matched target geometry, current host-memory/scratch capacity, and a configured CUDA or MPS device. It does not accept browser-uploaded video bytes.
 - Dedicated task worker: `apps/backend/interfaces/api/tasks/video_upscale_tasks.py`
   - Owns inference-gate coordination, progress forwarding, cancellation, terminal result/error state, and cleanup for one dedicated video-upscale task.
 - Canonical use-case: `apps/backend/use_cases/video_upscale.py`
-  - Owns source-video probe/decode, SeedVR2 frame execution, H.264 MP4 export, source-audio preservation verification, and terminal `ResultEvent` emission.
+  - Consumes the admitted source/resource evidence and owns SeedVR2 frame execution, task-work cleanup, verified H.264 MP4 export, and terminal `ResultEvent` emission.
 - Runtime and file owners: `apps/backend/video/io/ffmpeg.py`, `apps/backend/video/upscaling/seedvr2.py`, and `apps/backend/video/export/ffmpeg_exporter.py`
-  - Respectively own probe/frame extraction, native SeedVR2 execution, and saved artifact encoding/muxing under the existing output route.
+  - Respectively own cancellable exact probing/timing/extraction, uniform-padding-aware SeedVR2 execution with complete child-tree cleanup, and relative A/V-origin-verified sidecar-before-MP4 publication under the existing output route.
 - Terminal surfaces: `apps/backend/interfaces/api/task_registry.py` and `apps/backend/interfaces/api/routers/tasks.py`
   - Keep task snapshot, SSE replay, cancellation, and output-file serving unchanged.
 
@@ -268,7 +268,7 @@ Last reviewed on 2026-08-26 during the dedicated SeedVR2 video-upscale tranche.
   - Owns public generation routes, payload parsing, route-level capability guards, exact-engine SUPIR-mode preflight for canonical img2img/inpaint, exact `zimage_l2p` no-VAE txt2img admission, task creation, and worker thread hand-off.
   - Do not move mode execution into this file; it stays validate + dispatch + stream.
 - Video Upscale utility seam: `apps/backend/interfaces/api/routers/upscale.py`, `apps/backend/interfaces/api/tasks/video_upscale_tasks.py`, and `apps/backend/use_cases/video_upscale.py`
-  - The router validates and dispatches the dedicated source-path request. The worker owns task lifecycle. The use case owns one video-upscale pipeline. Reuse video I/O, SeedVR2 runner, export, task registry, and SSE owners instead of reactivating vid2vid or adding a browser upload path.
+  - The router validates and dynamically admits the dedicated source-path request before task creation. The worker owns task lifecycle. The use case owns one video-upscale pipeline. Reuse the cancellable video I/O, SeedVR2 runner, verified export, task registry, and SSE owners instead of reactivating vid2vid or adding a browser upload path.
 - Image Task Worker: `apps/backend/interfaces/api/tasks/generation_tasks.py`
   - Owns shared image task lifecycle, inference-gate integration, encoded image result packaging/save/provenance hooks, and automation task wrapper around canonical image modes.
   - Open this file when the question is task result packaging rather than public payload parsing.

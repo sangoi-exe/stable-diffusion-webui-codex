@@ -8,18 +8,18 @@ Required Notice: see NOTICE
 
 Purpose: Encode frame sequences to a video container via ffmpeg (mp4/webm/gif).
 Writes CFR frame sequences to a workspace-local temp dir, and also builds verified timestamp-aware MP4 artifacts from staged PNG paths before
-atomic publication under `/api/output/{rel_path}`, including a bounded MP4 timing patch that preserves the terminal VFR frame duration.
+ordered sidecar-before-media publication under `/api/output/{rel_path}`, including terminal VFR duration and relative source A/V-origin proof.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `VideoExportError` (class): Explicit export error surfaced when ffmpeg/Pillow or encoding fails.
 - `_which` (function): Resolves ffmpeg executable paths via shared resolver precedence (env override → deterministic runtime path → downloader/PATH).
-- `_output_root` (function): Resolves the repo-local output root (`CODEX_ROOT/output`).
+- `video_export_output_root` (function): Resolves the repo-local output root (`CODEX_ROOT/output`).
 - `_sanitize_filename_prefix` (function): Sanitizes a user/task-provided filename prefix for safe output paths.
 - `resolve_video_export_container` (function): Maps a format token to an output container + codec kind.
 - `_audio_codec_for` (function): Chooses an audio codec for a given output container.
 - `VideoExportResult` (dataclass): Export result container (saved flag + path/rel_path/mime + metadata).
 - `export_video` (function): Main entrypoint; writes frames and runs ffmpeg to produce the final video file.
-- `export_timestamped_video` (function): Builds, verifies, and atomically publishes a VFR MP4 from ordered frame paths and source timing.
+- `export_timestamped_video` (function): Builds, verifies, and ordered-publishes a VFR MP4 from ordered frame paths and source timing.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ import json
 import math
 import os
 import re
+import signal
 import shutil
 import subprocess
 import threading
@@ -61,7 +62,7 @@ def _which(name: str) -> str:
         raise VideoExportError(str(exc)) from exc
 
 
-def _output_root() -> Path:
+def video_export_output_root() -> Path:
     return get_repo_root() / "output"
 
 
@@ -123,8 +124,10 @@ class VideoExportResult:
 
 _TIMING_TOLERANCE_SECONDS = 0.001
 _AUDIO_DURATION_TOLERANCE_SECONDS = 0.050
+_AUDIO_ORIGIN_TOLERANCE_SECONDS = 0.001
 _TIMESTAMP_MANIFEST_FRAMERATE = 1_000_000
 _PROCESS_OUTPUT_LIMIT = 4000
+_PROCESS_TERMINATE_TIMEOUT_SECONDS = 5.0
 
 
 def _terminal_frame_duration_seconds(timing: VideoTiming) -> float:
@@ -159,20 +162,86 @@ def _raise_if_cancelled(should_cancel: Callable[[], bool] | None) -> None:
         raise RuntimeError("cancelled")
 
 
-def _terminate_process(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
+def _posix_process_group_exists(process_group_id: int) -> bool:
     try:
-        process.terminate()
-        process.wait(timeout=5)
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _wait_for_posix_process_group_exit(
+    process: subprocess.Popen[str],
+    process_group_id: int,
+    *,
+    timeout_seconds: float,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        process.poll()
+        if not _posix_process_group_exists(process_group_id):
+            return True
+        time.sleep(0.05)
+    return not _posix_process_group_exists(process_group_id)
+
+
+def _terminate_process(process: subprocess.Popen[str]) -> None:
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=_PROCESS_TERMINATE_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+        try:
+            process.wait(timeout=_PROCESS_TERMINATE_TIMEOUT_SECONDS)
+        except Exception:
+            pass
         return
-    except subprocess.TimeoutExpired:
+
+    process_group_id = process.pid
+    try:
+        os.killpg(process_group_id, signal.SIGTERM)
+    except ProcessLookupError:
         pass
+    except Exception:
+        try:
+            process.terminate()
+        except Exception:
+            pass
+    if not _wait_for_posix_process_group_exit(
+        process,
+        process_group_id,
+        timeout_seconds=_PROCESS_TERMINATE_TIMEOUT_SECONDS,
+    ):
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            pass
+        _wait_for_posix_process_group_exit(
+            process,
+            process_group_id,
+            timeout_seconds=_PROCESS_TERMINATE_TIMEOUT_SECONDS,
+        )
     try:
         process.kill()
-        process.wait(timeout=5)
     except Exception:
-        return
+        pass
+    try:
+        process.wait(timeout=_PROCESS_TERMINATE_TIMEOUT_SECONDS)
+    except Exception:
+        pass
 
 
 def _run_cancellable_ffmpeg(
@@ -184,13 +253,17 @@ def _run_cancellable_ffmpeg(
     """Run one ffmpeg child while preserving the task cancellation boundary."""
 
     try:
-        process = subprocess.Popen(
-            list(command),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
+        popen_kwargs: dict[str, Any] = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+            "bufsize": 1,
+        }
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
+        process = subprocess.Popen(list(command), **popen_kwargs)
     except FileNotFoundError as exc:
         raise VideoExportError(f"{failure_label} failed because ffmpeg was not found.") from exc
     except Exception as exc:
@@ -212,16 +285,24 @@ def _run_cancellable_ffmpeg(
 
     reader = threading.Thread(target=drain_output, name="video-export-ffmpeg-output", daemon=True)
     reader.start()
-    try:
-        while process.poll() is None:
-            _raise_if_cancelled(should_cancel)
-            time.sleep(0.05)
-    except RuntimeError as exc:
-        if str(exc) == "cancelled":
+    cancellation_observed = False
+    while True:
+        if process.poll() is not None:
+            break
+        if should_cancel is not None and should_cancel():
+            cancellation_observed = True
             _terminate_process(process)
-        raise
-    finally:
-        reader.join(timeout=5)
+            break
+        time.sleep(0.05)
+
+    if not cancellation_observed:
+        _terminate_process(process)
+    reader.join(timeout=_PROCESS_TERMINATE_TIMEOUT_SECONDS)
+    if reader.is_alive():
+        _terminate_process(process)
+        reader.join()
+    if cancellation_observed:
+        raise RuntimeError("cancelled")
 
     if process.returncode == 0:
         return
@@ -241,6 +322,7 @@ def _write_timestamp_manifest(
     manifest_path: Path,
     frame_paths: Sequence[str | Path],
     timing: VideoTiming,
+    should_cancel: Callable[[], bool] | None,
 ) -> None:
     if len(frame_paths) != timing.frame_count:
         raise VideoExportError(
@@ -265,6 +347,7 @@ def _write_timestamp_manifest(
 
     lines = ["ffconcat version 1.0"]
     for index, raw_path in enumerate(frame_paths):
+        _raise_if_cancelled(should_cancel)
         frame_path = Path(raw_path).resolve()
         if not frame_path.is_file():
             raise VideoExportError(f"Timestamp-aware export frame is missing: '{frame_path}'.")
@@ -283,9 +366,14 @@ def _verify_timestamped_export(
     staged_path: Path,
     expected_timing: VideoTiming,
     source_audio_probe: VideoProbe | None,
-) -> tuple[VideoProbe, VideoTiming]:
-    output_probe = probe_video(str(staged_path))
-    output_timing = probe_video_timing(str(staged_path))
+    should_cancel: Callable[[], bool] | None,
+) -> tuple[VideoProbe, VideoTiming, float | None, float | None]:
+    output_probe = probe_video(str(staged_path), should_cancel=should_cancel)
+    output_timing = probe_video_timing(
+        str(staged_path),
+        source_probe=output_probe,
+        should_cancel=should_cancel,
+    )
     expected_video_duration = _expected_timestamped_video_duration(expected_timing)
     output_video_duration = output_probe.video_duration_seconds
     if output_video_duration is None:
@@ -301,6 +389,8 @@ def _verify_timestamped_export(
             "Timestamp-aware export frame count mismatch after encoding: "
             f"expected={expected_timing.frame_count}, got={output_timing.frame_count}."
         )
+    source_av_offset: float | None = None
+    output_av_offset: float | None = None
     if source_audio_probe is not None:
         if not output_probe.has_audio:
             raise VideoExportError("Timestamp-aware export completed without the required source audio stream.")
@@ -320,10 +410,26 @@ def _verify_timestamped_export(
                 "Timestamp-aware export did not preserve source audio duration: "
                 f"source={source_audio_duration:.6f}, output={output_audio_duration:.6f}."
             )
+        if source_audio_probe.audio_start_seconds is None or output_probe.audio_start_seconds is None:
+            raise VideoExportError("Timestamp-aware export could not verify the source/output audio stream origin.")
+        source_av_offset = (
+            float(source_audio_probe.audio_start_seconds)
+            - float(expected_timing.frames[0].presentation_seconds)
+        )
+        output_av_offset = (
+            float(output_probe.audio_start_seconds)
+            - float(output_timing.frames[0].presentation_seconds)
+        )
+        if abs(source_av_offset - output_av_offset) > _AUDIO_ORIGIN_TOLERANCE_SECONDS:
+            raise VideoExportError(
+                "Timestamp-aware export did not preserve the source audio/video start offset: "
+                f"source_offset={source_av_offset:.9f}, output_offset={output_av_offset:.9f}."
+            )
 
     source_origin = float(expected_timing.frames[0].presentation_seconds)
     output_origin = float(output_timing.frames[0].presentation_seconds)
     for index, (source_frame, output_frame) in enumerate(zip(expected_timing.frames, output_timing.frames)):
+        _raise_if_cancelled(should_cancel)
         expected_offset = float(source_frame.presentation_seconds) - source_origin
         observed_offset = float(output_frame.presentation_seconds) - output_origin
         if abs(expected_offset - observed_offset) > _TIMING_TOLERANCE_SECONDS:
@@ -331,7 +437,7 @@ def _verify_timestamped_export(
                 "Timestamp-aware export did not preserve decoded presentation timing: "
                 f"frame={index}, expected_offset={expected_offset:.9f}, observed_offset={observed_offset:.9f}."
             )
-    return output_probe, output_timing
+    return output_probe, output_timing, source_av_offset, output_av_offset
 
 
 def _publish_verified_artifacts(
@@ -347,17 +453,24 @@ def _publish_verified_artifacts(
     published_paths: list[Path] = []
     try:
         _raise_if_cancelled(should_cancel)
-        os.replace(staged_video_path, final_video_path)
-        published_paths.append(final_video_path)
-        _raise_if_cancelled(should_cancel)
         os.replace(staged_metadata_path, final_metadata_path)
         published_paths.append(final_metadata_path)
-    except Exception:
+        _raise_if_cancelled(should_cancel)
+        os.replace(staged_video_path, final_video_path)
+        published_paths.append(final_video_path)
+    except Exception as publication_error:
+        cleanup_failures: list[str] = []
         for published_path in reversed(published_paths):
             try:
                 published_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as cleanup_error:
+                cleanup_failures.append(f"{published_path}: {cleanup_error}")
+        residue = [str(path) for path in published_paths if path.exists()]
+        if cleanup_failures or residue:
+            details = "; ".join(cleanup_failures + ([f"residue={residue}"] if residue else []))
+            raise VideoExportError(
+                "Timestamp-aware export publication rollback failed; " + details
+            ) from publication_error
         raise
 
 
@@ -367,6 +480,7 @@ def export_timestamped_video(
     timing: VideoTiming,
     task: str,
     filename_prefix: str,
+    source_probe: VideoProbe,
     audio_source_path: str | None,
     extra_metadata: Mapping[str, Any] | None = None,
     should_cancel: Callable[[], bool] | None = None,
@@ -384,15 +498,19 @@ def export_timestamped_video(
         source_audio_path = Path(normalized_audio_source).expanduser().resolve()
         if not source_audio_path.is_file():
             raise VideoExportError(f"audio_source_path '{source_audio_path}' does not exist.")
-        source_audio_probe = probe_video(str(source_audio_path))
+        if Path(source_probe.path).expanduser().resolve() != source_audio_path:
+            raise VideoExportError("Timestamp-aware export source probe does not match audio_source_path.")
+        source_audio_probe = source_probe
         if not source_audio_probe.has_audio:
             raise VideoExportError("Timestamp-aware export was asked to preserve audio from a source with no audio stream.")
     else:
         source_audio_path = None
+        if source_probe.has_audio:
+            raise VideoExportError("Timestamp-aware export cannot omit audio from a source that contains audio.")
 
     prefix = _sanitize_filename_prefix(filename_prefix or task or "video")
     date_dir = datetime.now().strftime("%Y-%m-%d")
-    out_dir = _output_root() / f"{task}-videos" / date_dir
+    out_dir = video_export_output_root() / f"{task}-videos" / date_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     run_id = uuid4().hex
     output_name = f"{prefix}_{datetime.now().strftime('%H%M%S')}_{run_id}.mp4"
@@ -403,15 +521,19 @@ def export_timestamped_video(
     staging_metadata_path = staging_dir / final_metadata_path.name
     manifest_path = staging_dir / "frames.ffconcat"
 
+    active_error: BaseException | None = None
     try:
         staging_dir.mkdir(parents=False, exist_ok=False)
-        _write_timestamp_manifest(manifest_path=manifest_path, frame_paths=frame_paths, timing=timing)
-        command: list[str] = [
-            ffmpeg,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
+        _write_timestamp_manifest(
+            manifest_path=manifest_path,
+            frame_paths=frame_paths,
+            timing=timing,
+            should_cancel=should_cancel,
+        )
+        command: list[str] = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+        if source_audio_probe is not None:
+            command += ["-itsoffset", format(float(timing.frames[0].presentation_seconds), ".12g")]
+        command += [
             "-f",
             "concat",
             "-safe",
@@ -451,10 +573,11 @@ def export_timestamped_video(
         _raise_if_cancelled(should_cancel)
         _patch_mp4_terminal_duration(staged_path=staging_video_path, timing=timing)
         _raise_if_cancelled(should_cancel)
-        output_probe, output_timing = _verify_timestamped_export(
+        output_probe, output_timing, source_av_offset, output_av_offset = _verify_timestamped_export(
             staged_path=staging_video_path,
             expected_timing=timing,
             source_audio_probe=source_audio_probe,
+            should_cancel=should_cancel,
         )
         metadata: dict[str, Any] = {
             "task": task,
@@ -467,12 +590,18 @@ def export_timestamped_video(
                 "timebase": _TIMESTAMP_MANIFEST_FRAMERATE,
                 "expected_video_duration_seconds": _expected_timestamped_video_duration(timing),
                 "video_duration_seconds": output_probe.video_duration_seconds,
+                "source_video_origin_seconds": float(timing.frames[0].presentation_seconds),
+                "output_video_origin_seconds": float(output_timing.frames[0].presentation_seconds),
             },
             "audio": {
                 "source_has_audio": source_audio_probe is not None,
                 "preserved": source_audio_probe is not None,
                 "codec": output_probe.audio_codec if source_audio_probe is not None else None,
                 "duration_seconds": output_probe.audio_duration_seconds if source_audio_probe is not None else None,
+                "source_origin_seconds": source_audio_probe.audio_start_seconds if source_audio_probe is not None else None,
+                "output_origin_seconds": output_probe.audio_start_seconds if source_audio_probe is not None else None,
+                "source_av_offset_seconds": source_av_offset,
+                "output_av_offset_seconds": output_av_offset,
             },
         }
         if extra_metadata:
@@ -486,14 +615,25 @@ def export_timestamped_video(
             final_metadata_path=final_metadata_path,
             should_cancel=should_cancel,
         )
+    except BaseException as exc:
+        active_error = exc
+        raise
     finally:
-        shutil.rmtree(staging_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(staging_dir)
+        except FileNotFoundError:
+            pass
+        except OSError as cleanup_error:
+            message = f"Timestamp-aware export staging cleanup failed for '{staging_dir}': {cleanup_error}"
+            if active_error is not None:
+                raise VideoExportError(message) from active_error
+            raise VideoExportError(message) from cleanup_error
 
     return VideoExportResult(
         saved=True,
         path=str(final_video_path),
         metadata_path=str(final_metadata_path),
-        rel_path=str(final_video_path.relative_to(_output_root())).replace(os.sep, "/"),
+        rel_path=str(final_video_path.relative_to(video_export_output_root())).replace(os.sep, "/"),
         mime="video/mp4",
         width=int(output_probe.width),
         height=int(output_probe.height),
@@ -552,7 +692,7 @@ def export_video(
 
     prefix = _sanitize_filename_prefix(str(opts.get("filename_prefix") or task or "video"))
     date_dir = datetime.now().strftime("%Y-%m-%d")
-    root = _output_root()
+    root = video_export_output_root()
     out_dir = root / f"{task}-videos" / date_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 

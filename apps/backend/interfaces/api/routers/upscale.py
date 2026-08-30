@@ -12,12 +12,12 @@ Exposes:
 - remote HF upscaler listing + downloads (`GET/POST /api/upscalers/*`), with optional manifest-based metadata enrichment
   (`upscalers/manifest.json`, schema v1) and explicit `manifest_error`/`manifest_errors` surfacing
 - standalone upscaling tasks (`POST /api/upscale`)
-- dedicated SeedVR2 video-upscale tasks (`POST /api/video-upscale`, source preflight, and explicit execution policy)
+- dedicated SeedVR2 video-upscale tasks (`POST /api/video-upscale`, exact media/resource admission, and explicit execution policy)
 Remote listing/download respects the upscaler safeweights policy (`CODEX_SAFE_WEIGHTS=1` blocks non-`.safetensors` weights).
 
 Symbols (top-level; keep in sync; no ghosts):
 - `_parse_video_upscale_request` (function): Validates the strict dedicated SeedVR2 request payload.
-- `_preflight_video_upscale_source` (function): Verifies a backend-visible source video before task registration.
+- `_preflight_video_upscale_source` (function): Admits exact source media, timing, host memory, and scratch capacity before task registration.
 - `build_router` (function): Build the APIRouter for upscaler endpoints.
 """
 
@@ -28,7 +28,8 @@ import asyncio
 import json
 import logging
 import math
-from dataclasses import replace
+import os
+import shutil
 from uuid import uuid4
 from pathlib import Path
 from typing import Any, Dict, List
@@ -41,6 +42,15 @@ from apps.backend.infra.config.paths import get_paths_for
 from apps.backend.interfaces.api.device_selection import parse_device_from_payload
 from apps.backend.interfaces.api.upscalers_manifest import validate_upscalers_manifest
 from apps.backend.runtime.vision.upscalers.safeweights import allowed_upscaler_weight_suffixes, safeweights_enabled
+from apps.backend.video.export.ffmpeg_exporter import video_export_output_root
+from apps.backend.video.io.ffmpeg import probe_video, probe_video_timing
+from apps.backend.video.upscaling.seedvr2 import calculate_seedvr2_target_dimensions
+from apps.backend.core.params.video import SeedVR2UpscaleOptions
+from apps.backend.use_cases.video_upscale import (
+    VideoUpscaleRequest,
+    VideoUpscaleSourceAdmission,
+    video_upscale_work_root,
+)
 
 
 _HF_UPSCALERS_REPO_ID = "sangoi-exe/sd-webui-codex"
@@ -54,6 +64,17 @@ _SEEDVR2_DIT_MODELS = frozenset(
     }
 )
 _SEEDVR2_COLOR_CORRECTIONS = frozenset({"lab", "wavelet", "wavelet_adaptive", "hsv", "adain", "none"})
+_SEEDVR2_BATCH_SIZES = frozenset({1, 5, 9, 13, 17, 33, 65, 129})
+_MIB = 1024 * 1024
+_GIB = 1024 * _MIB
+_HOST_TIMING_BASE_BYTES = 64 * _MIB
+_HOST_TIMING_BYTES_PER_FRAME = 4096
+_HOST_OPERATIONAL_RESERVE_BYTES = _GIB
+_WORK_SCRATCH_BASE_BYTES = 128 * _MIB
+_WORK_SCRATCH_BYTES_PER_PADDED_PIXEL = 5
+_OUTPUT_SCRATCH_BASE_BYTES = 128 * _MIB
+_OUTPUT_SCRATCH_BYTES_PER_PADDED_PIXEL = 4
+_SCRATCH_OPERATIONAL_RESERVE_BYTES = 2 * _GIB
 
 
 def _normalize_hf_repo_id(repo_id: str | None) -> str:
@@ -92,7 +113,7 @@ def _safe_relpath(raw: str) -> str:
     return s
 
 
-def _parse_video_upscale_request(payload: Dict[str, Any]):
+def _parse_video_upscale_request(payload: Dict[str, Any]) -> tuple[str, str, SeedVR2UpscaleOptions]:
     allowed_fields = {
         "video_path",
         "device",
@@ -129,13 +150,15 @@ def _parse_video_upscale_request(payload: Dict[str, Any]):
         allowed_models = ", ".join(sorted(_SEEDVR2_DIT_MODELS))
         raise HTTPException(status_code=400, detail=f"'dit_model' must be one of {{{allowed_models}}}")
 
-    def optional_int(field: str, *, default: int, minimum: int) -> int:
+    def optional_int(field: str, *, default: int, minimum: int, maximum: int | None = None) -> int:
         value = payload.get(field, default)
         if isinstance(value, bool) or not isinstance(value, int):
             raise HTTPException(status_code=400, detail=f"'{field}' must be an integer")
         parsed = int(value)
         if parsed < minimum:
             raise HTTPException(status_code=400, detail=f"'{field}' must be >= {minimum}")
+        if maximum is not None and parsed > maximum:
+            raise HTTPException(status_code=400, detail=f"'{field}' must be <= {maximum}")
         return parsed
 
     def optional_float(field: str, *, default: float) -> float:
@@ -147,15 +170,18 @@ def _parse_video_upscale_request(payload: Dict[str, Any]):
             raise HTTPException(status_code=400, detail=f"'{field}' must be a finite number within [0, 1]")
         return parsed
 
-    resolution = optional_int("resolution", default=1080, minimum=16)
-    max_resolution = optional_int("max_resolution", default=0, minimum=0)
+    resolution = optional_int("resolution", default=1080, minimum=16, maximum=4096)
+    max_resolution = optional_int("max_resolution", default=0, minimum=0, maximum=8192)
+    if 0 < max_resolution < 16:
+        raise HTTPException(status_code=400, detail="'max_resolution' must be 0 or >= 16")
     batch_size = optional_int("batch_size", default=5, minimum=1)
-    if (batch_size - 1) % 4 != 0:
-        raise HTTPException(status_code=400, detail="'batch_size' must satisfy 4n+1")
+    if batch_size not in _SEEDVR2_BATCH_SIZES:
+        allowed_batches = ", ".join(str(value) for value in sorted(_SEEDVR2_BATCH_SIZES))
+        raise HTTPException(status_code=400, detail=f"'batch_size' must be one of {{{allowed_batches}}}")
     temporal_overlap = optional_int("temporal_overlap", default=0, minimum=0)
     if temporal_overlap >= batch_size:
         raise HTTPException(status_code=400, detail="'temporal_overlap' must be lower than 'batch_size'")
-    prepend_frames = optional_int("prepend_frames", default=0, minimum=0)
+    prepend_frames = optional_int("prepend_frames", default=0, minimum=0, maximum=128)
 
     uniform_batch_size = payload.get("uniform_batch_size", False)
     if not isinstance(uniform_batch_size, bool):
@@ -188,13 +214,10 @@ def _parse_video_upscale_request(payload: Dict[str, Any]):
             status_code=400,
             detail="SeedVR2 video upscaling supports only cuda or mps.",
         )
-    from apps.backend.core.params.video import SeedVR2UpscaleOptions
-    from apps.backend.use_cases.video_upscale import VideoUpscaleRequest
-
-    return VideoUpscaleRequest(
-        video_path=video_path,
-        device=device,
-        options=SeedVR2UpscaleOptions(
+    return (
+        video_path,
+        device,
+        SeedVR2UpscaleOptions(
             dit_model=dit_model,
             resolution=resolution,
             max_resolution=max_resolution,
@@ -211,19 +234,172 @@ def _parse_video_upscale_request(payload: Dict[str, Any]):
     )
 
 
-def _preflight_video_upscale_source(video_path: str) -> str:
-    source_path = Path(video_path).expanduser()
-    if not source_path.is_file():
+def _nearest_existing_capacity_path(path: Path) -> Path:
+    candidate = path.expanduser().resolve()
+    while not candidate.exists():
+        parent = candidate.parent
+        if parent == candidate:
+            raise RuntimeError(f"No existing filesystem owner was found for '{path}'.")
+        candidate = parent
+    return candidate
+
+
+def _preflight_video_upscale_source(
+    video_path: str,
+    options: SeedVR2UpscaleOptions,
+) -> VideoUpscaleSourceAdmission:
+    source_path = Path(video_path).expanduser().resolve()
+    if not source_path.is_file() or not os.access(source_path, os.R_OK):
         raise HTTPException(status_code=400, detail="'video_path' must identify a readable file")
 
-    from apps.backend.video.io.ffmpeg import probe_video
-
     try:
-        probe_video(str(source_path))
+        source_probe = probe_video(str(source_path), count_frames=True)
     except Exception as exc:
         _router_log.warning("video-upscale source probe failed for %s: %s", source_path, exc, exc_info=False)
         raise HTTPException(status_code=400, detail="'video_path' must identify a readable video file") from None
-    return str(source_path.resolve())
+    source_frame_count = source_probe.decoded_frame_count
+    if source_frame_count is None or source_frame_count <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Source video does not expose the exact decoded frame count required for SeedVR2 admission.",
+        )
+    if not source_probe.video_codec:
+        raise HTTPException(status_code=400, detail="Source video does not expose a verifiable video codec.")
+    if source_probe.has_audio and (
+        not source_probe.audio_codec
+        or source_probe.audio_duration_seconds is None
+        or source_probe.audio_start_seconds is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Source audio stream does not expose codec, duration, and start-time evidence "
+                "required for verified preservation."
+            ),
+        )
+
+    try:
+        target_width, target_height, padded_width, padded_height = calculate_seedvr2_target_dimensions(
+            source_width=source_probe.width,
+            source_height=source_probe.height,
+            options=options,
+        )
+    except Exception as exc:
+        _router_log.warning("video-upscale target geometry admission failed for %s: %s", source_path, exc, exc_info=False)
+        raise HTTPException(status_code=400, detail="Source video and target resolution produce invalid SeedVR2 geometry.") from None
+
+    host_timing_required_bytes = _HOST_TIMING_BASE_BYTES + source_frame_count * _HOST_TIMING_BYTES_PER_FRAME
+    try:
+        import psutil  # type: ignore
+
+        host_available_bytes = int(psutil.virtual_memory().available)
+    except Exception as exc:
+        _router_log.error("video-upscale host-memory admission failed: %s", exc, exc_info=False)
+        raise HTTPException(
+            status_code=500,
+            detail="SeedVR2 admission could not read current host-memory capacity.",
+        ) from None
+    if host_timing_required_bytes + _HOST_OPERATIONAL_RESERVE_BYTES > host_available_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "SeedVR2 source exceeds current host-memory admission for decoded timing: "
+                f"required_bytes={host_timing_required_bytes}, available_bytes={host_available_bytes}, "
+                f"reserve_bytes={_HOST_OPERATIONAL_RESERVE_BYTES}."
+            ),
+        )
+
+    padded_frame_pixels = padded_width * padded_height
+    work_frame_count = source_frame_count + int(options.prepend_frames or 0)
+    work_scratch_required_bytes = (
+        _WORK_SCRATCH_BASE_BYTES
+        + work_frame_count * padded_frame_pixels * _WORK_SCRATCH_BYTES_PER_PADDED_PIXEL
+    )
+    output_scratch_required_bytes = (
+        _OUTPUT_SCRATCH_BASE_BYTES
+        + source_frame_count * padded_frame_pixels * _OUTPUT_SCRATCH_BYTES_PER_PADDED_PIXEL
+    )
+    try:
+        work_capacity_path = _nearest_existing_capacity_path(video_upscale_work_root())
+        output_capacity_path = _nearest_existing_capacity_path(video_export_output_root())
+        work_usage = shutil.disk_usage(work_capacity_path)
+        output_usage = shutil.disk_usage(output_capacity_path)
+        shared_scratch_filesystem = os.stat(work_capacity_path).st_dev == os.stat(output_capacity_path).st_dev
+    except Exception as exc:
+        _router_log.error("video-upscale scratch admission failed: %s", exc, exc_info=False)
+        raise HTTPException(
+            status_code=500,
+            detail="SeedVR2 admission could not read current task/output filesystem capacity.",
+        ) from None
+
+    work_scratch_available_bytes = int(work_usage.free)
+    output_scratch_available_bytes = int(output_usage.free)
+    if shared_scratch_filesystem:
+        combined_required_bytes = work_scratch_required_bytes + output_scratch_required_bytes
+        if combined_required_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > work_scratch_available_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "SeedVR2 source exceeds current shared scratch admission: "
+                    f"required_bytes={combined_required_bytes}, available_bytes={work_scratch_available_bytes}, "
+                    f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
+                ),
+            )
+    else:
+        if work_scratch_required_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > work_scratch_available_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "SeedVR2 source exceeds current task-work scratch admission: "
+                    f"required_bytes={work_scratch_required_bytes}, available_bytes={work_scratch_available_bytes}, "
+                    f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
+                ),
+            )
+        if output_scratch_required_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > output_scratch_available_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "SeedVR2 source exceeds current output scratch admission: "
+                    f"required_bytes={output_scratch_required_bytes}, available_bytes={output_scratch_available_bytes}, "
+                    f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
+                ),
+            )
+
+    try:
+        source_timing = probe_video_timing(str(source_path), source_probe=source_probe)
+    except Exception as exc:
+        _router_log.warning("video-upscale source timing admission failed for %s: %s", source_path, exc, exc_info=False)
+        raise HTTPException(
+            status_code=400,
+            detail="Source video does not expose decoded timing required for verified SeedVR2 export.",
+        ) from None
+    if source_timing.frame_count != source_frame_count:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Source decoded frame evidence changed during admission: "
+                f"count_probe={source_frame_count}, timing_probe={source_timing.frame_count}."
+            ),
+        )
+
+    return VideoUpscaleSourceAdmission(
+        path=str(source_path),
+        probe=source_probe,
+        timing=source_timing,
+        target_width=target_width,
+        target_height=target_height,
+        padded_width=padded_width,
+        padded_height=padded_height,
+        host_timing_required_bytes=host_timing_required_bytes,
+        host_available_bytes=host_available_bytes,
+        host_reserve_bytes=_HOST_OPERATIONAL_RESERVE_BYTES,
+        work_scratch_required_bytes=work_scratch_required_bytes,
+        work_scratch_available_bytes=work_scratch_available_bytes,
+        output_scratch_required_bytes=output_scratch_required_bytes,
+        output_scratch_available_bytes=output_scratch_available_bytes,
+        scratch_reserve_bytes=_SCRATCH_OPERATIONAL_RESERVE_BYTES,
+        shared_scratch_filesystem=shared_scratch_filesystem,
+    )
 
 
 def build_router(
@@ -464,10 +640,16 @@ def build_router(
     async def video_upscale(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Payload must be JSON object")
-        request = _parse_video_upscale_request(payload)
-        request = replace(
-            request,
-            video_path=await asyncio.to_thread(_preflight_video_upscale_source, request.video_path),
+        video_path, device, options = _parse_video_upscale_request(payload)
+        source_admission = await asyncio.to_thread(
+            _preflight_video_upscale_source,
+            video_path,
+            options,
+        )
+        request = VideoUpscaleRequest(
+            source=source_admission,
+            device=device,
+            options=options,
         )
 
         loop = asyncio.get_running_loop()

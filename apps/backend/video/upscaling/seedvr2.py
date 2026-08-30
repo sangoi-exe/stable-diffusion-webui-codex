@@ -8,12 +8,13 @@ Required Notice: see NOTICE
 
 Purpose: Fail-loud SeedVR2 child-process runner for dedicated video upscaling.
 Prepares the deterministic SeedVR2 checkout and model directory, measures available accelerator memory, selects the approved direct or bounded
-streaming CLI invocation, terminates the active child for task-scoped cancellation, and returns validated PNG paths without materializing source
-or output videos in the backend process.
+streaming CLI invocation with upstream uniform-batch padding, terminates the complete child process group for task-scoped cancellation, drains
+diagnostics to EOF, and returns validated PNG paths without materializing source or output videos in the backend process.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `SeedVR2OutOfMemoryError` (class): Typed local execution failure that maps to the public out-of-memory task result.
 - `SeedVR2UpscaleResult` (dataclass): Validated child-output frame paths, dimensions, and runtime evidence for one SeedVR2 run.
+- `calculate_seedvr2_target_dimensions` (function): Computes the exact target and padded geometry used by runtime and public admission.
 - `run_seedvr2_upscaling` (function): Executes the selected direct or streaming SeedVR2 child route for one source video.
 - `__all__` (constant): Explicit export list for this module.
 """
@@ -138,6 +139,8 @@ class _SeedVR2ExecutionPlan:
     chunk_size: int
     selection_reason: str
     direct_required_bytes: int
+    direct_processing_frames: int
+    direct_uniform_padding_frames: int
     budget: _SeedVR2MemoryBudget
 
 
@@ -154,15 +157,20 @@ def _run_checked_subprocess(
     *,
     purpose: str,
     cwd: Path | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    popen_kwargs: dict[str, Any] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "cwd": str(cwd) if cwd is not None else None,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
     try:
-        proc = subprocess.run(
-            list(cmd),
-            check=False,
-            capture_output=True,
-            text=True,
-            cwd=str(cwd) if cwd is not None else None,
-        )
+        process = subprocess.Popen(list(cmd), **popen_kwargs)
     except FileNotFoundError as exc:
         missing = cmd[0] if cmd else "<unknown>"
         raise RuntimeError(
@@ -171,6 +179,34 @@ def _run_checked_subprocess(
     except Exception as exc:
         raise RuntimeError(f"{purpose} failed to start: {exc}") from exc
 
+    leader_exited_at: float | None = None
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=_CHILD_POLL_SECONDS)
+            break
+        except subprocess.TimeoutExpired:
+            if should_cancel is not None and should_cancel():
+                _terminate_seedvr2_child(process)
+                process.communicate()
+                raise RuntimeError("cancelled")
+            if process.poll() is None:
+                leader_exited_at = None
+                continue
+            if leader_exited_at is None:
+                leader_exited_at = time.monotonic()
+                continue
+            if time.monotonic() - leader_exited_at < _CHILD_TERMINATE_TIMEOUT_SECONDS:
+                continue
+            _terminate_seedvr2_child(process)
+            stdout, stderr = process.communicate()
+            break
+    _terminate_seedvr2_child(process)
+    proc = subprocess.CompletedProcess(
+        args=list(cmd),
+        returncode=int(process.returncode or 0),
+        stdout=stdout or "",
+        stderr=stderr or "",
+    )
     if proc.returncode == 0:
         return proc
 
@@ -233,11 +269,17 @@ def _exclusive_seedvr2_lock(lock_path: Path):
         os.close(lock_fd)
 
 
-def _ensure_default_repo_is_git_checkout(*, git_bin: str, repo_dir: Path) -> None:
+def _ensure_default_repo_is_git_checkout(
+    *,
+    git_bin: str,
+    repo_dir: Path,
+    should_cancel: Callable[[], bool] | None,
+) -> None:
     try:
         _run_checked_subprocess(
             [git_bin, "-C", str(repo_dir), "rev-parse", "--git-dir"],
             purpose="SeedVR2 default repo bootstrap git checkout validation",
+            should_cancel=should_cancel,
         )
     except RuntimeError as exc:
         raise RuntimeError(
@@ -246,7 +288,13 @@ def _ensure_default_repo_is_git_checkout(*, git_bin: str, repo_dir: Path) -> Non
         ) from exc
 
 
-def _bootstrap_default_seedvr2_repo(*, repo_dir: Path, repo_url: str, repo_ref: str) -> None:
+def _bootstrap_default_seedvr2_repo(
+    *,
+    repo_dir: Path,
+    repo_url: str,
+    repo_ref: str,
+    should_cancel: Callable[[], bool] | None,
+) -> None:
     git_bin = shutil.which("git")
     if not git_bin:
         raise RuntimeError(
@@ -265,26 +313,38 @@ def _bootstrap_default_seedvr2_repo(*, repo_dir: Path, repo_url: str, repo_ref: 
         _run_checked_subprocess(
             [git_bin, "clone", "--filter=blob:none", "--no-checkout", repo_url, str(repo_dir)],
             purpose="SeedVR2 default repo bootstrap clone",
+            should_cancel=should_cancel,
         )
 
-    _ensure_default_repo_is_git_checkout(git_bin=git_bin, repo_dir=repo_dir)
+    _ensure_default_repo_is_git_checkout(
+        git_bin=git_bin,
+        repo_dir=repo_dir,
+        should_cancel=should_cancel,
+    )
     try:
         _run_checked_subprocess(
             [git_bin, "-C", str(repo_dir), "checkout", "--detach", repo_ref],
             purpose="SeedVR2 default repo bootstrap checkout",
+            should_cancel=should_cancel,
         )
     except RuntimeError:
+        _raise_if_cancelled(should_cancel)
         _run_checked_subprocess(
             [git_bin, "-C", str(repo_dir), "fetch", "--depth", "1", "origin", repo_ref],
             purpose="SeedVR2 default repo bootstrap fetch ref",
+            should_cancel=should_cancel,
         )
         _run_checked_subprocess(
             [git_bin, "-C", str(repo_dir), "checkout", "--detach", repo_ref],
             purpose="SeedVR2 default repo bootstrap checkout",
+            should_cancel=should_cancel,
         )
 
 
-def _resolve_seedvr2_repo_dir() -> _SeedVR2RepoResolution:
+def _resolve_seedvr2_repo_dir(
+    *,
+    should_cancel: Callable[[], bool] | None,
+) -> _SeedVR2RepoResolution:
     raw = str(os.environ.get(_SEEDVR2_REPO_ENV) or "").strip()
     if raw:
         candidate = Path(raw).expanduser()
@@ -301,6 +361,7 @@ def _resolve_seedvr2_repo_dir() -> _SeedVR2RepoResolution:
                 repo_dir=candidate.resolve(),
                 repo_url=_resolve_seedvr2_repo_url(),
                 repo_ref=pinned_ref,
+                should_cancel=should_cancel,
             )
 
     resolved = candidate.resolve()
@@ -408,20 +469,30 @@ def _raise_if_cancelled(should_cancel: Callable[[], bool] | None) -> None:
         raise RuntimeError("cancelled")
 
 
-def _target_dimensions(*, source_width: int, source_height: int, options: SeedVR2UpscaleOptions) -> tuple[int, int, int, int]:
+def calculate_seedvr2_target_dimensions(
+    *,
+    source_width: int,
+    source_height: int,
+    options: SeedVR2UpscaleOptions,
+) -> tuple[int, int, int, int]:
     if source_width <= 0 or source_height <= 0:
         raise RuntimeError(f"SeedVR2 source dimensions must be positive, got {source_width}x{source_height}.")
     resolution = int(options.resolution or 0)
     if resolution <= 0:
         raise RuntimeError(f"SeedVR2 resolution must be positive, got {options.resolution!r}.")
-    scale = float(resolution) / float(min(source_width, source_height))
-    target_width = max(2, int(round(source_width * scale)))
-    target_height = max(2, int(round(source_height * scale)))
+    if source_width <= source_height:
+        target_width = resolution
+        target_height = int(resolution * source_height / source_width)
+    else:
+        target_height = resolution
+        target_width = int(resolution * source_width / source_height)
     max_resolution = int(options.max_resolution or 0)
     if max_resolution > 0 and max(target_width, target_height) > max_resolution:
         maximum_scale = float(max_resolution) / float(max(target_width, target_height))
-        target_width = max(2, int(round(target_width * maximum_scale)))
-        target_height = max(2, int(round(target_height * maximum_scale)))
+        target_width = int(round(target_width * maximum_scale))
+        target_height = int(round(target_height * maximum_scale))
+    target_width = max(2, target_width)
+    target_height = max(2, target_height)
     target_width = max(2, (target_width // 2) * 2)
     target_height = max(2, (target_height // 2) * 2)
     padded_width = int(math.ceil(target_width / 16.0) * 16)
@@ -508,7 +579,7 @@ def _build_memory_budget(
     component_device: str | None,
     cuda_device_index: int | None,
 ) -> _SeedVR2MemoryBudget:
-    target_width, target_height, padded_width, padded_height = _target_dimensions(
+    target_width, target_height, padded_width, padded_height = calculate_seedvr2_target_dimensions(
         source_width=int(source_probe.width),
         source_height=int(source_probe.height),
         options=options,
@@ -544,7 +615,19 @@ def _streaming_chunk_size(
     temporal_context = int(options.temporal_overlap or 0)
     priming_context = int(options.prepend_frames or 0)
     available_frame_slots = budget.usable_frame_bytes // budget.per_frame_estimate_bytes
-    maximum_new_frames = int(available_frame_slots) - temporal_context - priming_context
+    maximum_new_frames = min(
+        int(available_frame_slots) - temporal_context - priming_context,
+        source_frame_count - 1 if source_frame_count > 1 else 1,
+    )
+    while maximum_new_frames >= 1:
+        processing_frames = maximum_new_frames + temporal_context + priming_context
+        admitted_frames = _upstream_admitted_frame_count(
+            processing_frames=processing_frames,
+            options=options,
+        )
+        if admitted_frames <= available_frame_slots:
+            return maximum_new_frames
+        maximum_new_frames -= 1
     if maximum_new_frames < 1:
         raise SeedVR2OutOfMemoryError(
             "out of memory: SeedVR2 streaming cannot admit even one new frame after the measured VRAM reserve; "
@@ -553,8 +636,32 @@ def _streaming_chunk_size(
             f"per_frame_bytes={budget.per_frame_estimate_bytes}, temporal_context={temporal_context}, "
             f"priming_context={priming_context}."
         )
-    bounded_source_limit = source_frame_count - 1 if source_frame_count > 1 else 1
-    return max(1, min(maximum_new_frames, bounded_source_limit))
+    raise RuntimeError("SeedVR2 streaming admission failed to select a positive chunk size.")
+
+
+def _upstream_admitted_frame_count(
+    *,
+    processing_frames: int,
+    options: SeedVR2UpscaleOptions,
+) -> int:
+    if processing_frames <= 0:
+        raise RuntimeError(f"SeedVR2 processing frame count must be positive, got {processing_frames}.")
+    if not bool(options.uniform_batch_size):
+        return processing_frames
+    batch_size = int(options.batch_size or 0)
+    temporal_overlap = int(options.temporal_overlap or 0)
+    if batch_size <= 0:
+        raise RuntimeError(f"SeedVR2 batch_size must be positive, got {batch_size}.")
+    step = batch_size - temporal_overlap if temporal_overlap > 0 else batch_size
+    if step <= 0:
+        raise RuntimeError(
+            "SeedVR2 uniform-batch admission requires temporal_overlap lower than batch_size."
+        )
+    final_batch_index = max(0, ((processing_frames - temporal_overlap - 1) // step) * step)
+    final_batch_frames = min(batch_size, processing_frames - final_batch_index)
+    if final_batch_frames <= 0:
+        raise RuntimeError("SeedVR2 uniform-batch admission produced an empty final batch.")
+    return processing_frames + (batch_size - final_batch_frames)
 
 
 def _select_execution_plan(
@@ -581,11 +688,16 @@ def _select_execution_plan(
         cuda_device_index=cuda_device_index,
     )
     processing_frames = int(source_frame_count) + int(options.prepend_frames or 0)
+    admitted_processing_frames = _upstream_admitted_frame_count(
+        processing_frames=processing_frames,
+        options=options,
+    )
+    uniform_padding_frames = admitted_processing_frames - processing_frames
     direct_required_bytes = (
         budget.operational_reserve_bytes
         + budget.model_reservation_bytes
         + budget.runtime_reservation_bytes
-        + processing_frames * budget.per_frame_estimate_bytes
+        + admitted_processing_frames * budget.per_frame_estimate_bytes
     )
     if bool(options.streaming):
         return _SeedVR2ExecutionPlan(
@@ -597,6 +709,8 @@ def _select_execution_plan(
             ),
             selection_reason="streaming_requested",
             direct_required_bytes=direct_required_bytes,
+            direct_processing_frames=admitted_processing_frames,
+            direct_uniform_padding_frames=uniform_padding_frames,
             budget=budget,
         )
     if direct_required_bytes <= budget.available_bytes:
@@ -605,6 +719,8 @@ def _select_execution_plan(
             chunk_size=0,
             selection_reason="direct_vram_admitted",
             direct_required_bytes=direct_required_bytes,
+            direct_processing_frames=admitted_processing_frames,
+            direct_uniform_padding_frames=uniform_padding_frames,
             budget=budget,
         )
     if bool(options.smart_fallback):
@@ -617,6 +733,8 @@ def _select_execution_plan(
             ),
             selection_reason="smart_fallback_after_direct_capacity_rejection",
             direct_required_bytes=direct_required_bytes,
+            direct_processing_frames=admitted_processing_frames,
+            direct_uniform_padding_frames=uniform_padding_frames,
             budget=budget,
         )
     raise SeedVR2OutOfMemoryError(
@@ -680,9 +798,32 @@ def _seedvr2_child_command(
     return command
 
 
+def _posix_process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _wait_for_posix_process_group_exit(
+    process: subprocess.Popen[str],
+    process_group_id: int,
+    *,
+    timeout_seconds: float,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        process.poll()
+        if not _posix_process_group_exists(process_group_id):
+            return True
+        time.sleep(_CHILD_POLL_SECONDS)
+    return not _posix_process_group_exists(process_group_id)
+
+
 def _terminate_seedvr2_child(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
     if os.name == "nt":
         try:
             subprocess.run(
@@ -697,28 +838,38 @@ def _terminate_seedvr2_child(process: subprocess.Popen[str]) -> None:
                 process.terminate()
             except Exception:
                 pass
-    else:
         try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+            process.wait(timeout=_CHILD_TERMINATE_TIMEOUT_SECONDS)
         except Exception:
-            try:
-                process.terminate()
-            except Exception:
-                pass
-    try:
-        process.wait(timeout=_CHILD_TERMINATE_TIMEOUT_SECONDS)
+            pass
         return
-    except subprocess.TimeoutExpired:
+
+    process_group_id = process.pid
+    try:
+        os.killpg(process_group_id, signal.SIGTERM)
+    except ProcessLookupError:
         pass
-    if os.name != "nt":
+    except Exception:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            process.terminate()
+        except Exception:
+            pass
+    if not _wait_for_posix_process_group_exit(
+        process,
+        process_group_id,
+        timeout_seconds=_CHILD_TERMINATE_TIMEOUT_SECONDS,
+    ):
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
         except ProcessLookupError:
             pass
         except Exception:
             pass
+        _wait_for_posix_process_group_exit(
+            process,
+            process_group_id,
+            timeout_seconds=_CHILD_TERMINATE_TIMEOUT_SECONDS,
+        )
     try:
         process.kill()
     except Exception:
@@ -788,19 +939,24 @@ def _run_seedvr2_child(
 
     reader = threading.Thread(target=drain_output, name="seedvr2-child-output", daemon=True)
     reader.start()
-    try:
-        while process.poll() is None:
-            _raise_if_cancelled(should_cancel)
-            if process.poll() is None:
-                time.sleep(_CHILD_POLL_SECONDS)
-    except RuntimeError as exc:
-        if str(exc) != "cancelled":
-            raise
-        if process.poll() is None:
+    cancellation_observed = False
+    while True:
+        if process.poll() is not None:
+            break
+        if should_cancel is not None and should_cancel():
+            cancellation_observed = True
             _terminate_seedvr2_child(process)
-            raise
-    finally:
-        reader.join(timeout=_CHILD_TERMINATE_TIMEOUT_SECONDS)
+            break
+        time.sleep(_CHILD_POLL_SECONDS)
+
+    reader.join(timeout=_CHILD_TERMINATE_TIMEOUT_SECONDS)
+    if reader.is_alive():
+        _terminate_seedvr2_child(process)
+        reader.join()
+    else:
+        _terminate_seedvr2_child(process)
+    if cancellation_observed:
+        raise RuntimeError("cancelled")
 
     output = "".join(output_parts).strip()
     if process.returncode == 0:
@@ -822,10 +978,16 @@ def _collect_output_frame_paths(
     output_root: Path,
     expected_frame_count: int,
     prepend_frames: int,
+    should_cancel: Callable[[], bool] | None,
 ) -> tuple[tuple[str, ...], int, int, int]:
     if expected_frame_count <= 0:
         raise RuntimeError(f"SeedVR2 expected frame count must be positive, got {expected_frame_count}.")
-    png_paths = tuple(sorted(path for path in output_root.rglob("*.png") if path.is_file()))
+    discovered_paths: list[Path] = []
+    for output_path in output_root.rglob("*.png"):
+        _raise_if_cancelled(should_cancel)
+        if output_path.is_file():
+            discovered_paths.append(output_path)
+    png_paths = tuple(sorted(discovered_paths))
     if not png_paths:
         raise RuntimeError(f"SeedVR2 child produced no PNG frames under '{output_root}'.")
     raw_frame_count = len(png_paths)
@@ -854,6 +1016,7 @@ def _collect_output_frame_paths(
     output_width: int | None = None
     output_height: int | None = None
     for index, output_path in enumerate(normalized_paths):
+        _raise_if_cancelled(should_cancel)
         try:
             with Image.open(output_path) as image:
                 width, height = image.size
@@ -899,6 +1062,7 @@ def _run_plan(
         output_root=output_root,
         expected_frame_count=source_frame_count,
         prepend_frames=int(options.prepend_frames or 0),
+        should_cancel=should_cancel,
     )
     return frame_paths, output_width, output_height, removed_priming_frames, child_output
 
@@ -910,6 +1074,8 @@ def _plan_metadata(plan: _SeedVR2ExecutionPlan) -> dict[str, object]:
         "selection_reason": plan.selection_reason,
         "chunk_size": int(plan.chunk_size),
         "direct_required_bytes": int(plan.direct_required_bytes),
+        "direct_processing_frames": int(plan.direct_processing_frames),
+        "direct_uniform_padding_frames": int(plan.direct_uniform_padding_frames),
         "device": budget.device_label,
         "memory_metric": budget.metric,
         "available_bytes": int(budget.available_bytes),
@@ -941,7 +1107,7 @@ def run_seedvr2_upscaling(
     if source_frame_count <= 0:
         raise RuntimeError(f"SeedVR2 source timing returned invalid frame count {source_frame_count}.")
     _raise_if_cancelled(should_cancel)
-    repo_resolution = _resolve_seedvr2_repo_dir()
+    repo_resolution = _resolve_seedvr2_repo_dir(should_cancel=should_cancel)
     model_dir = _resolve_seedvr2_model_dir()
     cuda_device_index = _normalize_cuda_device_index(component_device)
     output_base_dir = Path(output_dir).expanduser().resolve()
@@ -1046,4 +1212,9 @@ def run_seedvr2_upscaling(
     )
 
 
-__all__ = ["SeedVR2OutOfMemoryError", "SeedVR2UpscaleResult", "run_seedvr2_upscaling"]
+__all__ = [
+    "SeedVR2OutOfMemoryError",
+    "SeedVR2UpscaleResult",
+    "calculate_seedvr2_target_dimensions",
+    "run_seedvr2_upscaling",
+]
