@@ -7,9 +7,9 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Dedicated SeedVR2 video-upscale utility route.
-Lets users select a backend-visible source-video path without uploading video bytes through the browser, configure curated SeedVR2 options and
-the explicit streaming/smart-fallback policy, surface route-local admission failures before task creation, run the accepted task through the
-shared task/SSE contract, and play, open, zoom, or download the exported MP4 result with truthful media status.
+Lets users select a pinned-runtime-compatible backend-visible source-video path without uploading video bytes through the browser, configure
+curated SeedVR2 options and the explicit streaming/smart-fallback policy, surface route-local admission failures before task creation, run the
+accepted task through the shared task/SSE contract, and play, open, zoom, or download the exported MP4 result with truthful media status.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `VideoUpscale` (component): Dedicated SeedVR2 source-video upscale workspace.
@@ -362,7 +362,7 @@ type ProgressState = {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
-const VIDEO_EXTENSIONS = '.mp4,.mkv,.mov,.avi,.webm,.m4v,.mpeg,.mpg,.ts,.mts'
+const VIDEO_EXTENSIONS = '.mp4,.mkv,.mov,.avi,.webm,.m4v'
 
 const quicksettings = useQuicksettingsStore()
 const { notice, toast } = useResultsCard()

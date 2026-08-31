@@ -7,8 +7,8 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Canonical SeedVR2 video-upscale use case.
-Consumes one router-created immutable source snapshot and resource admission, runs the dedicated cancellable SeedVR2 child runner, then delegates
-timestamp-aware staged MP4 assembly, source-audio/A-V-origin verification, atomic artifact-directory publication, and cleanup to existing owners.
+Consumes one router-created immutable source snapshot plus host, allocation-block, and inode admission, runs the dedicated cancellable SeedVR2
+child runner, then delegates timestamp-aware staged MP4 assembly, source-audio/A-V-origin verification, atomic publication, and cleanup.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `VideoUpscaleSourceAdmission` (dataclass): Immutable source snapshot, exact media, geometry, and dynamic host/scratch evidence.
@@ -60,8 +60,14 @@ class VideoUpscaleSourceAdmission:
     host_memory: SeedVR2HostMemoryAdmission
     work_scratch_required_bytes: int
     work_scratch_available_bytes: int
+    work_scratch_allocation_unit_bytes: int
+    work_scratch_required_inodes: int
+    work_scratch_available_inodes: int
     output_scratch_required_bytes: int
     output_scratch_available_bytes: int
+    output_scratch_allocation_unit_bytes: int
+    output_scratch_required_inodes: int
+    output_scratch_available_inodes: int
     scratch_reserve_bytes: int
     shared_scratch_filesystem: bool
 
@@ -189,10 +195,16 @@ def _admission_metadata(admission: VideoUpscaleSourceAdmission) -> dict[str, obj
             "work": {
                 "required_bytes": admission.work_scratch_required_bytes,
                 "available_bytes": admission.work_scratch_available_bytes,
+                "allocation_unit_bytes": admission.work_scratch_allocation_unit_bytes,
+                "required_inodes": admission.work_scratch_required_inodes,
+                "available_inodes": admission.work_scratch_available_inodes,
             },
             "output": {
                 "required_bytes": admission.output_scratch_required_bytes,
                 "available_bytes": admission.output_scratch_available_bytes,
+                "allocation_unit_bytes": admission.output_scratch_allocation_unit_bytes,
+                "required_inodes": admission.output_scratch_required_inodes,
+                "available_inodes": admission.output_scratch_available_inodes,
             },
         },
     }

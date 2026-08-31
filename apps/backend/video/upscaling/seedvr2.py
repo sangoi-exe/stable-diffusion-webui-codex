@@ -7,9 +7,9 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Fail-loud SeedVR2 child-process runner and resource planner for dedicated video upscaling.
-Prepares the deterministic SeedVR2 checkout and model directory, models the exact upstream batch schedule and host-memory shape, measures
-available accelerator memory, selects the approved direct or bounded streaming CLI invocation, terminates the complete child process group for
-task-scoped cancellation, drains diagnostics to EOF, and returns validated PNG paths without materializing videos in the backend process.
+Prepares the deterministic SeedVR2 checkout and model directory, models the exact upstream batch schedule plus concurrent source/target memory
+and PNG-conversion peaks, measures available accelerator memory, selects the approved direct or bounded streaming CLI invocation, terminates
+the complete child process group for task-scoped cancellation, drains diagnostics to EOF, and returns numerically validated PNG paths.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `SeedVR2OutOfMemoryError` (class): Typed local execution failure that maps to the public out-of-memory task result.
@@ -92,6 +92,7 @@ _OOM_MARKERS = (
     "cudnn_status_alloc_failed",
 )
 _OOM_MARKER_SUFFIX_SIZE = max(len(marker) for marker in _OOM_MARKERS) - 1
+_OUTPUT_FRAME_NAME_RE = re.compile(r".+_(?P<index>[0-9]+)\.png\Z")
 
 try:
     import fcntl  # type: ignore
@@ -149,9 +150,11 @@ class SeedVR2HostMemoryEstimate:
     concatenated_float32_bytes: int
     processing_float16_bytes: int
     retained_latent_bytes: int
-    final_output_bytes: int
-    peak_batch_bytes: int
-    png_conversion_bytes: int
+    source_batch_bytes: int
+    target_batch_bytes: int
+    returned_float32_bytes: int
+    png_multiply_float32_bytes: int
+    png_uint8_bytes: int
     schedule: SeedVR2BatchSchedule
 
     def as_dict(self) -> dict[str, object]:
@@ -165,9 +168,11 @@ class SeedVR2HostMemoryEstimate:
             "concatenated_float32_bytes": int(self.concatenated_float32_bytes),
             "processing_float16_bytes": int(self.processing_float16_bytes),
             "retained_latent_bytes": int(self.retained_latent_bytes),
-            "final_output_bytes": int(self.final_output_bytes),
-            "peak_batch_bytes": int(self.peak_batch_bytes),
-            "png_conversion_bytes": int(self.png_conversion_bytes),
+            "source_batch_bytes": int(self.source_batch_bytes),
+            "target_batch_bytes": int(self.target_batch_bytes),
+            "returned_float32_bytes": int(self.returned_float32_bytes),
+            "png_multiply_float32_bytes": int(self.png_multiply_float32_bytes),
+            "png_uint8_bytes": int(self.png_uint8_bytes),
             "schedule": self.schedule.as_dict(),
         }
 
@@ -217,7 +222,10 @@ class _SeedVR2MemoryBudget:
     operational_reserve_bytes: int
     model_reservation_bytes: int
     runtime_reservation_bytes: int
-    per_frame_estimate_bytes: int
+    source_batch_frame_bytes: int
+    target_frame_estimate_bytes: int
+    source_width: int
+    source_height: int
     target_width: int
     target_height: int
     padded_width: int
@@ -231,6 +239,10 @@ class _SeedVR2MemoryBudget:
             - self.model_reservation_bytes
             - self.runtime_reservation_bytes
         )
+
+    @property
+    def concurrent_batch_frame_bytes(self) -> int:
+        return self.source_batch_frame_bytes + self.target_frame_estimate_bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -699,16 +711,21 @@ def _calculate_host_memory_estimate(
         * _LATENT_CHANNELS
         * _COMPUTE_DTYPE_BYTES
     )
-    final_output_bytes = (
-        processing_frames * target_pixels * _RGB_CHANNELS * _COMPUTE_DTYPE_BYTES
+    source_batch_bytes = (
+        schedule.peak_effective_batch_frames
+        * source_pixels
+        * _RGB_CHANNELS
+        * _COMPUTE_DTYPE_BYTES
     )
-    peak_batch_bytes = (
+    target_batch_bytes = (
         schedule.peak_effective_batch_frames
         * padded_pixels
         * _RGB_CHANNELS
         * _COMPUTE_DTYPE_BYTES
     )
-    png_conversion_bytes = processing_frames * target_pixels * _RGB_CHANNELS * _UINT8_BYTES
+    returned_float32_bytes = processing_frames * target_pixels * _RGB_CHANNELS * _FLOAT32_BYTES
+    png_multiply_float32_bytes = returned_float32_bytes
+    png_uint8_bytes = processing_frames * target_pixels * _RGB_CHANNELS * _UINT8_BYTES
     required_bytes = (
         operational_reserve_bytes
         + _HOST_MEMORY_BASE_BYTES
@@ -718,9 +735,11 @@ def _calculate_host_memory_estimate(
         + concatenated_float32_bytes
         + processing_float16_bytes
         + retained_latent_bytes
-        + final_output_bytes
-        + peak_batch_bytes
-        + png_conversion_bytes
+        + source_batch_bytes
+        + target_batch_bytes
+        + returned_float32_bytes
+        + png_multiply_float32_bytes
+        + png_uint8_bytes
     )
     return SeedVR2HostMemoryEstimate(
         new_frames=new_frames,
@@ -732,9 +751,11 @@ def _calculate_host_memory_estimate(
         concatenated_float32_bytes=concatenated_float32_bytes,
         processing_float16_bytes=processing_float16_bytes,
         retained_latent_bytes=retained_latent_bytes,
-        final_output_bytes=final_output_bytes,
-        peak_batch_bytes=peak_batch_bytes,
-        png_conversion_bytes=png_conversion_bytes,
+        source_batch_bytes=source_batch_bytes,
+        target_batch_bytes=target_batch_bytes,
+        returned_float32_bytes=returned_float32_bytes,
+        png_multiply_float32_bytes=png_multiply_float32_bytes,
+        png_uint8_bytes=png_uint8_bytes,
         schedule=schedule,
     )
 
@@ -969,7 +990,11 @@ def _build_memory_budget(
         component_device=component_device,
         cuda_device_index=cuda_device_index,
     )
-    per_frame_estimate_bytes = max(1, padded_width * padded_height * _PER_PADDED_OUTPUT_PIXEL_BYTES)
+    source_batch_frame_bytes = max(
+        1,
+        int(source_probe.width) * int(source_probe.height) * _RGB_CHANNELS * _COMPUTE_DTYPE_BYTES,
+    )
+    target_frame_estimate_bytes = max(1, padded_width * padded_height * _PER_PADDED_OUTPUT_PIXEL_BYTES)
     return _SeedVR2MemoryBudget(
         device_label=device_label,
         metric=metric,
@@ -977,7 +1002,10 @@ def _build_memory_budget(
         operational_reserve_bytes=_operational_reserve_bytes(),
         model_reservation_bytes=_model_reservation_bytes(options),
         runtime_reservation_bytes=_RUNTIME_RESERVATION_BYTES,
-        per_frame_estimate_bytes=per_frame_estimate_bytes,
+        source_batch_frame_bytes=source_batch_frame_bytes,
+        target_frame_estimate_bytes=target_frame_estimate_bytes,
+        source_width=int(source_probe.width),
+        source_height=int(source_probe.height),
         target_width=target_width,
         target_height=target_height,
         padded_width=padded_width,
@@ -1004,7 +1032,7 @@ def _streaming_chunk_size(
             f"required_bytes={required_bytes}, available_bytes={host_memory.available_bytes}, "
             f"reserve_bytes={host_memory.operational_reserve_bytes}."
         )
-    available_frame_slots = budget.usable_frame_bytes // budget.per_frame_estimate_bytes
+    available_frame_slots = budget.usable_frame_bytes // budget.concurrent_batch_frame_bytes
     maximum_new_frames = min(host_memory.streaming_chunk_size, source_frame_count)
     low = 1
     high = maximum_new_frames
@@ -1030,7 +1058,8 @@ def _streaming_chunk_size(
             "out of memory: SeedVR2 streaming cannot admit even one new frame after the measured VRAM reserve; "
             f"available_bytes={budget.available_bytes}, reserve_bytes={budget.operational_reserve_bytes}, "
             f"model_bytes={budget.model_reservation_bytes}, runtime_bytes={budget.runtime_reservation_bytes}, "
-            f"per_frame_bytes={budget.per_frame_estimate_bytes}."
+            f"source_batch_frame_bytes={budget.source_batch_frame_bytes}, "
+            f"target_frame_estimate_bytes={budget.target_frame_estimate_bytes}."
         )
     return selected
 
@@ -1090,7 +1119,7 @@ def _select_execution_plan(
         budget.operational_reserve_bytes
         + budget.model_reservation_bytes
         + budget.runtime_reservation_bytes
-        + direct_schedule.peak_effective_batch_frames * budget.per_frame_estimate_bytes
+        + direct_schedule.peak_effective_batch_frames * budget.concurrent_batch_frame_bytes
     )
     if bool(options.streaming):
         chunk_size = _streaming_chunk_size(
@@ -1406,15 +1435,37 @@ def _collect_output_frame_paths(
 ) -> tuple[tuple[str, ...], int, int, int]:
     if expected_frame_count <= 0:
         raise RuntimeError(f"SeedVR2 expected frame count must be positive, got {expected_frame_count}.")
-    discovered_paths: list[Path] = []
+    discovered_paths_by_index: dict[int, Path] = {}
     for output_path in output_root.rglob("*.png"):
         _raise_if_cancelled(should_cancel)
-        if output_path.is_file():
-            discovered_paths.append(output_path)
-    png_paths = tuple(sorted(discovered_paths))
+        if not output_path.is_file():
+            continue
+        match = _OUTPUT_FRAME_NAME_RE.fullmatch(output_path.name)
+        if match is None:
+            raise RuntimeError(
+                "SeedVR2 child produced a PNG with no trailing numeric frame identity: "
+                f"'{output_path}'."
+            )
+        frame_index = int(match.group("index"))
+        duplicate_path = discovered_paths_by_index.get(frame_index)
+        if duplicate_path is not None:
+            raise RuntimeError(
+                "SeedVR2 child produced duplicate numeric frame identities: "
+                f"index={frame_index}, first='{duplicate_path}', duplicate='{output_path}'."
+            )
+        discovered_paths_by_index[frame_index] = output_path
+    ordered_indices = sorted(discovered_paths_by_index)
+    png_paths = tuple(discovered_paths_by_index[index] for index in ordered_indices)
     if not png_paths:
         raise RuntimeError(f"SeedVR2 child produced no PNG frames under '{output_root}'.")
     raw_frame_count = len(png_paths)
+    for expected_index, actual_index in enumerate(ordered_indices):
+        if actual_index != expected_index:
+            raise RuntimeError(
+                "SeedVR2 child output frame identities are not contiguous from zero: "
+                f"expected_index={expected_index}, actual_index={actual_index}, "
+                f"raw_output={raw_frame_count}."
+            )
     if raw_frame_count == expected_frame_count:
         normalized_paths = png_paths
         removed_priming_frames = 0
@@ -1510,7 +1561,10 @@ def _plan_metadata(plan: _SeedVR2ExecutionPlan) -> dict[str, object]:
         "operational_reserve_bytes": int(budget.operational_reserve_bytes),
         "model_reservation_bytes": int(budget.model_reservation_bytes),
         "runtime_reservation_bytes": int(budget.runtime_reservation_bytes),
-        "per_frame_estimate_bytes": int(budget.per_frame_estimate_bytes),
+        "source_batch_frame_bytes": int(budget.source_batch_frame_bytes),
+        "target_frame_estimate_bytes": int(budget.target_frame_estimate_bytes),
+        "concurrent_batch_frame_bytes": int(budget.concurrent_batch_frame_bytes),
+        "source_size_estimate": {"width": int(budget.source_width), "height": int(budget.source_height)},
         "target_size_estimate": {"width": int(budget.target_width), "height": int(budget.target_height)},
         "padded_size_estimate": {"width": int(budget.padded_width), "height": int(budget.padded_height)},
     }

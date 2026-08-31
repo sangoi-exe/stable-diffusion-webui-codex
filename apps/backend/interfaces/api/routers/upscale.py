@@ -12,12 +12,12 @@ Exposes:
 - remote HF upscaler listing + downloads (`GET/POST /api/upscalers/*`), with optional manifest-based metadata enrichment
   (`upscalers/manifest.json`, schema v1) and explicit `manifest_error`/`manifest_errors` surfacing
 - standalone upscaling tasks (`POST /api/upscale`)
-- dedicated SeedVR2 video-upscale tasks (`POST /api/video-upscale`, immutable source snapshot, exact media/resource admission, and execution policy)
+- dedicated SeedVR2 video-upscale tasks (`POST /api/video-upscale`, pinned-compatible source suffixes, immutable snapshot, exact media/resource admission, and execution policy)
 Remote listing/download respects the upscaler safeweights policy (`CODEX_SAFE_WEIGHTS=1` blocks non-`.safetensors` weights).
 
 Symbols (top-level; keep in sync; no ghosts):
 - `_parse_video_upscale_request` (function): Validates the strict dedicated SeedVR2 request payload.
-- `_preflight_video_upscale_source` (function): Snapshots and admits exact source media, timing, host memory, and scratch capacity before registration.
+- `_preflight_video_upscale_source` (function): Admits the source suffix, snapshots exact media, and verifies timing, host memory, blocks, and inodes before registration.
 - `build_router` (function): Build the APIRouter for upscaler endpoints.
 """
 
@@ -75,12 +75,17 @@ _SEEDVR2_DIT_MODELS = frozenset(
 )
 _SEEDVR2_COLOR_CORRECTIONS = frozenset({"lab", "wavelet", "wavelet_adaptive", "hsv", "adain", "none"})
 _SEEDVR2_BATCH_SIZES = frozenset({1, 5, 9, 13, 17, 33, 65, 129})
+_SEEDVR2_SOURCE_SUFFIXES = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v")
 _MIB = 1024 * 1024
 _GIB = 1024 * _MIB
 _WORK_SCRATCH_BASE_BYTES = 128 * _MIB
 _WORK_SCRATCH_BYTES_PER_PADDED_PIXEL = 5
+_WORK_SNAPSHOT_FIXED_INODES_AFTER_ROOT = 2
+_WORK_EXECUTION_FIXED_INODES_AFTER_ROOT = 4
+_WORK_SMART_FALLBACK_RETRY_INODES = 1
 _OUTPUT_SCRATCH_BASE_BYTES = 128 * _MIB
 _OUTPUT_SCRATCH_BYTES_PER_PADDED_PIXEL = 4
+_OUTPUT_SCRATCH_FIXED_INODES = 7
 _SCRATCH_OPERATIONAL_RESERVE_BYTES = 2 * _GIB
 
 
@@ -251,6 +256,35 @@ def _nearest_existing_capacity_path(path: Path) -> Path:
     return candidate
 
 
+def _missing_directory_count(path: Path, *, existing_ancestor: Path) -> int:
+    resolved_path = path.expanduser().resolve()
+    resolved_ancestor = existing_ancestor.expanduser().resolve()
+    try:
+        relative_path = resolved_path.relative_to(resolved_ancestor)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Filesystem capacity owner '{resolved_ancestor}' is not an ancestor of '{resolved_path}'."
+        ) from exc
+    return len(relative_path.parts)
+
+
+def _filesystem_allocation_unit_and_available_inodes(path: Path) -> tuple[int, int]:
+    filesystem = os.statvfs(path)
+    allocation_unit_bytes = int(filesystem.f_frsize or filesystem.f_bsize)
+    if allocation_unit_bytes <= 0:
+        raise RuntimeError(f"Filesystem '{path}' did not report a positive allocation unit.")
+    available_inodes = int(filesystem.f_favail)
+    if available_inodes < 0:
+        raise RuntimeError(f"Filesystem '{path}' reported a negative available-inode count.")
+    return allocation_unit_bytes, available_inodes
+
+
+def _round_up_to_allocation_unit(value: int, allocation_unit_bytes: int) -> int:
+    if value < 0:
+        raise RuntimeError(f"Scratch byte estimate cannot be negative, got {value}.")
+    return ((value + allocation_unit_bytes - 1) // allocation_unit_bytes) * allocation_unit_bytes
+
+
 def _preflight_video_upscale_source(
     video_path: str,
     options: SeedVR2UpscaleOptions,
@@ -258,6 +292,15 @@ def _preflight_video_upscale_source(
     source_path = Path(video_path).expanduser().resolve()
     if not source_path.is_file() or not os.access(source_path, os.R_OK):
         raise HTTPException(status_code=400, detail="'video_path' must identify a readable file")
+    source_suffix = source_path.suffix.lower()
+    if source_suffix not in _SEEDVR2_SOURCE_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "SeedVR2 source suffix is unsupported by the pinned child runtime: "
+                f"got={source_suffix or '<none>'!r}, supported={', '.join(_SEEDVR2_SOURCE_SUFFIXES)}."
+            ),
+        )
     try:
         source_size_bytes = int(source_path.stat().st_size)
         if source_size_bytes <= 0:
@@ -266,6 +309,16 @@ def _preflight_video_upscale_source(
         output_capacity_path = _nearest_existing_capacity_path(video_export_output_root())
         work_usage = shutil.disk_usage(work_capacity_path)
         output_usage = shutil.disk_usage(output_capacity_path)
+        work_allocation_unit_bytes, work_scratch_available_inodes = (
+            _filesystem_allocation_unit_and_available_inodes(work_capacity_path)
+        )
+        output_allocation_unit_bytes, output_scratch_available_inodes = (
+            _filesystem_allocation_unit_and_available_inodes(output_capacity_path)
+        )
+        work_root_missing_inodes = _missing_directory_count(
+            video_upscale_work_root(),
+            existing_ancestor=work_capacity_path,
+        )
         shared_scratch_filesystem = os.stat(work_capacity_path).st_dev == os.stat(output_capacity_path).st_dev
     except HTTPException:
         raise
@@ -278,21 +331,31 @@ def _preflight_video_upscale_source(
 
     work_scratch_available_bytes = int(work_usage.free)
     output_scratch_available_bytes = int(output_usage.free)
-    if source_size_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > work_scratch_available_bytes:
+    snapshot_allocation_bytes = _round_up_to_allocation_unit(source_size_bytes, work_allocation_unit_bytes)
+    if snapshot_allocation_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > work_scratch_available_bytes:
         raise HTTPException(
             status_code=400,
             detail=(
                 "SeedVR2 source snapshot exceeds current task-work scratch admission: "
-                f"required_bytes={source_size_bytes}, available_bytes={work_scratch_available_bytes}, "
+                f"required_bytes={snapshot_allocation_bytes}, available_bytes={work_scratch_available_bytes}, "
                 f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
+            ),
+        )
+    snapshot_required_inodes = work_root_missing_inodes + _WORK_SNAPSHOT_FIXED_INODES_AFTER_ROOT
+    if work_scratch_available_inodes < snapshot_required_inodes:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "SeedVR2 source snapshot exceeds current task-work inode admission: "
+                f"required_inodes={snapshot_required_inodes}, "
+                f"available_inodes={work_scratch_available_inodes}."
             ),
         )
 
     work_dir: Path | None = None
     try:
         work_dir = create_video_upscale_work_dir()
-        snapshot_suffix = source_path.suffix
-        snapshot_path = work_dir / f"source_snapshot{snapshot_suffix}"
+        snapshot_path = work_dir / f"source_snapshot{source_suffix}"
         with source_path.open("rb") as source_file, snapshot_path.open("xb") as snapshot_file:
             shutil.copyfileobj(source_file, snapshot_file, length=8 * _MIB)
             snapshot_file.flush()
@@ -400,15 +463,27 @@ def _preflight_video_upscale_source(
 
         padded_frame_pixels = padded_width * padded_height
         work_frame_count = source_frame_count + int(options.prepend_frames or 0)
+        work_frame_allocation_bytes = max(
+            padded_frame_pixels * _WORK_SCRATCH_BYTES_PER_PADDED_PIXEL,
+            work_allocation_unit_bytes,
+        )
         work_scratch_required_bytes = (
-            snapshot_size_bytes
-            + _WORK_SCRATCH_BASE_BYTES
-            + work_frame_count * padded_frame_pixels * _WORK_SCRATCH_BYTES_PER_PADDED_PIXEL
+            _round_up_to_allocation_unit(snapshot_size_bytes, work_allocation_unit_bytes)
+            + _round_up_to_allocation_unit(_WORK_SCRATCH_BASE_BYTES, work_allocation_unit_bytes)
+            + work_frame_count * work_frame_allocation_bytes
         )
-        output_scratch_required_bytes = (
+        output_scratch_required_bytes = _round_up_to_allocation_unit(
             _OUTPUT_SCRATCH_BASE_BYTES
-            + source_frame_count * padded_frame_pixels * _OUTPUT_SCRATCH_BYTES_PER_PADDED_PIXEL
+            + source_frame_count * padded_frame_pixels * _OUTPUT_SCRATCH_BYTES_PER_PADDED_PIXEL,
+            output_allocation_unit_bytes,
         )
+        work_scratch_required_inodes = (
+            work_root_missing_inodes
+            + _WORK_EXECUTION_FIXED_INODES_AFTER_ROOT
+            + (_WORK_SMART_FALLBACK_RETRY_INODES if bool(options.smart_fallback) else 0)
+            + work_frame_count
+        )
+        output_scratch_required_inodes = _OUTPUT_SCRATCH_FIXED_INODES
         if shared_scratch_filesystem:
             combined_required_bytes = work_scratch_required_bytes + output_scratch_required_bytes
             if combined_required_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > work_scratch_available_bytes:
@@ -418,6 +493,16 @@ def _preflight_video_upscale_source(
                         "SeedVR2 source exceeds current shared scratch admission: "
                         f"required_bytes={combined_required_bytes}, available_bytes={work_scratch_available_bytes}, "
                         f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
+                    ),
+                )
+            combined_required_inodes = work_scratch_required_inodes + output_scratch_required_inodes
+            if combined_required_inodes > work_scratch_available_inodes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "SeedVR2 source exceeds current shared scratch inode admission: "
+                        f"required_inodes={combined_required_inodes}, "
+                        f"available_inodes={work_scratch_available_inodes}."
                     ),
                 )
         else:
@@ -430,6 +515,15 @@ def _preflight_video_upscale_source(
                         f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
                     ),
                 )
+            if work_scratch_required_inodes > work_scratch_available_inodes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "SeedVR2 source exceeds current task-work inode admission: "
+                        f"required_inodes={work_scratch_required_inodes}, "
+                        f"available_inodes={work_scratch_available_inodes}."
+                    ),
+                )
             if output_scratch_required_bytes + _SCRATCH_OPERATIONAL_RESERVE_BYTES > output_scratch_available_bytes:
                 raise HTTPException(
                     status_code=400,
@@ -437,6 +531,15 @@ def _preflight_video_upscale_source(
                         "SeedVR2 source exceeds current output scratch admission: "
                         f"required_bytes={output_scratch_required_bytes}, available_bytes={output_scratch_available_bytes}, "
                         f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
+                    ),
+                )
+            if output_scratch_required_inodes > output_scratch_available_inodes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "SeedVR2 source exceeds current output inode admission: "
+                        f"required_inodes={output_scratch_required_inodes}, "
+                        f"available_inodes={output_scratch_available_inodes}."
                     ),
                 )
 
@@ -480,8 +583,14 @@ def _preflight_video_upscale_source(
             host_memory=host_memory,
             work_scratch_required_bytes=work_scratch_required_bytes,
             work_scratch_available_bytes=work_scratch_available_bytes,
+            work_scratch_allocation_unit_bytes=work_allocation_unit_bytes,
+            work_scratch_required_inodes=work_scratch_required_inodes,
+            work_scratch_available_inodes=work_scratch_available_inodes,
             output_scratch_required_bytes=output_scratch_required_bytes,
             output_scratch_available_bytes=output_scratch_available_bytes,
+            output_scratch_allocation_unit_bytes=output_allocation_unit_bytes,
+            output_scratch_required_inodes=output_scratch_required_inodes,
+            output_scratch_available_inodes=output_scratch_available_inodes,
             scratch_reserve_bytes=_SCRATCH_OPERATIONAL_RESERVE_BYTES,
             shared_scratch_filesystem=shared_scratch_filesystem,
         )
