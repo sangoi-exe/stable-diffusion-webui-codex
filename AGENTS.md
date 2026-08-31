@@ -72,7 +72,7 @@ If you touch an `apps/**` source file, you keep its **file header block** honest
 
 ## WebUI Atlas
 
-Last reviewed on 2026-08-31 during the SeedVR2 R7-A method-specific MPS Phase 4 memory-admission tranche.
+Last reviewed on 2026-08-31 during the SeedVR2 R8-A method-specific CUDA/MPS Phase 4 memory-admission tranche.
 
 <!-- Merge-safety anchor: this prompt-resident WebUI Atlas replaces the former split-file discovery front door; update it whenever a hot path, owner file, public route, or shipped entrypoint moves. -->
 
@@ -234,13 +234,13 @@ Last reviewed on 2026-08-31 during the SeedVR2 R7-A method-specific MPS Phase 4 
 #### video_upscale
 
 - Public route: `apps/backend/interfaces/api/routers/upscale.py` (`/api/video-upscale`)
-  - Before task registration, admits only the pinned-compatible `.mp4|.mkv|.mov|.avi|.webm|.m4v` suffix set, copies one backend-visible path into a task-owned immutable snapshot, validates exact decoded count/timing, terminal-frame duration, AAC preservation evidence, curated SeedVR2 controls, upstream-matched target geometry, phase-specific host/CUDA/MPS memory including MPS Phase 4 retained input/output and method-specific color-correction workspace, MPS unified memory, per-file allocation-rounded scratch capacity, copied-audio output capacity, optional inode capacity, and a configured CUDA or MPS device. It does not accept browser-uploaded video bytes.
+  - Before task registration, admits only the pinned-compatible `.mp4|.mkv|.mov|.avi|.webm|.m4v` suffix set, copies one backend-visible path into a task-owned immutable snapshot, validates exact decoded count/timing, terminal-frame duration, AAC preservation evidence, curated SeedVR2 controls, upstream-matched target geometry, phase-specific host/CUDA/MPS memory including the active CUDA decoded batch plus method-specific correction workspace and the retained MPS Phase 4 input/output plus method-specific workspace, MPS unified memory, per-file allocation-rounded scratch capacity, copied-audio output capacity, optional inode capacity, and a configured CUDA or MPS device. It does not accept browser-uploaded video bytes.
 - Dedicated task worker: `apps/backend/interfaces/api/tasks/video_upscale_tasks.py`
   - Owns inference-gate coordination, progress forwarding, cancellation, terminal result/error state, and final task-snapshot cleanup, including early exits before use-case execution.
 - Canonical use-case: `apps/backend/use_cases/video_upscale.py`
   - Executes only the admitted immutable snapshot and owns SeedVR2 frame execution, task-work cleanup, verified H.264 MP4 export, and terminal `ResultEvent` emission.
 - Runtime and file owners: `apps/backend/video/io/ffmpeg.py`, `apps/backend/video/upscaling/seedvr2.py`, and `apps/backend/video/export/ffmpeg_exporter.py`
-  - Respectively own cancellable exact probing/timing/extraction, exact upstream batch/4n+1/overlap and temporal-padding planning across host/CUDA/MPS phase live sets, retained MPS input/latent/output residency, method-specific MPS Phase 4 color-correction workspace, shared-memory admission, float32 PNG conversion, numeric PNG identity, complete child-tree cleanup, and relative A/V-origin verification plus one atomic artifact-directory publication under the existing output route.
+  - Respectively own cancellable exact probing/timing/extraction, exact upstream batch/4n+1/overlap and temporal-padding planning across host/CUDA/MPS phase live sets, method-specific CUDA Phase 4 active-batch workspace, retained MPS input/latent/output residency plus method-specific Phase 4 workspace, shared-memory admission, float32 PNG conversion, numeric PNG identity, complete child-tree cleanup, and relative A/V-origin verification plus one atomic artifact-directory publication under the existing output route.
 - Terminal surfaces: `apps/backend/interfaces/api/task_registry.py` and `apps/backend/interfaces/api/routers/tasks.py`
   - Keep task snapshot, SSE replay, cancellation, and output-file serving unchanged.
 
@@ -268,7 +268,7 @@ Last reviewed on 2026-08-31 during the SeedVR2 R7-A method-specific MPS Phase 4 
   - Owns public generation routes, payload parsing, route-level capability guards, exact-engine SUPIR-mode preflight for canonical img2img/inpaint, exact `zimage_l2p` no-VAE txt2img admission, task creation, and worker thread hand-off.
   - Do not move mode execution into this file; it stays validate + dispatch + stream.
 - Video Upscale utility seam: `apps/backend/interfaces/api/routers/upscale.py`, `apps/backend/interfaces/api/tasks/video_upscale_tasks.py`, and `apps/backend/use_cases/video_upscale.py`
-  - The router owns the pinned-compatible suffix gate and dynamically admits snapshot media, exact phase resource live sets including MPS Phase 4 retained input/output plus method-specific color-correction workspace, cross-platform per-file allocation rounding, copied-audio output capacity, and inode capacity when the filesystem exposes it before task creation. The worker owns task lifecycle and final snapshot cleanup. The use case owns one snapshot-bound video-upscale pipeline. Reuse the cancellable video I/O, numeric-frame SeedVR2 runner, atomic verified export, task registry, and SSE owners instead of reactivating vid2vid, adding remux, or adding a browser upload path.
+  - The router owns the pinned-compatible suffix gate and dynamically admits snapshot media, exact phase resource live sets including the active CUDA Phase 4 decoded batch plus method-specific workspace and the retained MPS Phase 4 input/output plus method-specific workspace, cross-platform per-file allocation rounding, copied-audio output capacity, and inode capacity when the filesystem exposes it before task creation. The worker owns task lifecycle and final snapshot cleanup. The use case owns one snapshot-bound video-upscale pipeline. Reuse the cancellable video I/O, numeric-frame SeedVR2 runner, atomic verified export, task registry, and SSE owners instead of reactivating vid2vid, adding remux, or adding a browser upload path.
 - Image Task Worker: `apps/backend/interfaces/api/tasks/generation_tasks.py`
   - Owns shared image task lifecycle, inference-gate integration, encoded image result packaging/save/provenance hooks, and automation task wrapper around canonical image modes.
   - Open this file when the question is task result packaging rather than public payload parsing.

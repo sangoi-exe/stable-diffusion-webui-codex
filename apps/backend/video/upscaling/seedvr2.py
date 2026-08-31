@@ -8,7 +8,7 @@ Required Notice: see NOTICE
 
 Purpose: Fail-loud SeedVR2 child-process runner and resource planner for dedicated video upscaling.
 Prepares the deterministic SeedVR2 checkout and model directory, models the exact upstream batch schedule plus host/CUDA/MPS phase peaks including
-method-specific MPS Phase 4 color-correction storage and PNG-conversion memory, measures available accelerator memory, selects the approved direct or bounded
+method-specific CUDA/MPS Phase 4 color-correction storage and PNG-conversion memory, measures available accelerator memory, selects the approved direct or bounded
 streaming CLI invocation, terminates the complete child process group for task-scoped cancellation, drains diagnostics to EOF, and returns
 numerically validated PNG paths.
 
@@ -69,9 +69,10 @@ _MINIMUM_OPERATIONAL_RESERVE_BYTES = _GIB
 _RUNTIME_RESERVATION_BYTES = 768 * _MIB
 _PER_PADDED_OUTPUT_PIXEL_BYTES = 72
 # Pinned Phase 4 Python-visible storage envelopes include the reconstructed target
-# input and method tensors, but not the decoded output counted separately. Values
-# are rounded above measured/static maxima; wavelet includes the float32 pad fallback.
-_MPS_PHASE4_COLOR_WORKSPACE_BYTES_PER_PADDED_PIXEL = {
+# input and method tensors, but exclude decoded content. CUDA adds the active decoded
+# batch; MPS adds the complete final output. Values are rounded above measured/static
+# maxima; wavelet includes the float32 pad fallback.
+_PHASE4_COLOR_WORKSPACE_BYTES_PER_PADDED_PIXEL = {
     "adain": 32,
     "hsv": 96,
     "lab": 96,
@@ -1087,7 +1088,7 @@ def _mps_phase4_live_bytes(
         return complete_input_bytes + final_output_bytes
 
     color_workspace_bytes_per_pixel = (
-        _MPS_PHASE4_COLOR_WORKSPACE_BYTES_PER_PADDED_PIXEL.get(color_correction)
+        _PHASE4_COLOR_WORKSPACE_BYTES_PER_PADDED_PIXEL.get(color_correction)
     )
     if color_workspace_bytes_per_pixel is None:
         raise RuntimeError(
@@ -1139,7 +1140,32 @@ def _accelerator_schedule_required_bytes(
         schedule.peak_four_n_one_padding_live_frames * budget.source_batch_frame_bytes
     )
     if budget.device_label != "mps":
-        return fixed_bytes + max(transform_phase_bytes, four_n_one_padding_phase_bytes)
+        cuda_phase4_live_bytes = 0
+        if color_correction != "none":
+            color_workspace_bytes_per_pixel = (
+                _PHASE4_COLOR_WORKSPACE_BYTES_PER_PADDED_PIXEL.get(color_correction)
+            )
+            if color_workspace_bytes_per_pixel is None:
+                raise RuntimeError(
+                    f"Unsupported SeedVR2 CUDA Phase 4 color_correction method: {color_correction!r}."
+                )
+            peak_padded_target_pixels = (
+                schedule.peak_effective_batch_frames
+                * budget.padded_width
+                * budget.padded_height
+            )
+            active_decoded_sample_bytes = (
+                peak_padded_target_pixels * _RGB_CHANNELS * _COMPUTE_DTYPE_BYTES
+            )
+            color_workspace_bytes = (
+                peak_padded_target_pixels * color_workspace_bytes_per_pixel
+            )
+            cuda_phase4_live_bytes = active_decoded_sample_bytes + color_workspace_bytes
+        return fixed_bytes + max(
+            transform_phase_bytes,
+            four_n_one_padding_phase_bytes,
+            cuda_phase4_live_bytes,
+        )
 
     complete_input_bytes = schedule.processing_frames * budget.source_batch_frame_bytes
     retained_latent_bytes = schedule.total_latent_frame_instances * budget.latent_frame_bytes

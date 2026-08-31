@@ -8,7 +8,7 @@ Status: Active
 
 ## Subdirectories
 - `interpolation/` — Video frame interpolation utilities (e.g., RIFE wrappers).
-- `upscaling/` — SeedVR2 child-process runner (repo-local runtime bootstrap, exact host/CUDA/MPS phase admission including method-specific MPS Phase 4 color-correction workspace, MPS unified-memory admission, numeric frame identity, full process-group cleanup, and fail-loud output validation).
+- `upscaling/` — SeedVR2 child-process runner (repo-local runtime bootstrap, exact host/CUDA/MPS phase admission including method-specific CUDA/MPS Phase 4 color-correction workspace, MPS unified-memory admission, numeric frame identity, full process-group cleanup, and fail-loud output validation).
 - `io/` — Cancellable input video probing, exact decoded-frame counts, stream origins, decoded-frame timing, and extraction helpers (ffprobe/ffmpeg wrappers).
 - `flow/` — Optical flow estimation + frame warping (torchvision RAFT).
 - `export/` — Frame → video encoding and verified timestamp-aware MP4 publication with relative A/V-origin checks and sidecar-before-media visibility (ffmpeg exporter; writes under `CODEX_ROOT/output`).
@@ -20,5 +20,5 @@ Status: Active
 - Flow guidance requires `torch` + `torchvision`.
 - 2026-01-02: Added standardized file header docstrings to video export modules (doc-only change; part of rollout).
 - 2026-02-23: RIFE/RAFT runtime defaults now derive device identity from memory-manager mount-device authority; unsupported device/backend combinations fail loud instead of implicit CUDA→CPU fallback.
-- 2026-08-31: `upscaling/seedvr2.py` admits direct and bounded streaming execution from measured CUDA/MPS memory with concurrent source/target tensors, temporal-padding construction peaks, retained MPS input/latent/output state, method-specific Phase 4 color-correction workspace while complete input/output remain resident, and one shared MPS physical-memory budget included; it terminates the complete child process group, drains diagnostics to EOF, and validates contiguous numeric source-cardinality PNG output without a CPU fallback.
+- 2026-08-31: `upscaling/seedvr2.py` admits direct and bounded streaming execution from measured CUDA/MPS memory with concurrent source/target tensors, temporal-padding construction peaks, the active CUDA decoded target batch plus method-specific Phase 4 workspace, retained MPS input/latent/output state plus method-specific Phase 4 workspace, and one shared MPS physical-memory budget included; it terminates the complete child process group, drains diagnostics to EOF, and validates contiguous numeric source-cardinality PNG output without a CPU fallback.
 - 2026-08-30: The dedicated use case consumes router-admitted media/resource evidence. The timestamp-aware exporter verifies frame offsets, terminal video duration, relative source A/V origin, and stream-copied audio before it publishes the JSON sidecar and then the final MP4.
