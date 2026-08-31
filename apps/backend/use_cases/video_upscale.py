@@ -7,8 +7,9 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Canonical SeedVR2 video-upscale use case.
-Consumes one router-created immutable source snapshot plus host, allocation-block, and inode admission, runs the dedicated cancellable SeedVR2
-child runner, then delegates timestamp-aware staged MP4 assembly, source-audio/A-V-origin verification, atomic publication, and cleanup.
+Consumes one router-created immutable source snapshot plus host, allocation-unit, optional-inode, and copied-audio admission, runs the dedicated
+cancellable SeedVR2 child runner, then delegates timestamp-aware staged MP4 assembly, source-audio/A-V-origin verification, atomic publication,
+and cleanup.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `VideoUpscaleSourceAdmission` (dataclass): Immutable source snapshot, exact media, geometry, and dynamic host/scratch evidence.
@@ -62,12 +63,13 @@ class VideoUpscaleSourceAdmission:
     work_scratch_available_bytes: int
     work_scratch_allocation_unit_bytes: int
     work_scratch_required_inodes: int
-    work_scratch_available_inodes: int
+    work_scratch_available_inodes: int | None
     output_scratch_required_bytes: int
     output_scratch_available_bytes: int
     output_scratch_allocation_unit_bytes: int
+    output_scratch_copied_audio_bytes: int
     output_scratch_required_inodes: int
-    output_scratch_available_inodes: int
+    output_scratch_available_inodes: int | None
     scratch_reserve_bytes: int
     shared_scratch_filesystem: bool
 
@@ -203,6 +205,7 @@ def _admission_metadata(admission: VideoUpscaleSourceAdmission) -> dict[str, obj
                 "required_bytes": admission.output_scratch_required_bytes,
                 "available_bytes": admission.output_scratch_available_bytes,
                 "allocation_unit_bytes": admission.output_scratch_allocation_unit_bytes,
+                "copied_audio_bound_bytes": admission.output_scratch_copied_audio_bytes,
                 "required_inodes": admission.output_scratch_required_inodes,
                 "available_inodes": admission.output_scratch_available_inodes,
             },

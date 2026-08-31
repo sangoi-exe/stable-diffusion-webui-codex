@@ -12,12 +12,12 @@ Exposes:
 - remote HF upscaler listing + downloads (`GET/POST /api/upscalers/*`), with optional manifest-based metadata enrichment
   (`upscalers/manifest.json`, schema v1) and explicit `manifest_error`/`manifest_errors` surfacing
 - standalone upscaling tasks (`POST /api/upscale`)
-- dedicated SeedVR2 video-upscale tasks (`POST /api/video-upscale`, pinned-compatible source suffixes, immutable snapshot, exact media/resource admission, and execution policy)
+- dedicated SeedVR2 video-upscale tasks (`POST /api/video-upscale`, pinned-compatible source suffixes, immutable snapshot, cross-platform media/resource admission, and execution policy)
 Remote listing/download respects the upscaler safeweights policy (`CODEX_SAFE_WEIGHTS=1` blocks non-`.safetensors` weights).
 
 Symbols (top-level; keep in sync; no ghosts):
 - `_parse_video_upscale_request` (function): Validates the strict dedicated SeedVR2 request payload.
-- `_preflight_video_upscale_source` (function): Admits the source suffix, snapshots exact media, and verifies timing, host memory, blocks, and inodes before registration.
+- `_preflight_video_upscale_source` (function): Admits the source suffix, snapshots exact media, and verifies timing, host memory, allocation units, optional inode capacity, and copied-audio output space before registration.
 - `build_router` (function): Build the APIRouter for upscaler endpoints.
 """
 
@@ -81,7 +81,7 @@ _GIB = 1024 * _MIB
 _WORK_SCRATCH_BASE_BYTES = 128 * _MIB
 _WORK_SCRATCH_BYTES_PER_PADDED_PIXEL = 5
 _WORK_SNAPSHOT_FIXED_INODES_AFTER_ROOT = 2
-_WORK_EXECUTION_FIXED_INODES_AFTER_ROOT = 4
+_WORK_EXECUTION_FIXED_INODES_AFTER_ROOT = 5
 _WORK_SMART_FALLBACK_RETRY_INODES = 1
 _OUTPUT_SCRATCH_BASE_BYTES = 128 * _MIB
 _OUTPUT_SCRATCH_BYTES_PER_PADDED_PIXEL = 4
@@ -268,7 +268,48 @@ def _missing_directory_count(path: Path, *, existing_ancestor: Path) -> int:
     return len(relative_path.parts)
 
 
-def _filesystem_allocation_unit_and_available_inodes(path: Path) -> tuple[int, int]:
+def _filesystem_allocation_unit_and_available_inodes(path: Path) -> tuple[int, int | None]:
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        volume_path_buffer = ctypes.create_unicode_buffer(32768)
+        get_volume_path_name = kernel32.GetVolumePathNameW
+        get_volume_path_name.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        get_volume_path_name.restype = wintypes.BOOL
+        if not get_volume_path_name(str(path), volume_path_buffer, len(volume_path_buffer)):
+            error_code = ctypes.get_last_error()
+            raise OSError(error_code, f"GetVolumePathNameW failed for '{path}'.")
+
+        sectors_per_cluster = wintypes.DWORD()
+        bytes_per_sector = wintypes.DWORD()
+        free_clusters = wintypes.DWORD()
+        total_clusters = wintypes.DWORD()
+        get_disk_free_space = kernel32.GetDiskFreeSpaceW
+        dword_pointer = ctypes.POINTER(wintypes.DWORD)
+        get_disk_free_space.argtypes = [
+            wintypes.LPCWSTR,
+            dword_pointer,
+            dword_pointer,
+            dword_pointer,
+            dword_pointer,
+        ]
+        get_disk_free_space.restype = wintypes.BOOL
+        if not get_disk_free_space(
+            volume_path_buffer.value,
+            ctypes.byref(sectors_per_cluster),
+            ctypes.byref(bytes_per_sector),
+            ctypes.byref(free_clusters),
+            ctypes.byref(total_clusters),
+        ):
+            error_code = ctypes.get_last_error()
+            raise OSError(error_code, f"GetDiskFreeSpaceW failed for '{volume_path_buffer.value}'.")
+        allocation_unit_bytes = int(sectors_per_cluster.value) * int(bytes_per_sector.value)
+        if allocation_unit_bytes <= 0:
+            raise RuntimeError(f"Filesystem '{path}' did not report a positive allocation unit.")
+        return allocation_unit_bytes, None
+
     filesystem = os.statvfs(path)
     allocation_unit_bytes = int(filesystem.f_frsize or filesystem.f_bsize)
     if allocation_unit_bytes <= 0:
@@ -342,7 +383,10 @@ def _preflight_video_upscale_source(
             ),
         )
     snapshot_required_inodes = work_root_missing_inodes + _WORK_SNAPSHOT_FIXED_INODES_AFTER_ROOT
-    if work_scratch_available_inodes < snapshot_required_inodes:
+    if (
+        work_scratch_available_inodes is not None
+        and work_scratch_available_inodes < snapshot_required_inodes
+    ):
         raise HTTPException(
             status_code=400,
             detail=(
@@ -463,7 +507,7 @@ def _preflight_video_upscale_source(
 
         padded_frame_pixels = padded_width * padded_height
         work_frame_count = source_frame_count + int(options.prepend_frames or 0)
-        work_frame_allocation_bytes = max(
+        work_frame_allocation_bytes = _round_up_to_allocation_unit(
             padded_frame_pixels * _WORK_SCRATCH_BYTES_PER_PADDED_PIXEL,
             work_allocation_unit_bytes,
         )
@@ -472,11 +516,16 @@ def _preflight_video_upscale_source(
             + _round_up_to_allocation_unit(_WORK_SCRATCH_BASE_BYTES, work_allocation_unit_bytes)
             + work_frame_count * work_frame_allocation_bytes
         )
+        output_scratch_copied_audio_bytes = (
+            _round_up_to_allocation_unit(snapshot_size_bytes, output_allocation_unit_bytes)
+            if source_probe.has_audio
+            else 0
+        )
         output_scratch_required_bytes = _round_up_to_allocation_unit(
             _OUTPUT_SCRATCH_BASE_BYTES
             + source_frame_count * padded_frame_pixels * _OUTPUT_SCRATCH_BYTES_PER_PADDED_PIXEL,
             output_allocation_unit_bytes,
-        )
+        ) + output_scratch_copied_audio_bytes
         work_scratch_required_inodes = (
             work_root_missing_inodes
             + _WORK_EXECUTION_FIXED_INODES_AFTER_ROOT
@@ -496,7 +545,10 @@ def _preflight_video_upscale_source(
                     ),
                 )
             combined_required_inodes = work_scratch_required_inodes + output_scratch_required_inodes
-            if combined_required_inodes > work_scratch_available_inodes:
+            if (
+                work_scratch_available_inodes is not None
+                and combined_required_inodes > work_scratch_available_inodes
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -515,7 +567,10 @@ def _preflight_video_upscale_source(
                         f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
                     ),
                 )
-            if work_scratch_required_inodes > work_scratch_available_inodes:
+            if (
+                work_scratch_available_inodes is not None
+                and work_scratch_required_inodes > work_scratch_available_inodes
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -533,7 +588,10 @@ def _preflight_video_upscale_source(
                         f"reserve_bytes={_SCRATCH_OPERATIONAL_RESERVE_BYTES}."
                     ),
                 )
-            if output_scratch_required_inodes > output_scratch_available_inodes:
+            if (
+                output_scratch_available_inodes is not None
+                and output_scratch_required_inodes > output_scratch_available_inodes
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -589,6 +647,7 @@ def _preflight_video_upscale_source(
             output_scratch_required_bytes=output_scratch_required_bytes,
             output_scratch_available_bytes=output_scratch_available_bytes,
             output_scratch_allocation_unit_bytes=output_allocation_unit_bytes,
+            output_scratch_copied_audio_bytes=output_scratch_copied_audio_bytes,
             output_scratch_required_inodes=output_scratch_required_inodes,
             output_scratch_available_inodes=output_scratch_available_inodes,
             scratch_reserve_bytes=_SCRATCH_OPERATIONAL_RESERVE_BYTES,

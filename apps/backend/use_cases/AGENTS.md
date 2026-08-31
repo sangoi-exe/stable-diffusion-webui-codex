@@ -1,6 +1,6 @@
 # apps/backend/use_cases Overview
 Date: 2025-10-30
-Last Review: 2026-08-30
+Last Review: 2026-08-31
 Status: Active
 
 ## Purpose
@@ -60,7 +60,7 @@ Status: Active
 - 2026-02-21: WAN video result/export booleans in `txt2vid.py`, `img2vid.py`, and `vid2vid.py` now use shared strict parsing (`core.strict_values.parse_bool_value`) for `video_return_frames`, `video_options.save_output`, and export/probe flags (no permissive `bool("false")==True` coercion).
 - 2026-02-21: `txt2vid.py`/`img2vid.py` WAN22 GGUF result handling now avoids unconditional `list(...)` copies when `frames` is already a list, and Diffusers `img2vid` high→low transition now reuses the high-stage frame list instead of duplicating it before stage-2 seed extraction.
 - 2026-02-21: `img2vid.py` temporal parser now defaults `img2vid_chunk_seed_mode` to `fixed` in `img2vid_mode='sliding'` (chunk mode keeps `increment` default), emits continuity warnings when sliding uses non-fixed seed mode, and records `frame_counts {requested, generated, after_interpolation, after_export}` in result metadata for clearer frame-stage diagnostics.
-- 2026-08-30: `video_upscale.py` consumes the router's admitted source probe, decoded timing, exact geometry, and host/scratch evidence; owns task-scoped SeedVR2 execution and strict work cleanup; delegates relative A/V-origin verification plus sidecar-before-MP4 publication to the video exporter; and emits the normal task result. txt2vid, img2vid, and parked vid2vid do not execute SeedVR2.
+- 2026-08-31: `video_upscale.py` consumes the router's admitted source probe, decoded timing, exact geometry, phase-specific host/accelerator evidence, MPS unified-memory evidence, per-file allocation-rounded scratch evidence, optional inode evidence, and copied-audio output bound; owns task-scoped SeedVR2 execution and strict work cleanup; delegates relative A/V-origin verification plus sidecar-before-MP4 publication to the video exporter; and emits the normal task result. txt2vid, img2vid, and parked vid2vid do not execute SeedVR2.
 - 2026-03-01: WAN video use-cases (`txt2vid.py`, `img2vid.py`, `vid2vid.py`) persist a base video snapshot immediately after generation/decode and before interpolation when `save_output=true` and interpolation is enabled; metadata records `video_base_snapshot` with the pre-interpolation artifact descriptor.
 - 2026-02-22: `img2vid.py` extends explicit temporal mode routing to `img2vid_mode='svi2'|'svi2_pro'`, reusing windowed controls with fail-loud stride/commit continuity guards (`stride % 4 == 0`, `commit - stride >= 4`), dispatching `wan22.stream_img2vid_svi2(...)`/`wan22.stream_img2vid_svi2_pro(...)`, and defaulting `img2vid_chunk_seed_mode` to `increment` for SVI window progression.
 - 2026-02-22: `img2vid.py` now parses and forwards `img2vid_reset_anchor_to_base` explicitly for chunk/sliding modes (mode defaults: chunk=`true`, sliding=`false`), keeps SVI modes fail-loud on `reset_anchor_to_base=true`, and logs reset state in temporal mode summaries.

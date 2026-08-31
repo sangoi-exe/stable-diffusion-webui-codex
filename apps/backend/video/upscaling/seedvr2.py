@@ -7,15 +7,15 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 Required Notice: see NOTICE
 
 Purpose: Fail-loud SeedVR2 child-process runner and resource planner for dedicated video upscaling.
-Prepares the deterministic SeedVR2 checkout and model directory, models the exact upstream batch schedule plus concurrent source/target memory
-and PNG-conversion peaks, measures available accelerator memory, selects the approved direct or bounded streaming CLI invocation, terminates
-the complete child process group for task-scoped cancellation, drains diagnostics to EOF, and returns numerically validated PNG paths.
+Prepares the deterministic SeedVR2 checkout and model directory, models the exact upstream batch schedule plus host/CUDA/MPS phase peaks and
+PNG-conversion memory, measures available accelerator memory, selects the approved direct or bounded streaming CLI invocation, terminates the
+complete child process group for task-scoped cancellation, drains diagnostics to EOF, and returns numerically validated PNG paths.
 
 Symbols (top-level; keep in sync; no ghosts):
 - `SeedVR2OutOfMemoryError` (class): Typed local execution failure that maps to the public out-of-memory task result.
 - `SeedVR2UpscaleResult` (dataclass): Validated child-output frame paths, dimensions, and runtime evidence for one SeedVR2 run.
-- `SeedVR2BatchSchedule` (dataclass): Exact retained upstream batch schedule including uniform and mandatory 4n+1 padding.
-- `SeedVR2HostMemoryEstimate` (dataclass): Auditable host-memory estimate for one direct or streaming chunk shape.
+- `SeedVR2BatchSchedule` (dataclass): Exact retained upstream batch schedule including uniform and mandatory 4n+1 construction peaks.
+- `SeedVR2HostMemoryEstimate` (dataclass): Auditable host-memory estimate including prepend/uniform padding construction for one chunk shape.
 - `SeedVR2HostMemoryAdmission` (dataclass): Router-measured host-memory admission shared with runtime plan selection.
 - `calculate_seedvr2_target_dimensions` (function): Computes the exact target and padded geometry used by runtime and public admission.
 - `calculate_seedvr2_host_memory_admission` (function): Computes direct and host-bounded streaming admission from the upstream schedule.
@@ -125,7 +125,9 @@ class SeedVR2BatchSchedule:
     total_batch_frame_instances: int
     total_latent_frame_instances: int
     uniform_padding_frames: int
+    peak_uniform_padding_frames: int
     four_n_one_padding_frames: int
+    peak_four_n_one_padding_live_frames: int
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -135,7 +137,9 @@ class SeedVR2BatchSchedule:
             "total_batch_frame_instances": int(self.total_batch_frame_instances),
             "total_latent_frame_instances": int(self.total_latent_frame_instances),
             "uniform_padding_frames": int(self.uniform_padding_frames),
+            "peak_uniform_padding_frames": int(self.peak_uniform_padding_frames),
             "four_n_one_padding_frames": int(self.four_n_one_padding_frames),
+            "peak_four_n_one_padding_live_frames": int(self.peak_four_n_one_padding_live_frames),
         }
 
 
@@ -143,12 +147,14 @@ class SeedVR2BatchSchedule:
 class SeedVR2HostMemoryEstimate:
     new_frames: int
     retained_context_frames: int
+    prepend_frames: int
     required_bytes: int
     timing_evidence_bytes: int
     decoder_peak_bytes: int
     retained_context_bytes: int
     concatenated_float32_bytes: int
     processing_float16_bytes: int
+    source_padding_peak_extra_bytes: int
     retained_latent_bytes: int
     source_batch_bytes: int
     target_batch_bytes: int
@@ -161,12 +167,14 @@ class SeedVR2HostMemoryEstimate:
         return {
             "new_frames": int(self.new_frames),
             "retained_context_frames": int(self.retained_context_frames),
+            "prepend_frames": int(self.prepend_frames),
             "required_bytes": int(self.required_bytes),
             "timing_evidence_bytes": int(self.timing_evidence_bytes),
             "decoder_peak_bytes": int(self.decoder_peak_bytes),
             "retained_context_bytes": int(self.retained_context_bytes),
             "concatenated_float32_bytes": int(self.concatenated_float32_bytes),
             "processing_float16_bytes": int(self.processing_float16_bytes),
+            "source_padding_peak_extra_bytes": int(self.source_padding_peak_extra_bytes),
             "retained_latent_bytes": int(self.retained_latent_bytes),
             "source_batch_bytes": int(self.source_batch_bytes),
             "target_batch_bytes": int(self.target_batch_bytes),
@@ -232,17 +240,21 @@ class _SeedVR2MemoryBudget:
     padded_height: int
 
     @property
-    def usable_frame_bytes(self) -> int:
+    def concurrent_batch_frame_bytes(self) -> int:
+        return self.source_batch_frame_bytes + self.target_frame_estimate_bytes
+
+    @property
+    def latent_frame_bytes(self) -> int:
         return (
-            self.available_bytes
-            - self.operational_reserve_bytes
-            - self.model_reservation_bytes
-            - self.runtime_reservation_bytes
+            (self.padded_width // _LATENT_SPATIAL_DOWNSAMPLE)
+            * (self.padded_height // _LATENT_SPATIAL_DOWNSAMPLE)
+            * _LATENT_CHANNELS
+            * _COMPUTE_DTYPE_BYTES
         )
 
     @property
-    def concurrent_batch_frame_bytes(self) -> int:
-        return self.source_batch_frame_bytes + self.target_frame_estimate_bytes
+    def final_output_frame_bytes(self) -> int:
+        return self.target_width * self.target_height * _RGB_CHANNELS * _COMPUTE_DTYPE_BYTES
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +263,7 @@ class _SeedVR2ExecutionPlan:
     chunk_size: int
     selection_reason: str
     direct_required_bytes: int
+    direct_unified_required_bytes: int | None
     direct_schedule: SeedVR2BatchSchedule
     selected_first_schedule: SeedVR2BatchSchedule
     selected_steady_schedule: SeedVR2BatchSchedule
@@ -636,7 +649,9 @@ def _calculate_seedvr2_batch_schedule(
     total_batch_frame_instances = 0
     total_latent_frame_instances = 0
     uniform_padding_frames = 0
+    peak_uniform_padding_frames = 0
     four_n_one_padding_frames = 0
+    peak_four_n_one_padding_live_frames = 0
     for start in range(0, processing_frames, step):
         raw_batch_frames = min(batch_size, processing_frames - start)
         if start > 0 and raw_batch_frames <= temporal_overlap:
@@ -648,14 +663,25 @@ def _calculate_seedvr2_batch_schedule(
         if effective_batch_frames % 4 != 1:
             effective_batch_frames = ((effective_batch_frames - 1) // 4 + 1) * 4 + 1
 
+        uniform_padding = uniform_batch_frames - raw_batch_frames
+        four_n_one_padding = effective_batch_frames - uniform_batch_frames
+        four_n_one_padding_live_frames = (
+            2 * effective_batch_frames if four_n_one_padding > 0 else effective_batch_frames
+        )
+
         batch_count += 1
         peak_effective_batch_frames = max(peak_effective_batch_frames, effective_batch_frames)
         total_batch_frame_instances += effective_batch_frames
         total_latent_frame_instances += (
             (effective_batch_frames - 1) // _LATENT_TEMPORAL_DOWNSAMPLE + 1
         )
-        uniform_padding_frames += uniform_batch_frames - raw_batch_frames
-        four_n_one_padding_frames += effective_batch_frames - uniform_batch_frames
+        uniform_padding_frames += uniform_padding
+        peak_uniform_padding_frames = max(peak_uniform_padding_frames, uniform_padding)
+        four_n_one_padding_frames += four_n_one_padding
+        peak_four_n_one_padding_live_frames = max(
+            peak_four_n_one_padding_live_frames,
+            four_n_one_padding_live_frames,
+        )
 
     if batch_count <= 0 or peak_effective_batch_frames <= 0:
         raise RuntimeError("SeedVR2 batch scheduling produced no retained upstream batch.")
@@ -666,7 +692,9 @@ def _calculate_seedvr2_batch_schedule(
         total_batch_frame_instances=total_batch_frame_instances,
         total_latent_frame_instances=total_latent_frame_instances,
         uniform_padding_frames=uniform_padding_frames,
+        peak_uniform_padding_frames=peak_uniform_padding_frames,
         four_n_one_padding_frames=four_n_one_padding_frames,
+        peak_four_n_one_padding_live_frames=peak_four_n_one_padding_live_frames,
     )
 
 
@@ -674,6 +702,7 @@ def _calculate_host_memory_estimate(
     *,
     new_frames: int,
     retained_context_frames: int,
+    prepend_frames: int,
     processing_frames: int,
     source_frame_count: int,
     source_width: int,
@@ -701,6 +730,21 @@ def _calculate_host_memory_estimate(
     )
     processing_float16_bytes = (
         processing_frames * source_pixels * _RGB_CHANNELS * _COMPUTE_DTYPE_BYTES
+    )
+    prepend_padding_peak_extra_frames = (
+        max(0, processing_frames - schedule.peak_effective_batch_frames)
+        if prepend_frames > 0
+        else 0
+    )
+    source_padding_peak_extra_frames = max(
+        prepend_padding_peak_extra_frames,
+        schedule.peak_uniform_padding_frames,
+    )
+    source_padding_peak_extra_bytes = (
+        source_padding_peak_extra_frames
+        * source_pixels
+        * _RGB_CHANNELS
+        * _COMPUTE_DTYPE_BYTES
     )
     latent_width = padded_width // _LATENT_SPATIAL_DOWNSAMPLE
     latent_height = padded_height // _LATENT_SPATIAL_DOWNSAMPLE
@@ -734,6 +778,7 @@ def _calculate_host_memory_estimate(
         + retained_context_bytes
         + concatenated_float32_bytes
         + processing_float16_bytes
+        + source_padding_peak_extra_bytes
         + retained_latent_bytes
         + source_batch_bytes
         + target_batch_bytes
@@ -744,12 +789,14 @@ def _calculate_host_memory_estimate(
     return SeedVR2HostMemoryEstimate(
         new_frames=new_frames,
         retained_context_frames=retained_context_frames,
+        prepend_frames=prepend_frames,
         required_bytes=required_bytes,
         timing_evidence_bytes=timing_evidence_bytes,
         decoder_peak_bytes=decoder_peak_bytes,
         retained_context_bytes=retained_context_bytes,
         concatenated_float32_bytes=concatenated_float32_bytes,
         processing_float16_bytes=processing_float16_bytes,
+        source_padding_peak_extra_bytes=source_padding_peak_extra_bytes,
         retained_latent_bytes=retained_latent_bytes,
         source_batch_bytes=source_batch_bytes,
         target_batch_bytes=target_batch_bytes,
@@ -777,6 +824,7 @@ def _calculate_streaming_host_estimates(
     first = _calculate_host_memory_estimate(
         new_frames=new_frames,
         retained_context_frames=0,
+        prepend_frames=int(options.prepend_frames or 0),
         processing_frames=first_processing_frames,
         source_frame_count=source_frame_count,
         source_width=source_width,
@@ -794,6 +842,7 @@ def _calculate_streaming_host_estimates(
     steady = _calculate_host_memory_estimate(
         new_frames=new_frames,
         retained_context_frames=retained_context_frames,
+        prepend_frames=0,
         processing_frames=new_frames + retained_context_frames,
         source_frame_count=source_frame_count,
         source_width=source_width,
@@ -835,6 +884,7 @@ def calculate_seedvr2_host_memory_admission(
     direct = _calculate_host_memory_estimate(
         new_frames=source_frame_count,
         retained_context_frames=0,
+        prepend_frames=int(options.prepend_frames or 0),
         processing_frames=source_frame_count + int(options.prepend_frames or 0),
         source_frame_count=source_frame_count,
         source_width=source_width,
@@ -1013,6 +1063,123 @@ def _build_memory_budget(
     )
 
 
+def _accelerator_schedule_required_bytes(
+    *,
+    budget: _SeedVR2MemoryBudget,
+    schedule: SeedVR2BatchSchedule,
+) -> int:
+    fixed_bytes = (
+        budget.operational_reserve_bytes
+        + budget.model_reservation_bytes
+        + budget.runtime_reservation_bytes
+    )
+    transform_phase_bytes = (
+        schedule.peak_effective_batch_frames * budget.concurrent_batch_frame_bytes
+    )
+    four_n_one_padding_phase_bytes = (
+        schedule.peak_four_n_one_padding_live_frames * budget.source_batch_frame_bytes
+    )
+    if budget.device_label != "mps":
+        return fixed_bytes + max(transform_phase_bytes, four_n_one_padding_phase_bytes)
+
+    complete_input_bytes = schedule.processing_frames * budget.source_batch_frame_bytes
+    retained_latent_bytes = schedule.total_latent_frame_instances * budget.latent_frame_bytes
+    final_output_bytes = schedule.processing_frames * budget.final_output_frame_bytes
+    decode_workspace_bytes = (
+        schedule.peak_effective_batch_frames * budget.target_frame_estimate_bytes
+    )
+    batch_phase_bytes = complete_input_bytes + max(
+        transform_phase_bytes,
+        four_n_one_padding_phase_bytes,
+    )
+    decode_phase_bytes = (
+        complete_input_bytes
+        + retained_latent_bytes
+        + final_output_bytes
+        + decode_workspace_bytes
+    )
+    output_phase_bytes = final_output_bytes
+    return fixed_bytes + max(batch_phase_bytes, decode_phase_bytes, output_phase_bytes)
+
+
+def _mps_unified_required_bytes(
+    *,
+    budget: _SeedVR2MemoryBudget,
+    schedule: SeedVR2BatchSchedule,
+    host_estimate: SeedVR2HostMemoryEstimate,
+    host_operational_reserve_bytes: int,
+) -> int:
+    if budget.device_label != "mps":
+        raise RuntimeError("MPS unified-memory admission requires an MPS memory budget.")
+
+    shared_reserve_bytes = max(
+        int(host_operational_reserve_bytes),
+        int(budget.operational_reserve_bytes),
+    )
+    host_only_nonreserve_bytes = max(
+        0,
+        int(host_estimate.required_bytes) - int(host_operational_reserve_bytes),
+    )
+    host_processing_nonreserve_bytes = (
+        _HOST_MEMORY_BASE_BYTES
+        + host_estimate.timing_evidence_bytes
+        + host_estimate.decoder_peak_bytes
+        + host_estimate.retained_context_bytes
+        + host_estimate.concatenated_float32_bytes
+        + host_estimate.processing_float16_bytes
+        + host_estimate.source_padding_peak_extra_bytes
+        + host_estimate.source_batch_bytes
+        + host_estimate.target_batch_bytes
+    )
+    host_output_nonreserve_bytes = (
+        _HOST_MEMORY_BASE_BYTES
+        + host_estimate.timing_evidence_bytes
+        + host_estimate.decoder_peak_bytes
+        + host_estimate.retained_context_bytes
+        + host_estimate.concatenated_float32_bytes
+        + host_estimate.returned_float32_bytes
+        + host_estimate.png_multiply_float32_bytes
+        + host_estimate.png_uint8_bytes
+    )
+
+    complete_input_bytes = schedule.processing_frames * budget.source_batch_frame_bytes
+    retained_latent_bytes = schedule.total_latent_frame_instances * budget.latent_frame_bytes
+    final_output_bytes = schedule.processing_frames * budget.final_output_frame_bytes
+    transform_phase_bytes = (
+        schedule.peak_effective_batch_frames * budget.concurrent_batch_frame_bytes
+    )
+    four_n_one_padding_phase_bytes = (
+        schedule.peak_four_n_one_padding_live_frames * budget.source_batch_frame_bytes
+    )
+    decode_workspace_bytes = (
+        schedule.peak_effective_batch_frames * budget.target_frame_estimate_bytes
+    )
+    fixed_accelerator_nonreserve_bytes = (
+        budget.model_reservation_bytes + budget.runtime_reservation_bytes
+    )
+    accelerator_batch_nonreserve_bytes = (
+        fixed_accelerator_nonreserve_bytes
+        + complete_input_bytes
+        + max(transform_phase_bytes, four_n_one_padding_phase_bytes)
+    )
+    accelerator_decode_nonreserve_bytes = (
+        fixed_accelerator_nonreserve_bytes
+        + complete_input_bytes
+        + retained_latent_bytes
+        + final_output_bytes
+        + decode_workspace_bytes
+    )
+    accelerator_output_nonreserve_bytes = (
+        fixed_accelerator_nonreserve_bytes + final_output_bytes
+    )
+    return shared_reserve_bytes + max(
+        host_only_nonreserve_bytes,
+        host_processing_nonreserve_bytes + accelerator_batch_nonreserve_bytes,
+        host_processing_nonreserve_bytes + accelerator_decode_nonreserve_bytes,
+        host_output_nonreserve_bytes + accelerator_output_nonreserve_bytes,
+    )
+
+
 def _streaming_chunk_size(
     *,
     budget: _SeedVR2MemoryBudget,
@@ -1032,34 +1199,118 @@ def _streaming_chunk_size(
             f"required_bytes={required_bytes}, available_bytes={host_memory.available_bytes}, "
             f"reserve_bytes={host_memory.operational_reserve_bytes}."
         )
-    available_frame_slots = budget.usable_frame_bytes // budget.concurrent_batch_frame_bytes
     maximum_new_frames = min(host_memory.streaming_chunk_size, source_frame_count)
     low = 1
     high = maximum_new_frames
     selected = 0
     while low <= high:
         candidate = (low + high) // 2
-        first_schedule, steady_schedule = _calculate_streaming_batch_schedules(
+        first_host, steady_host = _calculate_streaming_host_estimates(
             new_frames=candidate,
+            source_width=budget.source_width,
+            source_height=budget.source_height,
             source_frame_count=source_frame_count,
+            target_width=budget.target_width,
+            target_height=budget.target_height,
+            padded_width=budget.padded_width,
+            padded_height=budget.padded_height,
             options=options,
+            operational_reserve_bytes=host_memory.operational_reserve_bytes,
         )
-        peak_effective_batch_frames = max(
-            first_schedule.peak_effective_batch_frames,
-            steady_schedule.peak_effective_batch_frames,
+        accelerator_required_bytes = max(
+            _accelerator_schedule_required_bytes(
+                budget=budget,
+                schedule=first_host.schedule,
+            ),
+            _accelerator_schedule_required_bytes(
+                budget=budget,
+                schedule=steady_host.schedule,
+            ),
         )
-        if peak_effective_batch_frames <= available_frame_slots:
+        accelerator_admitted = accelerator_required_bytes <= budget.available_bytes
+        unified_admitted = True
+        if budget.device_label == "mps":
+            unified_required_bytes = max(
+                _mps_unified_required_bytes(
+                    budget=budget,
+                    schedule=first_host.schedule,
+                    host_estimate=first_host,
+                    host_operational_reserve_bytes=host_memory.operational_reserve_bytes,
+                ),
+                _mps_unified_required_bytes(
+                    budget=budget,
+                    schedule=steady_host.schedule,
+                    host_estimate=steady_host,
+                    host_operational_reserve_bytes=host_memory.operational_reserve_bytes,
+                ),
+            )
+            unified_admitted = unified_required_bytes <= host_memory.available_bytes
+        if accelerator_admitted and unified_admitted:
             selected = candidate
             low = candidate + 1
         else:
             high = candidate - 1
     if selected <= 0:
+        minimum_first, minimum_steady = _calculate_streaming_host_estimates(
+            new_frames=1,
+            source_width=budget.source_width,
+            source_height=budget.source_height,
+            source_frame_count=source_frame_count,
+            target_width=budget.target_width,
+            target_height=budget.target_height,
+            padded_width=budget.padded_width,
+            padded_height=budget.padded_height,
+            options=options,
+            operational_reserve_bytes=host_memory.operational_reserve_bytes,
+        )
+        minimum_accelerator_required_bytes = max(
+            _accelerator_schedule_required_bytes(
+                budget=budget,
+                schedule=minimum_first.schedule,
+            ),
+            _accelerator_schedule_required_bytes(
+                budget=budget,
+                schedule=minimum_steady.schedule,
+            ),
+        )
+        minimum_unified_required_bytes = None
+        if budget.device_label == "mps":
+            minimum_unified_required_bytes = max(
+                _mps_unified_required_bytes(
+                    budget=budget,
+                    schedule=minimum_first.schedule,
+                    host_estimate=minimum_first,
+                    host_operational_reserve_bytes=host_memory.operational_reserve_bytes,
+                ),
+                _mps_unified_required_bytes(
+                    budget=budget,
+                    schedule=minimum_steady.schedule,
+                    host_estimate=minimum_steady,
+                    host_operational_reserve_bytes=host_memory.operational_reserve_bytes,
+                ),
+            )
+        if (
+            minimum_unified_required_bytes is not None
+            and minimum_accelerator_required_bytes <= budget.available_bytes
+            and minimum_unified_required_bytes > host_memory.available_bytes
+        ):
+            raise SeedVR2OutOfMemoryError(
+                "out of memory: SeedVR2 streaming cannot admit even one new frame within shared MPS physical memory; "
+                f"shared_required_bytes={minimum_unified_required_bytes}, "
+                f"shared_available_bytes={host_memory.available_bytes}, "
+                f"accelerator_required_bytes={minimum_accelerator_required_bytes}, "
+                f"accelerator_available_bytes={budget.available_bytes}."
+            )
         raise SeedVR2OutOfMemoryError(
-            "out of memory: SeedVR2 streaming cannot admit even one new frame after the measured VRAM reserve; "
-            f"available_bytes={budget.available_bytes}, reserve_bytes={budget.operational_reserve_bytes}, "
+            "out of memory: SeedVR2 streaming cannot admit even one new frame within measured accelerator memory; "
+            f"accelerator_available_bytes={budget.available_bytes}, "
+            f"accelerator_reserve_bytes={budget.operational_reserve_bytes}, "
             f"model_bytes={budget.model_reservation_bytes}, runtime_bytes={budget.runtime_reservation_bytes}, "
             f"source_batch_frame_bytes={budget.source_batch_frame_bytes}, "
-            f"target_frame_estimate_bytes={budget.target_frame_estimate_bytes}."
+            f"target_frame_estimate_bytes={budget.target_frame_estimate_bytes}, "
+            f"accelerator_required_bytes={minimum_accelerator_required_bytes}, "
+            f"shared_required_bytes={minimum_unified_required_bytes}, "
+            f"shared_available_bytes={host_memory.available_bytes}."
         )
     return selected
 
@@ -1115,11 +1366,22 @@ def _select_execution_plan(
         processing_frames=processing_frames,
         options=options,
     )
-    direct_required_bytes = (
-        budget.operational_reserve_bytes
-        + budget.model_reservation_bytes
-        + budget.runtime_reservation_bytes
-        + direct_schedule.peak_effective_batch_frames * budget.concurrent_batch_frame_bytes
+    direct_required_bytes = _accelerator_schedule_required_bytes(
+        budget=budget,
+        schedule=direct_schedule,
+    )
+    direct_unified_required_bytes = None
+    if budget.device_label == "mps":
+        direct_unified_required_bytes = _mps_unified_required_bytes(
+            budget=budget,
+            schedule=direct_schedule,
+            host_estimate=host_memory.direct,
+            host_operational_reserve_bytes=host_memory.operational_reserve_bytes,
+        )
+    direct_accelerator_admitted = direct_required_bytes <= budget.available_bytes
+    direct_unified_admitted = (
+        direct_unified_required_bytes is None
+        or direct_unified_required_bytes <= host_memory.available_bytes
     )
     if bool(options.streaming):
         chunk_size = _streaming_chunk_size(
@@ -1138,18 +1400,24 @@ def _select_execution_plan(
             chunk_size=chunk_size,
             selection_reason="streaming_requested",
             direct_required_bytes=direct_required_bytes,
+            direct_unified_required_bytes=direct_unified_required_bytes,
             direct_schedule=direct_schedule,
             selected_first_schedule=first_schedule,
             selected_steady_schedule=steady_schedule,
             budget=budget,
             host_memory=host_memory,
         )
-    if host_memory.direct_admitted and direct_required_bytes <= budget.available_bytes:
+    if host_memory.direct_admitted and direct_accelerator_admitted and direct_unified_admitted:
         return _SeedVR2ExecutionPlan(
             mode="direct",
             chunk_size=0,
-            selection_reason="direct_host_and_vram_admitted",
+            selection_reason=(
+                "direct_host_accelerator_and_unified_admitted"
+                if budget.device_label == "mps"
+                else "direct_host_and_accelerator_admitted"
+            ),
             direct_required_bytes=direct_required_bytes,
+            direct_unified_required_bytes=direct_unified_required_bytes,
             direct_schedule=direct_schedule,
             selected_first_schedule=direct_schedule,
             selected_steady_schedule=direct_schedule,
@@ -1168,16 +1436,18 @@ def _select_execution_plan(
             source_frame_count=source_frame_count,
             options=options,
         )
-        selection_reason = (
-            "smart_fallback_after_direct_host_capacity_rejection"
-            if not host_memory.direct_admitted
-            else "smart_fallback_after_direct_vram_capacity_rejection"
-        )
+        if not host_memory.direct_admitted:
+            selection_reason = "smart_fallback_after_direct_host_capacity_rejection"
+        elif not direct_accelerator_admitted:
+            selection_reason = "smart_fallback_after_direct_accelerator_capacity_rejection"
+        else:
+            selection_reason = "smart_fallback_after_direct_unified_memory_capacity_rejection"
         return _SeedVR2ExecutionPlan(
             mode="streaming",
             chunk_size=chunk_size,
             selection_reason=selection_reason,
             direct_required_bytes=direct_required_bytes,
+            direct_unified_required_bytes=direct_unified_required_bytes,
             direct_schedule=direct_schedule,
             selected_first_schedule=first_schedule,
             selected_steady_schedule=steady_schedule,
@@ -1190,10 +1460,20 @@ def _select_execution_plan(
             f"required_bytes={host_memory.direct.required_bytes}, available_bytes={host_memory.available_bytes}, "
             f"reserve_bytes={host_memory.operational_reserve_bytes}."
         )
+    if not direct_accelerator_admitted:
+        raise SeedVR2OutOfMemoryError(
+            "out of memory: SeedVR2 direct execution exceeds measured available accelerator memory and smart fallback is disabled; "
+            f"accelerator_required_bytes={direct_required_bytes}, "
+            f"accelerator_available_bytes={budget.available_bytes}, "
+            f"accelerator_reserve_bytes={budget.operational_reserve_bytes}."
+        )
+    assert direct_unified_required_bytes is not None
     raise SeedVR2OutOfMemoryError(
-        "out of memory: SeedVR2 direct GPU execution exceeds measured available VRAM and smart fallback is disabled; "
-        f"required_bytes={direct_required_bytes}, available_bytes={budget.available_bytes}, "
-        f"reserve_bytes={budget.operational_reserve_bytes}."
+        "out of memory: SeedVR2 direct execution exceeds shared MPS physical memory and smart fallback is disabled; "
+        f"shared_required_bytes={direct_unified_required_bytes}, "
+        f"shared_available_bytes={host_memory.available_bytes}, "
+        f"accelerator_required_bytes={direct_required_bytes}, "
+        f"accelerator_available_bytes={budget.available_bytes}."
     )
 
 
@@ -1549,6 +1829,11 @@ def _plan_metadata(plan: _SeedVR2ExecutionPlan) -> dict[str, object]:
         "selection_reason": plan.selection_reason,
         "chunk_size": int(plan.chunk_size),
         "direct_required_bytes": int(plan.direct_required_bytes),
+        "direct_unified_required_bytes": (
+            int(plan.direct_unified_required_bytes)
+            if plan.direct_unified_required_bytes is not None
+            else None
+        ),
         "direct_schedule": plan.direct_schedule.as_dict(),
         "selected_schedule": {
             "first_chunk": plan.selected_first_schedule.as_dict(),
@@ -1557,6 +1842,7 @@ def _plan_metadata(plan: _SeedVR2ExecutionPlan) -> dict[str, object]:
         "host_memory": plan.host_memory.as_dict(),
         "device": budget.device_label,
         "memory_metric": budget.metric,
+        "memory_scope": "unified_host_and_mps" if budget.device_label == "mps" else "accelerator",
         "available_bytes": int(budget.available_bytes),
         "operational_reserve_bytes": int(budget.operational_reserve_bytes),
         "model_reservation_bytes": int(budget.model_reservation_bytes),
@@ -1564,6 +1850,8 @@ def _plan_metadata(plan: _SeedVR2ExecutionPlan) -> dict[str, object]:
         "source_batch_frame_bytes": int(budget.source_batch_frame_bytes),
         "target_frame_estimate_bytes": int(budget.target_frame_estimate_bytes),
         "concurrent_batch_frame_bytes": int(budget.concurrent_batch_frame_bytes),
+        "latent_frame_bytes": int(budget.latent_frame_bytes),
+        "final_output_frame_bytes": int(budget.final_output_frame_bytes),
         "source_size_estimate": {"width": int(budget.source_width), "height": int(budget.source_height)},
         "target_size_estimate": {"width": int(budget.target_width), "height": int(budget.target_height)},
         "padded_size_estimate": {"width": int(budget.padded_width), "height": int(budget.padded_height)},
