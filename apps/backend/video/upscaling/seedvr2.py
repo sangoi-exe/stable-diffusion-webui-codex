@@ -8,7 +8,7 @@ Required Notice: see NOTICE
 
 Purpose: Fail-loud SeedVR2 child-process runner and resource planner for dedicated video upscaling.
 Prepares the deterministic SeedVR2 checkout and model directory, models the exact upstream batch schedule plus host/CUDA/MPS phase peaks including
-MPS Phase 4 source reconstruction and PNG-conversion memory, measures available accelerator memory, selects the approved direct or bounded
+method-specific MPS Phase 4 color-correction storage and PNG-conversion memory, measures available accelerator memory, selects the approved direct or bounded
 streaming CLI invocation, terminates the complete child process group for task-scoped cancellation, drains diagnostics to EOF, and returns
 numerically validated PNG paths.
 
@@ -20,7 +20,7 @@ Symbols (top-level; keep in sync; no ghosts):
 - `SeedVR2HostMemoryAdmission` (dataclass): Router-measured host-memory admission shared with runtime plan selection.
 - `calculate_seedvr2_target_dimensions` (function): Computes the exact target and padded geometry used by runtime and public admission.
 - `calculate_seedvr2_host_memory_admission` (function): Computes direct and host-bounded streaming admission from the upstream schedule.
-- `_mps_phase4_live_bytes` (function): Computes the color-correction-aware MPS Phase 4 retained input/output and source-reconstruction peak.
+- `_mps_phase4_live_bytes` (function): Computes retained input/output plus method-specific color-correction workspace for MPS Phase 4.
 - `run_seedvr2_upscaling` (function): Executes the selected direct or streaming SeedVR2 child route for one source video.
 - `__all__` (constant): Explicit export list for this module.
 """
@@ -68,6 +68,16 @@ _GIB = 1024 * _MIB
 _MINIMUM_OPERATIONAL_RESERVE_BYTES = _GIB
 _RUNTIME_RESERVATION_BYTES = 768 * _MIB
 _PER_PADDED_OUTPUT_PIXEL_BYTES = 72
+# Pinned Phase 4 Python-visible storage envelopes include the reconstructed target
+# input and method tensors, but not the decoded output counted separately. Values
+# are rounded above measured/static maxima; wavelet includes the float32 pad fallback.
+_MPS_PHASE4_COLOR_WORKSPACE_BYTES_PER_PADDED_PIXEL = {
+    "adain": 32,
+    "hsv": 96,
+    "lab": 96,
+    "wavelet": 64,
+    "wavelet_adaptive": 128,
+}
 _HOST_MEMORY_BASE_BYTES = 64 * _MIB
 _HOST_MEMORY_OPERATIONAL_RESERVE_BYTES = _GIB
 _TIMING_EVIDENCE_BYTES_PER_FRAME = 4096
@@ -1069,12 +1079,20 @@ def _mps_phase4_live_bytes(
     *,
     budget: _SeedVR2MemoryBudget,
     schedule: SeedVR2BatchSchedule,
-    color_correction_enabled: bool,
+    color_correction: str,
 ) -> int:
     complete_input_bytes = schedule.processing_frames * budget.source_batch_frame_bytes
     final_output_bytes = schedule.processing_frames * budget.final_output_frame_bytes
-    if not color_correction_enabled:
+    if color_correction == "none":
         return complete_input_bytes + final_output_bytes
+
+    color_workspace_bytes_per_pixel = (
+        _MPS_PHASE4_COLOR_WORKSPACE_BYTES_PER_PADDED_PIXEL.get(color_correction)
+    )
+    if color_workspace_bytes_per_pixel is None:
+        raise RuntimeError(
+            f"Unsupported SeedVR2 MPS Phase 4 color_correction method: {color_correction!r}."
+        )
 
     uniform_padding_construction_bytes = 0
     if schedule.peak_uniform_padding_frames > 0:
@@ -1086,8 +1104,15 @@ def _mps_phase4_live_bytes(
         four_n_one_padding_construction_bytes = (
             schedule.peak_four_n_one_padding_live_frames * budget.source_batch_frame_bytes
         )
+    color_workspace_bytes = (
+        schedule.peak_effective_batch_frames
+        * budget.padded_width
+        * budget.padded_height
+        * color_workspace_bytes_per_pixel
+    )
     transform_and_color_workspace_bytes = (
-        schedule.peak_effective_batch_frames * budget.concurrent_batch_frame_bytes
+        schedule.peak_effective_batch_frames * budget.source_batch_frame_bytes
+        + color_workspace_bytes
     )
     return complete_input_bytes + final_output_bytes + max(
         uniform_padding_construction_bytes,
@@ -1100,7 +1125,7 @@ def _accelerator_schedule_required_bytes(
     *,
     budget: _SeedVR2MemoryBudget,
     schedule: SeedVR2BatchSchedule,
-    color_correction_enabled: bool,
+    color_correction: str,
 ) -> int:
     fixed_bytes = (
         budget.operational_reserve_bytes
@@ -1135,7 +1160,7 @@ def _accelerator_schedule_required_bytes(
     phase4_live_bytes = _mps_phase4_live_bytes(
         budget=budget,
         schedule=schedule,
-        color_correction_enabled=color_correction_enabled,
+        color_correction=color_correction,
     )
     output_phase_bytes = final_output_bytes
     return fixed_bytes + max(
@@ -1152,7 +1177,7 @@ def _mps_unified_required_bytes(
     schedule: SeedVR2BatchSchedule,
     host_estimate: SeedVR2HostMemoryEstimate,
     host_operational_reserve_bytes: int,
-    color_correction_enabled: bool,
+    color_correction: str,
 ) -> int:
     if budget.device_label != "mps":
         raise RuntimeError("MPS unified-memory admission requires an MPS memory budget.")
@@ -1219,7 +1244,7 @@ def _mps_unified_required_bytes(
         + _mps_phase4_live_bytes(
             budget=budget,
             schedule=schedule,
-            color_correction_enabled=color_correction_enabled,
+            color_correction=color_correction,
         )
     )
     accelerator_output_nonreserve_bytes = (
@@ -1254,9 +1279,7 @@ def _streaming_chunk_size(
             f"reserve_bytes={host_memory.operational_reserve_bytes}."
         )
     maximum_new_frames = min(host_memory.streaming_chunk_size, source_frame_count)
-    color_correction_enabled = (
-        str(options.color_correction or "lab").strip().lower() != "none"
-    )
+    color_correction = str(options.color_correction or "lab").strip().lower()
     low = 1
     high = maximum_new_frames
     selected = 0
@@ -1278,12 +1301,12 @@ def _streaming_chunk_size(
             _accelerator_schedule_required_bytes(
                 budget=budget,
                 schedule=first_host.schedule,
-                color_correction_enabled=color_correction_enabled,
+                color_correction=color_correction,
             ),
             _accelerator_schedule_required_bytes(
                 budget=budget,
                 schedule=steady_host.schedule,
-                color_correction_enabled=color_correction_enabled,
+                color_correction=color_correction,
             ),
         )
         accelerator_admitted = accelerator_required_bytes <= budget.available_bytes
@@ -1295,14 +1318,14 @@ def _streaming_chunk_size(
                     schedule=first_host.schedule,
                     host_estimate=first_host,
                     host_operational_reserve_bytes=host_memory.operational_reserve_bytes,
-                    color_correction_enabled=color_correction_enabled,
+                    color_correction=color_correction,
                 ),
                 _mps_unified_required_bytes(
                     budget=budget,
                     schedule=steady_host.schedule,
                     host_estimate=steady_host,
                     host_operational_reserve_bytes=host_memory.operational_reserve_bytes,
-                    color_correction_enabled=color_correction_enabled,
+                    color_correction=color_correction,
                 ),
             )
             unified_admitted = unified_required_bytes <= host_memory.available_bytes
@@ -1328,12 +1351,12 @@ def _streaming_chunk_size(
             _accelerator_schedule_required_bytes(
                 budget=budget,
                 schedule=minimum_first.schedule,
-                color_correction_enabled=color_correction_enabled,
+                color_correction=color_correction,
             ),
             _accelerator_schedule_required_bytes(
                 budget=budget,
                 schedule=minimum_steady.schedule,
-                color_correction_enabled=color_correction_enabled,
+                color_correction=color_correction,
             ),
         )
         minimum_unified_required_bytes = None
@@ -1344,14 +1367,14 @@ def _streaming_chunk_size(
                     schedule=minimum_first.schedule,
                     host_estimate=minimum_first,
                     host_operational_reserve_bytes=host_memory.operational_reserve_bytes,
-                    color_correction_enabled=color_correction_enabled,
+                    color_correction=color_correction,
                 ),
                 _mps_unified_required_bytes(
                     budget=budget,
                     schedule=minimum_steady.schedule,
                     host_estimate=minimum_steady,
                     host_operational_reserve_bytes=host_memory.operational_reserve_bytes,
-                    color_correction_enabled=color_correction_enabled,
+                    color_correction=color_correction,
                 ),
             )
         if (
@@ -1431,13 +1454,11 @@ def _select_execution_plan(
         processing_frames=processing_frames,
         options=options,
     )
-    color_correction_enabled = (
-        str(options.color_correction or "lab").strip().lower() != "none"
-    )
+    color_correction = str(options.color_correction or "lab").strip().lower()
     direct_required_bytes = _accelerator_schedule_required_bytes(
         budget=budget,
         schedule=direct_schedule,
-        color_correction_enabled=color_correction_enabled,
+        color_correction=color_correction,
     )
     direct_unified_required_bytes = None
     if budget.device_label == "mps":
@@ -1446,7 +1467,7 @@ def _select_execution_plan(
             schedule=direct_schedule,
             host_estimate=host_memory.direct,
             host_operational_reserve_bytes=host_memory.operational_reserve_bytes,
-            color_correction_enabled=color_correction_enabled,
+            color_correction=color_correction,
         )
     direct_accelerator_admitted = direct_required_bytes <= budget.available_bytes
     direct_unified_admitted = (
